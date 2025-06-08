@@ -3,6 +3,9 @@
 - 小智教程合集：https://ccnphfhqs21z.feishu.cn/wiki/F5krwD16viZoF0kKkvDcrZNYnhb
 - 小智官方仓库：https://github.com/78/xiaozhi-esp32
 
+## 视频展示
+https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3ce284283
+
 ## MOSS材料清单
 
 **注意！！！ 以下淘宝链接均为作者手搓时购买的店铺 非广告 非广告 非广告**
