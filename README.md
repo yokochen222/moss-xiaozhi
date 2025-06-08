@@ -18,39 +18,46 @@
 3、INMP441全向麦克风：
 [淘宝连接](https://item.taobao.com/item.htm?id=828386379455&pisk=g718sctGer3R89fJoaymxZvtyZ4D9-bPug7stHxodiIAvN3lEpxHdBINXpG3UQvp9itcZ3bkNe9CxG6kVTxn96IV2bcHNMVpANW483YlZ2LChghhEaxlH2dPiTcHquRdRGALjlVgsa7yaBZgjwJLOnd6P4gSxH_XGBYdnaMo5a7yTHgmARXfz2Cgbd0WRHavGeTtNBTBFIavJFKBO39IcxT6cBOBVX_fle8sA4tIOr3XJUGSAetScSTwWYOBFM_bke-XPBOI1QzJ04T-9Ovv0DGxKols1sLJeHhHoXL5gfvvfeKjOlsMyc-1PnhIOhpMnZ7CAkhH1OSA9dsg9jRlWtOXytUIh39OFgYVv5hWVsQ5N3f7mbx5aZ6GtiaIOHBfCdX1PoDvkt_lMKf_XXpPhgWwp6q0_QXGS6J1N7nwmd8dXQ6YcbI14UCG6LOojhLnFrUxLvJWujWTUraVo-16kh4WFvkeKE8vjrEsdviDuEKgPEkELpYV.&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝连接")
 
+![1749399681852](image/README/1749395500595.png)
+
 4、MAX98357A功放板一块
 
 [淘宝链接](https://item.taobao.com/item.htm?id=836587547562&pisk=g5ua_5187rDC5-wTj2aVL-FVAhzTCrJWnqwbijc01R2MD5TcujluGCpv6DPmhvdv6PG03xkQpZNXXKQqLAGoflMjf-V0Kvc15-TT0xlSex_XWcNcuvGYmxgqMZPmixdThCKI6fUYoL9SuUGt62rf1V0NjyXn9760iHZGbel6OL9WPE-GtrJwFxOiqOt3a740sRVgtBP_wG40m5cHTSVfIibinBRUi520nr2cteV8srX0ISbht7VPoOVgikAUMJV0ix4DTy2LifFinAQULlAYI5FNmHS3t8cgLZbPwyZMBjSfqgqUsk0c4JQ0O2Pab8ciz9BgVSoozlHkdGwi4mMzNATh7YliQ0qoS9vUkXir37uMZgyqBX0_xVAf2WUxj04iuLWi9uun5PneUawovj04xfpP2WimNViqCpQ0C0lnLugCdaan7AugYzjzLtFH5e3xbtj4jWFUFBRFz4VQjxRT_qsADk-LT8OJwiIYj8_fbV3ODiEesWyWwQC..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
-[![pVFKTRU.png](https://s21.ax1x.com/2025/06/09/pVFKTRU.png)](https://imgse.com/i/pVFKTRU)
+![1749399681852](image/README/1749395865975.png)
 
 5、红外学习及发送模块
 
 [淘宝链接](https://item.taobao.com/item.htm?id=758119858232&pisk=gcjU_kMvY3f1VhRp-Gtr_Qpr5y-pG3PbZgOWETXkdBA3ypZo4TWDFJF8pNJlN1e8pH6ka_566097J7nP_66cRe15RQvks1XIAQZpz_WfM_i7vw9o416Jr_sPe0JlE_epNJU1p9KJqSNf4o6dpG8SdMjE-VvGBL9HEPTn8lWQCSNbcuznI3PUG_whSrUM3KxkKBvHIRJDU4xkrpXgQLvSt4mhZRywEpAkZ3AoIlvvK3cHK0xMjp9n-bYktF2weC0n-_xuQhA9Efp5Z6nw_e2JtppErle9KIXH_0mqHH8n_O3Sr4AyKFIoCCnkCGJe8IXh0fhHlL7c0eC012Ohua12h6ZiYsWhTZYcxfVw2O_VaKS3nqRP9OjBSM2SkdKR-Zxh4SlhBESGAHQagmOcWTjyS9Fqkd_lhM_PO5nkOZWG_Ess1mtGY6SH7njrzbpgAlIR8b0y-dpwGRyZ0iv6-_ypLgg-yFz9QIwYH43J-IiS8MIKy4LaKdRbH-C..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
-[![pVFK4I0.png](https://s21.ax1x.com/2025/06/09/pVFK4I0.png)](https://imgse.com/i/pVFK4I0)
+![1749395955646](image/README/1749395955646.png)
 
 5、ULN2003步进电机驱动版2块
 
 [淘宝链接](https://item.taobao.com/item.htm?id=39788815912&pisk=gkuusa_yP-61IF9YDqaWbDShMmKxozaI8vQLpyee0-yXOgIJNkPEtv0K2XyL-vDnK8EeFz3nnfGpN2d7zeVEBx4Kw8eKnBD-OwpWAzQFKYGwFbepN22UnYk3AQwLLJDKT0dvWFhSNyaEKdL9WmZ-wJMlaayyTtPL_IFyG08EbyaeBpjA8uTgRYoS_USP0SybtaSzLvWVgWy4TgzEL-r4_5Bz8vkU3sPQTJ7F8gPVg-NCaT7F8sz467VzTvzeirPT3JzU4vlq6fIzB2oZuK3u9eba2eMgZu2Za8l8ZqSgAgMUnIRmrmAYCbSC8wu0Zu0qf8KWAyorwxqtqdbuWbosd5kPULVmrf0nbx8Arycqb24quK5YUcGm-z3y9UzqrY0zmv5dDuosecrmkLbbQmlm9omXOgeKfWkQf2p1P8lE1ViTSef3icc4ogJh0GJXXwN29qSCAuPbiR3bgUYr7pdomIAcXXZzG5w9iIjCwO_FPRdDiGHz4SN_B&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
+![1749395820463](image/README/1749395820463.png)
+
 6、24BYJ48步进电机2个（1比 64 扭力大些）
 
 [淘宝链接](https://item.taobao.com/item.htm?id=800157919463&pisk=ge14OTgpgCj51h-vn_OZ4hLZF-RvqCrQj1t6SNbMlnx0BENi_N7H5rETkT8GfgUTkI_MbGSW2fT_HlhN4i_hhKs1hhYMqgbjGhNvQG7CvGG_MtTi_g_9IG1NWf8GSGUvfre5kZd9skZC_W_Ak_JslsfwnQYkRacDoE2WZx-fuJqQOW_znEd1rk1_oJS2ueGMsKxmZUxJJcccjdclr3L9SmYiizzy2FnMjCAMr4YX-cAisCbkZeTKoEDDjYxk2FAMohjGrz86qhcMQGjxa3J0WnYvuAmEgnKho3liT2QXnWbICYkruE9kvL2m6fU9uK-ho3r09ss6QiJVNSopuTbF2EST9jdDQtXHi1rUgQbdFiYPjkkwq95A_p14YvKcMhIeiTrogCAv8NJCFPDeVObRaL54dVLRGNfvdBVKmh65818N6lFPYZjVKpfm0g8EXUVbw1BqjAJDyU-QzzlFtU9cbrLV1AH9U8LyAyUKBApDAfMVMsHtBLzDzHaLJ&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
-[![pVFKoGT.png](https://s21.ax1x.com/2025/06/09/pVFKoGT.png)](https://imgse.com/i/pVFKoGT)
+![1749396250056](image/README/1749396250056.png)
 
 7、0.96寸 OLED液晶屏幕
 
 [淘宝链接](https://item.taobao.com/item.htm?id=807952089145&pisk=gfgT_G2oXBC9y_uTtf-hnXqR6XA3hHcZTAl5o-2GcvHKHbCijo20crHreo_DbPqYkvwnSRcg5SZjnYigCc2ckqHEBNb05xYYhboegRViSsFjAAQmjf2ivsUZ-cb0IdzxGY4vELYkrfla7r9kEjrvlJU761s1nS_CArVxxfsGNflau-1hh3mI_s3kdYCbG-OLRSNRlrZ_lMGQLSj_hxw_A9N8arajhR1IOSPflts_h6OL_S6115ZjO6NgMZsshrOKOJPbl5MblfCM6J5_6ZnuvJWfJQIM7FuL6leAoY_YBqbu18wTdZJPcWEOjfwdlZgKD72438LddJcjamZKkF7guXm-HmMBGZwxA7H8ZAYCWriIp4ESTLQaBDMZkPqyksFK2XMtSrKR_W0tO4rx7dQQBvlIqPuWLZHStb0aYqpRd-ogayNtvIsQCosze408fPXueSj69BIV0lNF80KwOBlHA4NLECZ10ir0TWek9Lsfc9VU98A_TiS4mW5..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
-[![pVFKRqs.png](https://s21.ax1x.com/2025/06/09/pVFKRqs.png)](https://imgse.com/i/pVFKRqs)
+![1749396660475](image/README/1749396660475.png)
 
-8、ASR-PRO(可选，自定义唤醒词) 作者暂时没用正在研究 板内自定义唤醒词
+8、ASR-PRO(可选，自定义唤醒词) 暂时没用正在研究 板内自定义唤醒词
+
 
 9、支持ONVIF协议的网络监控摄像头一个（带云台的最好可省去上面购买步进电机的钱 喝咖啡）
 
 我在咸鱼买的睿盯2K高画质摄像头
+
+![1749397877997](image/README/1749397877997.png)
 
 10、喇叭 （我忘了什么尺寸了，也是咸鱼买的后面补上吧）
 
@@ -62,13 +69,14 @@
 
 ## 完整的引脚接线图
 
-[![pVFKIiV.md.png](https://s21.ax1x.com/2025/06/09/pVFKIiV.md.png)](https://imgse.com/i/pVFKIiV)
+
+![1749396910364](https://s21.ax1x.com/2025/06/09/pVFKIiV.md.png)
 
 ## 为了防止MOSS壳子内排线乱 画了个简单的底座板子(不会贴片)，如果有需要可以在立创下单打版
 
 源文件在pcb/MOSS_PCB.zip
 
-[![pVFK2rj.md.png](https://s21.ax1x.com/2025/06/09/pVFK2rj.md.png)](https://imgse.com/i/pVFK2rj)
+![1749396910364](image/README/1749396910364.png)
 
 # 写在最后
 
@@ -79,4 +87,4 @@
 
 另外搞了一个交流群（1013376651），有需要的小伙伴以及有问题可以在群里问，看到了回复
 
-![1749397578142](https://s21.ax1x.com/2025/06/09/pVFKfZn.png)
+![1749396910364](image/README/1749397578142.png)
