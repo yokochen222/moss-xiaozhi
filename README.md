@@ -20,9 +20,13 @@
 
 [淘宝链接](https://item.taobao.com/item.htm?id=836587547562&pisk=g5ua_5187rDC5-wTj2aVL-FVAhzTCrJWnqwbijc01R2MD5TcujluGCpv6DPmhvdv6PG03xkQpZNXXKQqLAGoflMjf-V0Kvc15-TT0xlSex_XWcNcuvGYmxgqMZPmixdThCKI6fUYoL9SuUGt62rf1V0NjyXn9760iHZGbel6OL9WPE-GtrJwFxOiqOt3a740sRVgtBP_wG40m5cHTSVfIibinBRUi520nr2cteV8srX0ISbht7VPoOVgikAUMJV0ix4DTy2LifFinAQULlAYI5FNmHS3t8cgLZbPwyZMBjSfqgqUsk0c4JQ0O2Pab8ciz9BgVSoozlHkdGwi4mMzNATh7YliQ0qoS9vUkXir37uMZgyqBX0_xVAf2WUxj04iuLWi9uun5PneUawovj04xfpP2WimNViqCpQ0C0lnLugCdaan7AugYzjzLtFH5e3xbtj4jWFUFBRFz4VQjxRT_qsADk-LT8OJwiIYj8_fbV3ODiEesWyWwQC..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
+[![pVFKTRU.png](https://s21.ax1x.com/2025/06/09/pVFKTRU.png)](https://imgse.com/i/pVFKTRU)
+
 5、红外学习及发送模块
 
 [淘宝链接](https://item.taobao.com/item.htm?id=758119858232&pisk=gcjU_kMvY3f1VhRp-Gtr_Qpr5y-pG3PbZgOWETXkdBA3ypZo4TWDFJF8pNJlN1e8pH6ka_566097J7nP_66cRe15RQvks1XIAQZpz_WfM_i7vw9o416Jr_sPe0JlE_epNJU1p9KJqSNf4o6dpG8SdMjE-VvGBL9HEPTn8lWQCSNbcuznI3PUG_whSrUM3KxkKBvHIRJDU4xkrpXgQLvSt4mhZRywEpAkZ3AoIlvvK3cHK0xMjp9n-bYktF2weC0n-_xuQhA9Efp5Z6nw_e2JtppErle9KIXH_0mqHH8n_O3Sr4AyKFIoCCnkCGJe8IXh0fhHlL7c0eC012Ohua12h6ZiYsWhTZYcxfVw2O_VaKS3nqRP9OjBSM2SkdKR-Zxh4SlhBESGAHQagmOcWTjyS9Fqkd_lhM_PO5nkOZWG_Ess1mtGY6SH7njrzbpgAlIR8b0y-dpwGRyZ0iv6-_ypLgg-yFz9QIwYH43J-IiS8MIKy4LaKdRbH-C..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
+
+[![pVFK4I0.png](https://s21.ax1x.com/2025/06/09/pVFK4I0.png)](https://imgse.com/i/pVFK4I0)
 
 5、ULN2003步进电机驱动版2块
 
@@ -32,9 +36,13 @@
 
 [淘宝链接](https://item.taobao.com/item.htm?id=800157919463&pisk=ge14OTgpgCj51h-vn_OZ4hLZF-RvqCrQj1t6SNbMlnx0BENi_N7H5rETkT8GfgUTkI_MbGSW2fT_HlhN4i_hhKs1hhYMqgbjGhNvQG7CvGG_MtTi_g_9IG1NWf8GSGUvfre5kZd9skZC_W_Ak_JslsfwnQYkRacDoE2WZx-fuJqQOW_znEd1rk1_oJS2ueGMsKxmZUxJJcccjdclr3L9SmYiizzy2FnMjCAMr4YX-cAisCbkZeTKoEDDjYxk2FAMohjGrz86qhcMQGjxa3J0WnYvuAmEgnKho3liT2QXnWbICYkruE9kvL2m6fU9uK-ho3r09ss6QiJVNSopuTbF2EST9jdDQtXHi1rUgQbdFiYPjkkwq95A_p14YvKcMhIeiTrogCAv8NJCFPDeVObRaL54dVLRGNfvdBVKmh65818N6lFPYZjVKpfm0g8EXUVbw1BqjAJDyU-QzzlFtU9cbrLV1AH9U8LyAyUKBApDAfMVMsHtBLzDzHaLJ&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
 
+[![pVFKoGT.png](https://s21.ax1x.com/2025/06/09/pVFKoGT.png)](https://imgse.com/i/pVFKoGT)
+
 7、0.96寸 OLED液晶屏幕
 
 [淘宝链接](https://item.taobao.com/item.htm?id=807952089145&pisk=gfgT_G2oXBC9y_uTtf-hnXqR6XA3hHcZTAl5o-2GcvHKHbCijo20crHreo_DbPqYkvwnSRcg5SZjnYigCc2ckqHEBNb05xYYhboegRViSsFjAAQmjf2ivsUZ-cb0IdzxGY4vELYkrfla7r9kEjrvlJU761s1nS_CArVxxfsGNflau-1hh3mI_s3kdYCbG-OLRSNRlrZ_lMGQLSj_hxw_A9N8arajhR1IOSPflts_h6OL_S6115ZjO6NgMZsshrOKOJPbl5MblfCM6J5_6ZnuvJWfJQIM7FuL6leAoY_YBqbu18wTdZJPcWEOjfwdlZgKD72438LddJcjamZKkF7guXm-HmMBGZwxA7H8ZAYCWriIp4ESTLQaBDMZkPqyksFK2XMtSrKR_W0tO4rx7dQQBvlIqPuWLZHStb0aYqpRd-ogayNtvIsQCosze408fPXueSj69BIV0lNF80KwOBlHA4NLECZ10ir0TWek9Lsfc9VU98A_TiS4mW5..&spm=tbpc.boughtlist.suborder_itemtitle.1.5b0e2e8dKPT47R "淘宝链接")
+
+[![pVFKRqs.png](https://s21.ax1x.com/2025/06/09/pVFKRqs.png)](https://imgse.com/i/pVFKRqs)
 
 8、ASR-PRO(可选，自定义唤醒词) 作者暂时没用正在研究 板内自定义唤醒词
 
@@ -46,9 +54,13 @@
 
 ## 完整的引脚接线图
 
+[![pVFKIiV.md.png](https://s21.ax1x.com/2025/06/09/pVFKIiV.md.png)](https://imgse.com/i/pVFKIiV)
+
 ## 为了防止MOSS壳子内排线乱 画了个简单的底座板子(不会贴片)，如果有需要可以在立创下单打版
 
 源文件在pcb/MOSS_PCB.zip
+
+[![pVFK2rj.md.png](https://s21.ax1x.com/2025/06/09/pVFK2rj.md.png)](https://imgse.com/i/pVFK2rj)
 
 # 写在最后
 
@@ -59,4 +71,4 @@
 
 另外搞了一个交流群（1013376651），有需要的小伙伴以及有问题可以在群里问，看到了回复
 
-![1749397578142](image/README/1749397578142.png)
+![1749397578142](https://s21.ax1x.com/2025/06/09/pVFKfZn.png)
