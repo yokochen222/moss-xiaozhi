@@ -4,6 +4,7 @@
 - 小智官方仓库：https://github.com/78/xiaozhi-esp32
 
 ## 视频展示
+
 https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3ce284283
 
 ## MOSS材料清单
@@ -89,3 +90,12 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 另外搞了一个交流群（1013376651），有需要的小伙伴以及有问题可以在群里问，看到了回复
 
 ![1749396910364](image/README/1749397578142.png)
+
+### 更新
+
+- 更新espidf版本为 5.4.1。如需要旧版本请切换5.3.2 分支
+- 内置聊天web聊天窗口服务，可使用MCP调用唤起浏览器展示界面
+- 代码适配小智最新代码
+- 调整IoT设备控制为MCP
+
+  **注意**小智最新版本代码 默认是没有开启 唤醒词检测的，需要手动在menuconfig开始

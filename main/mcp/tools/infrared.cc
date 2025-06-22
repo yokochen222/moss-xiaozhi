@@ -1,17 +1,17 @@
-#include "iot/thing.h"
+#include "mcp_tools.h"
 #include "board.h"
-
 #include <driver/uart.h>
 #include <esp_log.h>
+#include <map>
+#include <algorithm>
 
-#define TAG "Infrared"
+#define TAG "InfraredTool"
 
-
-std::map<std::string, std::string> RoomLightMap = {
+static std::map<std::string, std::string> RoomLightMap = {
     {"turnOn", "8914,-4623,442,-660,459,-660,461,-660,459,-660,459,-661,459,-661,459,-660,461,-660,461,-1784,442,-1784,441,-1785,442,-1784,440,-1785,442,-1784,443,-1784,440,-1785,442,-661,459,-661,459,-661,459,-662,461,-660,461,-660,462,-1784,442,-660,461,-1784,441,-1785,441,-1785,442,-1785,442,-1784,441,-1785,442,-660,461,-1785,441,-40046,8910,-2365,443,-60638,len=72"},
     {"turnOff", "8927,-4630,442,-659,463,-659,463,-659,462,-660,462,-660,463,-659,463,-660,461,-661,461,-1788,441,-1786,440,-1787,439,-1788,441,-1787,440,-1787,440,-1788,439,-1789,441,-660,459,-662,459,-662,461,-661,462,-660,461,-661,459,-1788,439,-662,461,-1787,440,-1788,440,-1787,439,-1788,440,-1789,439,-1788,440,-661,462,-1786,440,-40044,8929,-2368,439,-60638,len=72"}
 };
-std::map<std::string, std::string> AirBtnMap = {
+static std::map<std::string, std::string> AirBtnMap = {
     {"powerOn", "5970,-7521,412,-718,382,-719,401,-718,405,-718,406,-717,406,-717,381,-720,403,-718,405,-718,406,-717,406,-717,381,-718,403,-719,405,-718,405,-717,408,-718,379,-719,403,-697,427,-717,409,-716,408,-694,402,-719,404,-717,406,-717,409,-717,382,-719,403,-718,405,-717,408,-692,432,-716,408,-693,403,-696,428,-692,434,-690,434,-714,385,-719,403,-715,409,-712,413,-713,411,-713,386,-720,403,-716,408,-694,431,-713,413,-691,406,-718,403,-715,411,-691,434,-711,412,-713,386,-720,403,-715,410,-713,412,-711,414,-694,403,-700,400,-738,410,-1779,381,-1805,402,-718,382,-737,411,-1778,404,-1781,402,-717,408,-711,388,-735,413,-711,413,-694,381,-739,409,-711,413,-712,414,-1769,411,-712,414,-710,406,-700,424,-1776,408,-698,425,-1760,422,-698,426,-692,433,-1756,426,-689,436,-1754,427,-688,436,-689,436,-1746,436,-687,437,-1746,436,-1749,434,-1752,430,-690,434,-687,438,-1745,437,-1750,432,-688,436,-1748,437,-7521,433,-60612,len=198"},
     {"powerOff", "5962,-7544,388,-699,428,-692,432,-688,437,-689,408,-716,409,-698,428,-689,436,-687,437,-688,410,-717,409,-694,430,-690,435,-687,438,-685,410,-717,408,-694,432,-689,436,-686,438,-686,409,-717,410,-693,434,-685,438,-686,437,-689,408,-699,424,-695,430,-689,436,-689,435,-689,405,-718,409,-693,430,-688,436,-690,435,-690,406,-717,406,-696,430,-690,434,-691,434,-691,405,-718,406,-696,427,-693,432,-691,434,-691,405,-719,405,-696,428,-716,408,-717,408,-715,384,-717,404,-718,404,-717,408,-717,408,-717,406,-694,403,-718,404,-719,404,-718,406,-1771,411,-718,405,-718,379,-1799,411,-1771,410,-720,403,-720,378,-721,400,-722,403,-721,403,-720,402,-721,376,-722,401,-1785,399,-721,377,-745,424,-701,425,-1752,404,-726,423,-1754,405,-724,423,-700,423,-1752,431,-701,423,-1752,430,-701,397,-726,374,-1802,405,-724,376,-1801,408,-1775,409,-722,401,-697,403,-720,404,-1779,403,-1783,401,-722,403,-1781,402,-7555,428,-60612,len=198"},
     {"32", "5968,-7517,389,-698,429,-692,432,-688,438,-687,408,-698,429,-690,436,-688,438,-689,408,-696,431,-689,436,-688,438,-686,410,-695,432,-687,436,-689,410,-716,411,-692,432,-687,438,-687,437,-688,410,-694,432,-687,439,-686,409,-718,408,-695,431,-687,438,-687,409,-718,408,-695,431,-687,438,-687,409,-717,412,-692,432,-687,438,-687,410,-717,410,-692,432,-687,438,-687,410,-717,409,-693,434,-1773,409,-688,439,-686,439,-687,409,-697,429,-688,438,-688,438,-685,386,-720,430,-685,440,-687,435,-689,409,-697,431,-688,436,-687,436,-688,410,-1796,388,-698,429,-1777,404,-695,431,-708,418,-707,389,-716,410,-694,430,-689,438,-708,389,-715,411,-714,411,-709,416,-688,432,-1771,418,-707,388,-698,448,-690,437,-688,436,-1747,437,-1748,436,-687,436,-690,386,-1798,409,-680,448,-1755,428,-691,436,-685,440,-1746,438,-686,440,-1744,440,-1744,440,-685,412,-694,431,-691,437,-683,441,-1746,441,-1745,440,-683,442,-7518,442,-60612,len=198"},
@@ -36,147 +36,145 @@ std::map<std::string, std::string> AirBtnMap = {
     {"hot", "5964,-7505,410,-692,434,-694,406,-700,426,-693,432,-690,436,-691,406,-699,427,-691,436,-691,434,-692,406,-698,428,-691,435,-691,408,-718,405,-698,430,-689,436,-690,408,-699,426,-693,434,-691,435,-692,405,-698,429,-692,435,-690,434,-692,406,-698,429,-691,435,-691,434,-693,408,-694,430,-691,436,-688,410,-699,427,-714,411,-690,437,-692,405,-699,426,-690,436,-690,436,-689,408,-1799,387,-699,428,-691,435,-692,435,-690,406,-717,409,-692,435,-690,434,-676,425,-715,411,-690,436,-711,415,-691,406,-717,411,-709,416,-710,388,-700,425,-1781,404,-717,410,-1777,408,-711,415,-711,416,-692,404,-717,410,-710,416,-710,388,-719,406,-716,410,-710,416,-711,413,-695,406,-1779,404,-1782,403,-717,429,-690,436,-1752,433,-691,436,-689,408,-697,429,-1757,428,-1758,428,-693,431,-1754,430,-689,437,-688,438,-1747,438,-686,412,-1774,411,-1774,412,-696,430,-692,434,-1752,434,-1752,433,-1755,430,-687,439,-1747,438,-7520,442,-60612,len=198"}
 };
 
+namespace mcp_tools {
 
-namespace iot
-{
+class InfraredTool : public McpTool {
+private:
+    uart_port_t uart_num_ = UART_NUM_2;
+    TaskHandle_t uart_listener_task_handle_ = nullptr;
+    bool uart_ok_ = false;
 
-    class Infrared : public Thing
-    {
-    private:
-        uart_port_t uart_num_ = UART_NUM_2;                // 使用 UART2 示例
-        TaskHandle_t uart_listener_task_handle_ = nullptr; // 添加这一行
-        void InitializeUart()
-        {
-            const uart_config_t uart_config = {
-                .baud_rate = 9600,
-                .data_bits = UART_DATA_8_BITS,
-                .parity = UART_PARITY_DISABLE,
-                .stop_bits = UART_STOP_BITS_1,
-                .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-                .rx_flow_ctrl_thresh = 0,
-                .source_clk = UART_SCLK_DEFAULT,
-            };
+    void InitializeUart() {
+        const uart_config_t uart_config = {
+            .baud_rate = 9600,
+            .data_bits = UART_DATA_8_BITS,
+            .parity = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+            .rx_flow_ctrl_thresh = 0,
+            .source_clk = UART_SCLK_DEFAULT,
+        };
+        esp_err_t ret;
+        ret = uart_driver_install(uart_num_, 1024, 0, 0, NULL, 0);
+        ESP_LOGI(TAG, "uart_driver_install: %d", ret);
+        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_driver_install failed: %s", esp_err_to_name(ret)); return; }
+        ret = uart_param_config(uart_num_, &uart_config);
+        ESP_LOGI(TAG, "uart_param_config: %d", ret);
+        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_param_config failed: %s", esp_err_to_name(ret)); return; }
+        ret = uart_set_pin(uart_num_, GPIO_NUM_17, GPIO_NUM_18, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+        ESP_LOGI(TAG, "uart_set_pin: %d", ret);
+        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_set_pin failed: %s", esp_err_to_name(ret)); return; }
+        uart_ok_ = true;
+    }
 
-            ESP_ERROR_CHECK(uart_driver_install(uart_num_, 1024, 0, 0, NULL, 0));
-            ESP_ERROR_CHECK(uart_param_config(uart_num_, &uart_config));
-            ESP_ERROR_CHECK(uart_set_pin(uart_num_, GPIO_NUM_17, GPIO_NUM_18, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    void SendIrCommand(const std::string &command) {
+        if (!uart_ok_) {
+            ESP_LOGE(TAG, "UART not initialized, cannot send IR command");
+            return;
         }
+        ESP_LOGI(TAG, "Sending IR command: %s", command.c_str());
+        uart_write_bytes(uart_num_, command.c_str(), command.length());
+    }
 
-        void SendIrCommand(const std::string &command)
-        {
-            ESP_LOGI(TAG, "Sending IR command: %s", command.c_str());
-            uart_write_bytes(uart_num_, command.c_str(), command.length());
+    std::string ReadFromUart() {
+        if (!uart_ok_) return "";
+        uint8_t data[1024];
+        int len = uart_read_bytes(uart_num_, data, sizeof(data), pdMS_TO_TICKS(1000));
+        if (len > 0) {
+            return std::string(reinterpret_cast<char *>(data), len);
         }
+        return "";
+    }
 
-        static void UartListenerTask(void *pvParameters)
-        {
-            Infrared *infrared_instance = reinterpret_cast<Infrared *>(pvParameters);
-            while (true)
-            {
-                std::string response = infrared_instance->ReadFromUart();
-                if (!response.empty())
-                {
-                    ESP_LOGI(TAG, "Received serial data: %s", response.c_str());
-                }
-                vTaskDelay(pdMS_TO_TICKS(100)); // 等待100ms后再次尝试读取
+    static void UartListenerTask(void *pvParameters) {
+        InfraredTool *infrared_instance = reinterpret_cast<InfraredTool *>(pvParameters);
+        while (infrared_instance->uart_ok_) {
+            std::string response = infrared_instance->ReadFromUart();
+            if (!response.empty()) {
+                ESP_LOGI(TAG, "Received serial data: %s", response.c_str());
             }
         }
+        vTaskDelete(NULL);
+    }
 
-        void StartUartListenerTask()
-        {
-            BaseType_t xReturned;
-            xReturned = xTaskCreate(
-                UartListenerTask,             // 任务函数指针
-                "UartListenerTask",           // 任务名称
-                4096,                         // 栈深度（字）
-                this,                         // 传递给任务函数的参数
-                tskIDLE_PRIORITY + 1,         // 任务优先级
-                &uart_listener_task_handle_); // 任务句柄
-            if (xReturned != pdPASS)
-            {
-                ESP_LOGE(TAG, "Failed to create UART listener task");
-            }
+    void StartUartListenerTask() {
+        if (!uart_ok_) {
+            ESP_LOGE(TAG, "UART not initialized, listener task not started!");
+            return;
         }
+        BaseType_t xReturned = xTaskCreate(
+            UartListenerTask,
+            "UartListenerTask",
+            4096,
+            this,
+            tskIDLE_PRIORITY + 1,
+            &uart_listener_task_handle_);
+        if (xReturned != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create UART listener task");
+        }
+    }
 
-    public:
-        std::string ReadFromUart()
-        {
-            uint8_t data[1024];
-            int len = uart_read_bytes(uart_num_, data, sizeof(data), pdMS_TO_TICKS(1000)); // 等待最多1秒
-            if (len > 0)
-            {
-                return std::string(reinterpret_cast<char *>(data), len);
-            }
-            else
-            {
-                // ESP_LOGW(TAG, "No response received.");
-                return "";
-            }
-        }
-        Infrared() : Thing("Infrared", "红外遥控器，用于控制空调和房间灯光")
-        {
-            InitializeUart();
-            StartUartListenerTask();
-            // 发送命令的方法：SendCommand
-            methods_.AddMethod(
-                "SendIrCommand",
-                "发送指定的红外指令；格式如 'xx01'",
-                ParameterList({Parameter("command", "要发送的红外指令字符串，例如 'cx00'", kValueTypeString, true)}),
-                [this](const ParameterList &parameters)
-                {
-                    auto command = parameters["command"].string();
-                    if (!command.empty())
-                    {
-                        // 转换为小写
-                        std::transform(command.begin(), command.end(), command.begin(),
-                            [](unsigned char c){ return std::tolower(c); });
+public:
+    static InfraredTool& GetInstance() {
+        static InfraredTool instance;
+        return instance;
+    }
+    InfraredTool() : McpTool("self.infrared.control", "MOSS红外遥控控制能力即红外遥控器，用于控制空调和房间灯光和学习红外指令") {
+        InitializeUart();
+        StartUartListenerTask();
+    }
+
+    void Register() override {
+        ESP_LOGI(TAG, "注册红外遥控工具");
+        McpServer::GetInstance().AddTool(
+            name(),
+            "MOSS红外遥控控制能力；需要着重注意调用工具时候传输的字母是严格区分大小写的\n"
+            "参数：action='send_ir' 作用为发送指定的红外指令；command='要发送的参数' 如 command='xx01'；需要用户提供具体指令且字母均为小写，录入command='xx00' 将会开启学习红外指令模式，学习到的值会通过终端输出  \n"
+            "参数：action='room_light' 作用为开关房间灯；command='turnOn' 或者 command='turnOff'\n"
+            "参数：action='air_condition' 作用为空调设备的控制，可以控制空调的开、关、温度及模式切换；command='要执行的指令'开机：command='powerOn'，关机：command='powerOff'，制冷模式：command='cool'，制热模式：command='hot'，除湿模式：command='dry'；温度调节范围支持16-32度设置度 参数为字符串格式的数字，例如：空调开到16度 参数则为 command='16';\n"
+            ,
+            PropertyList({
+                Property("action", kPropertyTypeString),
+                Property("command", kPropertyTypeString, "")
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                auto action = properties["action"].value<std::string>();
+                auto command = properties["command"].value<std::string>();
+                std::transform(command.begin(), command.end(), command.begin(), [](unsigned char c){ return std::tolower(c); });
+                if (action == "send_ir") {
+                    if (!command.empty()) {
                         SendIrCommand(command);
+                        return "已发送自定义红外指令";
+                    } else {
+                        return "缺少command参数";
                     }
-                    else
-                    {
-                        ESP_LOGE(TAG, "Invalid command received.");
+                } else if (action == "room_light") {
+                    auto ir_command = RoomLightMap[command];
+                    if (!command.empty() && !ir_command.empty()) {
+                        SendIrCommand("zf=" + ir_command);
+                        return "已发送房间灯光指令";
+                    } else {
+                        return "无效的房间灯光指令";
                     }
-                });
-                methods_.AddMethod(
-                    "AirConditioningControl",
-                    "空调控制；控制参数有 开机：powerOn，关机：powerOff，制冷模式：cool，制热模式：hot，除湿模式：dry；温度调节范围支持16-32设置度 参数为字符串格式的数字，例如：空调开到16度 参数则为 '16';",
-                    ParameterList({Parameter("command", "开机：powerOn，关机：'powerOff'，制冷模式：'cool'，制热模式：'hot'，除湿模式：'dry'；温度调节范围支持16-32度设置度 参数为字符串格式的数字，例如：空调开到16度 参数则为 '16';", kValueTypeString, true)}),
-                    [this](const ParameterList &parameters)
-                    {
-                        auto command = parameters["command"].string();
-                        auto ir_command = AirBtnMap[command];
-                        if (!command.empty() && !ir_command.empty())
-                        {
-                            SendIrCommand("zf=" + ir_command);
-                        }
-                        else
-                        {
-                            ESP_LOGE(TAG, "Invalid command received.");
-                        }
-                    });
-                methods_.AddMethod(
-                    "RoomLightControl",
-                    "房间灯光控制；控制参数有 开灯：turnOn，关灯：turnOff",
-                    ParameterList({Parameter("command", "开灯：turnOn，关灯：'turnOff'", kValueTypeString, true)}),
-                    [this](const ParameterList &parameters)
-                    {
-                        auto command = parameters["command"].string();
-                        auto ir_command = RoomLightMap[command];
-                        if (!command.empty() && !ir_command.empty())
-                        {
-                            SendIrCommand("zf=" + ir_command);
-                        }
-                        else
-                        {
-                            ESP_LOGE(TAG, "Invalid command received.");
-                        }
-                    });
-            // methods_.AddMethod("AirConditioningPowerOn", "空调控制；控制参数有 开机：powerOn，关机：powerOff，制冷模式：cool，制热模式：hot，除湿模式：dry；温度调节范围支持16-32设置度 参数为字符串格式的数字，例如：空调开到16度 参数则为 '16';", ParameterList(), [this](const ParameterList& parameters) {
-            //     SendIrCommand("zf=5970,-7521,412,-718,382,-719,401,-718,405,-718,406,-717,406,-717,381,-720,403,-718,405,-718,406,-717,406,-717,381,-718,403,-719,405,-718,405,-717,408,-718,379,-719,403,-697,427,-717,409,-716,408,-694,402,-719,404,-717,406,-717,409,-717,382,-719,403,-718,405,-717,408,-692,432,-716,408,-693,403,-696,428,-692,434,-690,434,-714,385,-719,403,-715,409,-712,413,-713,411,-713,386,-720,403,-716,408,-694,431,-713,413,-691,406,-718,403,-715,411,-691,434,-711,412,-713,386,-720,403,-715,410,-713,412,-711,414,-694,403,-700,400,-738,410,-1779,381,-1805,402,-718,382,-737,411,-1778,404,-1781,402,-717,408,-711,388,-735,413,-711,413,-694,381,-739,409,-711,413,-712,414,-1769,411,-712,414,-710,406,-700,424,-1776,408,-698,425,-1760,422,-698,426,-692,433,-1756,426,-689,436,-1754,427,-688,436,-689,436,-1746,436,-687,437,-1746,436,-1749,434,-1752,430,-690,434,-687,438,-1745,437,-1750,432,-688,436,-1748,437,-7521,433,-60612,len=198");
-            // });
-        }
-    };
+                } else if (action == "air_condition") {
+                    auto ir_command = AirBtnMap[command];
+                    if (!command.empty() && !ir_command.empty()) {
+                        SendIrCommand("zf=" + ir_command);
+                        return "已发送空调指令";
+                    } else {
+                        return "无效的空调指令";
+                    }
+                } else if (action == "get_status") {
+                    return uart_ok_ ? "红外遥控器正常" : "UART初始化失败";
+                } else {
+                    return "未知动作: " + action + "\n支持的动作: send_ir, room_light, air_condition, get_status";
+                }
+            }
+        );
+    }
+};
 
-} // namespace iot
+} // namespace mcp_tools
 
-DECLARE_THING(Infrared);
+static auto& g_infrared_tool_instance = mcp_tools::InfraredTool::GetInstance();
+DECLARE_MCP_TOOL_INSTANCE(g_infrared_tool_instance); 
