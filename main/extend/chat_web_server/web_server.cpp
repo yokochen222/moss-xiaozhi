@@ -133,110 +133,162 @@ extern "C" const char* get_local_ip() {
     return ip.c_str();
 }
 
-static const char* INDEX_HTML =
-"<!DOCTYPE html>"
-"<html lang=\"zh-CN\">"
-"<head>"
-"<meta charset=\"UTF-8\">"
-"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">"
-"<title>MOSS 550W</title>"
-"<script src=\"https://cdn.jsdelivr.net/npm/vue@3.5.16/dist/vue.global.min.js\"></script>"
-"<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/github-dark.css\">"
-"<style>"
-"*{padding:0;margin:0}"
-"html{background-color:#181a1f;overflow:hidden;width:100%}"
-".moss-bg{position:fixed;pointer-events:none;background-image:url(https://s21.ax1x.com/2025/04/13/pERzECt.png);background-repeat:no-repeat;background-position:top left;width:100%;height:100%;z-index:2;top:-100px;left:0;animation:opa 1s ease alternate infinite}"
-".moss-bg::after{content:'';display:block;width:10px;height:10px;background-color:#e51c20;position:absolute;border-radius:100px;top:324px;left:154px;animation:opa 1s ease alternate infinite;background-color:red}"
-"body{display:flex;justify-content:center;align-items:center;overflow:hidden;height:100vh;width:100vw}"
-".moss-bg-video-v{position:fixed;z-index:0;top:0;left:0;right:0;bottom:0;object-fit:cover}"
-".moss-bg-video-v::after{content:'';display:block;position:absolute;top:0;left:0;right:0;bottom:0;background-color:rgba(0,0,0,0.6);backdrop-filter:blur(10px);z-index:1}"
-".moss-bg-video{width:100%;height:100%;object-fit:cover}"
-".moss-logo{margin-bottom:10px;pointer-events:none;position:relative;z-index:3}"
-".moss-logo img{width:140px}"
-".moss-code-section{font-family:'Courier New',Courier,monospace;max-height:80vh;overflow:auto}"
-".moss-code-box{max-height:80vh;overflow:auto}"
-".copy-btn{background-color:#ff7b72;color:#fff;border:none;padding:2px 6px;border-radius:5px;cursor:pointer;margin-bottom:10px;font-size:12px;transition:background-color 0.3s ease;position:absolute;right:10px;top:10px}"
-"@keyframes opa{from{opacity:0.3}to{opacity:0.7}}"
-".moss-chat-item{font-size:16px;line-height:1.5;background-color:rgba(0,0,0,0.6);padding:20px;border-radius:5px;white-space:pre-wrap;word-wrap:break-word;position:relative;color:#fff;border:1px solid #555;overflow:hidden;z-index:3;margin-bottom:20px;max-width:70%}"
-".moss-chat{display:flex;flex-direction:row-reverse}"
-".moss-chat.moss{flex-direction:row}"
-".moss-chat-avatar{width:50px;border-radius:50%;margin-left:20px;padding-top:10px}"
-".moss-chat-avatar img{width:50px;height:50px;border-radius:50%;display:block}"
-".moss-chat.moss .moss-chat-avatar{margin-right:20px;margin-left:0px}"
-".moss-chat-screen{color:#fff;font-size:16px;position:relative;z-index:4;width:1024px;height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}"
-".moss-chat-screen::-webkit-scrollbar{display:none}"
-"</style>"
-"</head>"
-"<body>"
-"<div id=\"app\"></div>"
-"<script type=\"module\">"
-"import{marked}from'https://cdn.jsdelivr.net/npm/marked@4.2.12/lib/marked.esm.js';"
-"import highlightJs from'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/+esm';"
-"function encodeHtmlEntities(str){return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;')}"
-"marked.setOptions({highlight:function(code,lang){return highlightJs.highlightAuto(code,[lang]).value}});"
-"const{createApp,ref,computed,onMounted,watch,nextTick}=Vue;"
-"const app=createApp({"
-"template:'<div class=\"moss-bg-video-v\"><video class=\"moss-bg-video\" src=\"http://bithubs.cn/moss-bg-video.mp4\" autoplay loop muted></video></div><div class=\"moss-bg\"></div><div ref=\"messagesContainer\" class=\"moss-chat-screen\"><template v-for=\"(item,index) in message\" :key=\"item.id\"><code-block v-if=\"item.type===\\'code\\'\" :role=\"item.role\" :markdown=\"item.content\"/><text-block v-else :text=\"item.content\" :role=\"item.role\"/></template></div>',"
-"setup(){"
-"const messagesContainer=ref();"
-"const scrollToBottom=()=>{if(messagesContainer.value){messagesContainer.value.scrollTo({top:messagesContainer.value.scrollHeight,behavior:'smooth'})}};"
-"const message=ref([]);"
-"let lastMessageId=0;"
-"const isCodeMessage=(content)=>{return content.includes('```')||content.includes('function')||content.includes('class')||content.includes('import')||content.includes('const')||content.includes('let')||content.includes('var')};"
-"const pollMessages=async()=>{"
-"try{"
-"const protocol=window.location.protocol;"
-"const host=window.location.host;"
-"const response=await fetch(protocol+'//'+host+'/api/messages');"
-"if(response.ok){"
-"const data=await response.json();"
-"if(data.messages){"
-"const newMessages=data.messages.filter(msg=>msg.id>lastMessageId);"
-"newMessages.forEach(msg=>{"
-"const messageType=isCodeMessage(msg.content)?'code':'text';"
-"message.value.push({id:msg.id,type:messageType,role:msg.role,content:msg.content,timestamp:msg.timestamp});"
-"lastMessageId=Math.max(lastMessageId,msg.id)"
-"})"
-"}"
-"}"
-"}catch(e){console.error('轮询失败:',e)}"
-"finally{setTimeout(pollMessages,1000)}"
-"};"
-"const startPolling=()=>{pollMessages()};"
-"watch(message,()=>{nextTick(()=>{scrollToBottom()})},{deep:true});"
-"onMounted(()=>{startPolling();scrollToBottom()});"
-"return{message,messagesContainer}"
-"}"
-"});"
-"app.component('text-block',{"
-"props:['text','role'],"
-"template:'<div :class=\"[\\'moss-chat\\',{\\'moss\\':role!==\\'user\\'}]\"><div class=\"moss-chat-avatar\"><img v-if=\"role===\\'user\\'\" class=\"avatar-img avatar-user\" src=\"https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640\"/><img v-else class=\"avatar-img avatar-moss\" src=\"https://s21.ax1x.com/2025/06/21/pVZK110.png\"/></div><div class=\"moss-chat-item moss-code-section\"><div class=\"moss-code-box\">{{text}}</div></div></div>'"
-"});"
-"app.component('code-block',{"
-"props:['markdown','role'],"
-"template:'<div class=\"moss-chat moss\"><div class=\"moss-chat-avatar\"><img v-if=\"role===\\'user\\'\" class=\"avatar-img avatar-user\" src=\"https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640\"/><img v-else class=\"avatar-img avatar-moss\" src=\"https://s21.ax1x.com/2025/06/21/pVZK110.png\"/></div><div class=\"moss-chat-item moss-code-section\"><button @click=\"copyCode\" class=\"copy-btn\">{{isCopied?\\'已复制\\':\\'复制\\'}}</button><div class=\"moss-code-box\" ref=\"codeBlockRef\"><div v-html=\"renderedMarkdown\"></div></div></div></div>',"
-"setup(props){"
-"const isCopied=ref(false);"
-"const renderedMarkdown=computed(()=>{return marked.parse(props.markdown)});"
-"const codeBlockRef=ref(null);"
-"const copyCode=async()=>{"
-"try{"
-"const pureCode=codeBlockRef.value.textContent;"
-"await navigator.clipboard.writeText(pureCode);"
-"isCopied.value=true"
-"}catch(err){"
-"isCopied.value=false;"
-"console.error('复制失败:',err)"
-"}"
-"setTimeout(()=>{isCopied.value=false},2000)"
-"};"
-"return{isCopied,renderedMarkdown,codeBlockRef,copyCode}"
-"}"
-"});"
-"app.mount('#app');"
-"</script>"
-"</body>"
-"</html>";
+static const char* INDEX_HTML = R"(
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>MOSS 550W</title>
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.16/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.7.0/styles/github-dark.css">
+<link rel="shortcut icon" href="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/moss-ico.png" type="image/x-icon" />
+<style>
+*{padding:0;margin:0;cursor: url(https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/logo-mini.cur), auto;}
+html{background-color:#181a1f;overflow:hidden;width:100%}
+.moss-bg{position:fixed;pointer-events:none;background-image:url(https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/moss_mobile_bg_2.png);background-repeat:no-repeat;background-position:top left;width:100%;height:100%;z-index:2;top:-100px;left:0;animation:opa 1s ease alternate infinite}
+.moss-bg::after{content:'';display:block;width:10px;height:10px;background-color:#e51c20;position:absolute;border-radius:100px;top:324px;left:154px;animation:opa 1s ease alternate infinite;background-color:red}
+body{display:flex;justify-content:center;align-items:center;overflow:hidden;height:100vh;width:100vw}
+.moss-bg-video-v{position:fixed;z-index:0;top:0;left:0;right:0;bottom:0;object-fit:cover}
+.moss-bg-video-v::after{content:'';display:block;position:absolute;top:0;left:0;right:0;bottom:0;background-color:rgba(0,0,0,0.6);backdrop-filter:blur(10px);z-index:1}
+.moss-bg-video{width:100%;height:100%;object-fit:cover}
+.moss-logo{margin-bottom:10px;pointer-events:none;position:relative;z-index:3}
+.moss-logo img{width:140px}
+.moss-code-section{font-family:'Courier New',Courier,monospace;max-height:80vh;overflow:auto}
+.moss-code-box{max-height:80vh;overflow:auto}
+.copy-btn{background-color:#ff7b72;color:#fff;border:none;padding:2px 6px;border-radius:5px;cursor:pointer;margin-bottom:10px;font-size:12px;transition:background-color 0.3s ease;position:absolute;right:10px;top:10px}
+@keyframes opa{from{opacity:0.3}to{opacity:0.7}}
+.moss-chat-item{font-size:16px;line-height:1.5;background-color:rgba(0,0,0,0.6);padding:20px;border-radius:5px;white-space:pre-wrap;word-wrap:break-word;position:relative;color:#fff;border:1px solid #555;overflow:hidden;z-index:3;margin-bottom:20px;max-width:70%}
+.moss-chat{display:flex;flex-direction:row-reverse}
+.moss-chat.moss{flex-direction:row}
+.moss-chat-avatar{width:52px;border-radius:50%;margin-left:20px;padding-top:10px}
+.moss-chat-avatar img{width:50px;height:50px;border-radius:50%;display:block;border: 1px solid #ccc;object-fit: contain;}
+.moss-chat.moss .moss-chat-avatar{margin-right:20px;margin-left:0px}
+.moss-chat-screen{color:#fff;font-size:16px;position:relative;z-index:4;width:1024px;height:80vh;overflow-y:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}
+.moss-chat-screen::-webkit-scrollbar{display:none}
+.music-icon{position: absolute;top: 30px;right: 30px;width: 40px;animation: rotate 3s linear infinite;cursor: pointer;}
+.music-icon.mute {animation-play-state: paused;}
+@keyframes rotate{from{transform: rotate(0deg);}to{transform: rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { marked } from 'https://cdn.jsdelivr.net/npm/marked@4.2.12/lib/marked.esm.js';
+import highlightJs from 'https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/+esm';
+function encodeHtmlEntities(str) {return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');}
+marked.setOptions({highlight: function(code, lang) { return highlightJs.highlightAuto(code, [lang]).value;}});
+const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
+const app = createApp({
+    template: `<div class="moss-bg-video-v"><video class="moss-bg-video" ref="videoRef" src="http://bithubs.cn/moss-bg-video.mp4" autoplay loop muted></video></div><div class="moss-bg"></div><img @click="toggleVideo" :class="['music-icon', { mute: isMuted }]" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/music-icon.png" /><div ref="messagesContainer" class="moss-chat-screen"><template v-for="(item,index) in message" :key="item.id"><code-block v-if="item.type==='code'" :role="item.role" :markdown="item.content"/><text-block v-else :text="item.content" :role="item.role"/></template></div>`,
+    setup() {
+        const messagesContainer = ref();
+        const videoRef = ref();
+        const isMuted = ref(true);
+        const toggleVideo = () => {
+            if(videoRef.value) {
+                isMuted.value = !isMuted.value;
+                videoRef.value.muted = isMuted.value;
+            }
+        }
+        const scrollToBottom = () => {
+            if(messagesContainer.value) {
+                messagesContainer.value.scrollTo({
+                    top: messagesContainer.value.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
+        };
+        const message = ref([]);
+        let lastMessageId = 0;
+        const isCodeMessage = (content) => {
+            return content.includes('```') || content.includes('function') || content.includes('class') || content.includes('import') || content.includes('const') || content.includes('let') || content.includes('var');
+        };
+        const pollMessages = async () => {
+            try {
+                const protocol = window.location.protocol;
+                const host = window.location.host;
+                const response = await fetch(protocol + '//' + host + '/api/messages');
+                if(response.ok) {
+                    const data = await response.json();
+                    if(data.messages) {
+                        const newMessages = data.messages.filter(msg => msg.id > lastMessageId);
+                        newMessages.forEach(msg => {
+                            const messageType = isCodeMessage(msg.content) ? 'code' : 'text';
+                            message.value.push({
+                                id: msg.id,
+                                type: messageType,
+                                role: msg.role,
+                                content: msg.content,
+                                timestamp: msg.timestamp
+                            });
+                            lastMessageId = Math.max(lastMessageId, msg.id);
+                        });
+                    }
+                }
+            } catch(e) {
+                console.error('轮询失败:', e);
+            } finally {
+                setTimeout(pollMessages, 1000);
+            }
+        };
+        const startPolling = () => {
+            pollMessages();
+        };
+        watch(message, () => {
+            nextTick(() => {
+                scrollToBottom();
+            });
+        }, {deep: true});
+        onMounted(() => {
+            startPolling();
+            scrollToBottom();
+        });
+        return { message, messagesContainer, toggleVideo, videoRef, isMuted };
+    }
+});
+app.component('text-block', {
+    props: ['text', 'role'],
+    template: `<div :class="['moss-chat', {moss: role !== 'user'}]"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><div class="moss-code-box">{{text}}</div></div></div>`
+});
+app.component('code-block', {
+    props: ['markdown', 'role'],
+    template: `<div class="moss-chat moss"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><button @click="copyCode" class="copy-btn">{{isCopied ? '已复制' : '复制'}}</button><div class="moss-code-box" ref="codeBlockRef"><div v-html="renderedMarkdown"></div></div></div></div>`,
+    setup(props) {
+        const isCopied = ref(false);
+        const renderedMarkdown = computed(() => {
+            return marked.parse(props.markdown);
+        });
+        const codeBlockRef = ref(null);
+        const copyCode = async () => {
+            try {
+                const pureCode = codeBlockRef.value.textContent;
+                const textarea = document.createElement('textarea');
+                textarea.value = pureCode;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = 0;
+                document.body.appendChild(textarea);
+                textarea.select();
+                textarea.setSelectionRange(0, 999999);
+                document.execCommand('copy');
+                isCopied.value = true;
+            } catch(err) {
+                isCopied.value = false;
+                alert('复制失败，请手动复制代码');
+                console.error('复制失败:', err);
+            }
+            setTimeout(() => {
+                isCopied.value = false;
+            }, 2000);
+        };
+        return { isCopied, renderedMarkdown, codeBlockRef, copyCode };
+    }
+});
+app.mount('#app');
+</script>
+</body>
+</html>
+)";
 
 static esp_err_t index_handler(httpd_req_t *req) {
     // 检查条件请求
