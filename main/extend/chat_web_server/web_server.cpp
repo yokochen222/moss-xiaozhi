@@ -180,7 +180,7 @@ function encodeHtmlEntities(str) {return str.replace(/&/g, '&amp;').replace(/</g
 marked.setOptions({highlight: function(code, lang) { return highlightJs.highlightAuto(code, [lang]).value;}});
 const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
 const app = createApp({
-    template: `<div class="moss-bg-video-v"><video class="moss-bg-video" ref="videoRef" src="http://bithubs.cn/moss-bg-video.mp4" autoplay loop muted></video></div><div class="moss-bg"></div><img @click="toggleVideo" :class="['music-icon', { mute: isMuted }]" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/music-icon.png" /><div ref="messagesContainer" class="moss-chat-screen"><template v-for="(item,index) in message" :key="item.id"><code-block v-if="item.type==='code'" :role="item.role" :markdown="item.content"/><text-block v-else :text="item.content" :role="item.role"/></template></div>`,
+    template: `<div class="moss-bg-video-v"><video class="moss-bg-video" ref="videoRef" src="http://bithubs.cn/moss-bg-video.mp4" autoplay loop muted></video></div><div class="moss-bg"></div><img @click="toggleVideo" :class="['music-icon', { mute: isMuted }]" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/music-icon.png" /><div ref="messagesContainer" class="moss-chat-screen"><template v-for="(item,index) in message" :key="item.id"><code-block v-if="item.type==='code'||item.type==='markdown'" :role="item.role" :markdown="item.content"/><text-block v-else :text="item.content" :role="item.role"/></template></div>`,
     setup() {
         const messagesContainer = ref();
         const videoRef = ref();
