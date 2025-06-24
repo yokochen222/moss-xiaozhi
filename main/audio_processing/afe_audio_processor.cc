@@ -136,8 +136,19 @@ void AfeAudioProcessor::AudioProcessorTask() {
             }
         }
 
+        // if (output_callback_) {
+        //     output_callback_(std::vector<int16_t>(res->data, res->data + res->data_size / sizeof(int16_t)));
+        // }
         if (output_callback_) {
-            output_callback_(std::vector<int16_t>(res->data, res->data + res->data_size / sizeof(int16_t)));
+            std::vector<int16_t> pcm(res->data, res->data + res->data_size / sizeof(int16_t));
+            float gain = 3.0f; // 软件增益系数，可根据需要调整
+            for (auto& sample : pcm) {
+                int amplified = static_cast<int>(sample * gain);
+                if (amplified > 32767) amplified = 32767;
+                if (amplified < -32768) amplified = -32768;
+                sample = static_cast<int16_t>(amplified);
+            }
+            output_callback_(std::move(pcm));
         }
     }
 }
