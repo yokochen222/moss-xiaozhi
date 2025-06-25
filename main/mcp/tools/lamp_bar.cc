@@ -95,10 +95,11 @@ void LampBarTool::Register() {
     ESP_LOGI(TAG, "注册流水灯控制工具");
     McpServer::GetInstance().AddTool(
         name(),
-        "当前工具用于开启或者关闭MOSS设备的流水灯\n"
-        "参数：action='start_flow' 即开启流水灯效果\n"
-        "参数：action='stop_flow' 即关闭流水灯效果\n"
-        "参数：action='get_status' 即获取流水灯状态信息\n"
+        "MOSS设备流水灯控制工具\n"
+        "使用说明：\n"
+        "- action='start_flow'：开启流水灯效果\n"
+        "- action='stop_flow'：关闭流水灯效果\n"
+        "- action='get_status'：获取流水灯当前状态信息\n"
         ,
         PropertyList({
             Property("action", kPropertyTypeString)

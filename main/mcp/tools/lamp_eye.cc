@@ -94,14 +94,15 @@ void LampEyeTool::Register() {
     ESP_LOGI(TAG, "注册眼部灯光控制工具");
     McpServer::GetInstance().AddTool(
         name(),
-        "当前工具用于开启或者关闭MOSS设备的眼部灯光\n"
-        "参数：action='turn_on' 即开启眼部灯光常亮模式\n"
-        "参数：action='turn_off' 即关闭眼部灯光常亮模式\n"
-        "参数：action='start_breathing' 即开启呼吸模式\n"
-        "参数：action='pause_breathing' 即暂停呼吸模式\n"
-        "参数：action='resume_breathing' 即恢复呼吸灯光效果\n"
-        "参数：action='stop_breathing' 即关闭呼吸灯光效果\n"
-        "参数：action='get_status' 即获取呼吸灯状态信息\n"
+        "MOSS设备眼部灯光控制工具\n"
+        "使用说明：\n"
+        "- action='turn_on'：开启眼部灯光常亮模式\n"
+        "- action='turn_off'：关闭眼部灯光常亮模式\n"
+        "- action='start_breathing'：开启呼吸灯光模式\n"
+        "- action='pause_breathing'：暂停呼吸灯光效果\n"
+        "- action='resume_breathing'：恢复呼吸灯光效果\n"
+        "- action='stop_breathing'：关闭呼吸灯光效果\n"
+        "- action='get_status'：获取呼吸灯当前状态信息\n"
         ,
         PropertyList({
             Property("action", kPropertyTypeString),

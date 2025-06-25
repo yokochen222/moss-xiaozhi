@@ -118,11 +118,13 @@ public:
 
         McpServer::GetInstance().AddTool(
             name(),
-            "当前工具用于调整MOSS视角\n"
-            "当参数：motor = pitch 时控制的是MOSS上下视角角度\n"
-            "参数：angle 即电机的旋转角度 当参数：motor = pitch 时 旋转角度(正数为向下转动,负数为向上转动），注意angle参数的类型必须为int\n"
-            "当参数：motor = yaw 时控制的是MOSS左右视角角度\n"
-            "参数：angle 即电机的旋转角度 当参数：motor = yaw 时 旋转角度（正数为向右转动,负数为向左转动），注意angle参数的类型必须为int\n",
+            "MOSS视角电机控制工具\n"
+            "使用说明：\n"
+            "- motor='pitch'：控制上下视角，angle为旋转角度（int，正数向下，负数向上）\n"
+            "- motor='yaw'：控制左右视角，angle为旋转角度（int，正数向右，负数向左）\n"
+            "参数说明：\n"
+            "- motor：必填，取值为'pitch'或'yaw'\n"
+            "- angle：必填，整型，表示旋转角度\n",
             PropertyList({
                 Property("motor", kPropertyTypeString), // "pitch" or "yaw"
                 Property("angle", kPropertyTypeInteger) // 角度，正负

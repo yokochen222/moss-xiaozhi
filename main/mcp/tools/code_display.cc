@@ -22,11 +22,12 @@ namespace mcp_tools
             ESP_LOGI("CodeDisplay", "注册代码展示工具");
             McpServer::GetInstance().AddTool(
                 name(),
-                "用于在Web端展示代码内容\n"
-                "在调用此工具前必须先调用 打开浏览器聊天窗口 MCP工具启动窗口才能展示内容出来\n"
-                "注意：如果打开浏览器聊天窗口 MCP工具启动失败，则不能调用此工具，如果调用了此工具代码内容无需朗读出来\n"
-                "在调用此工具前必须先调用 打开浏览器聊天窗口 MCP工具启动窗口才能展示内容出来\n"
-                "参数：content 要展示的代码，注意content的内容必须是markdown格式才能正常展示\n"
+                "Web端代码内容展示工具\n"
+                "使用说明：\n"
+                "1. 在调用本工具前，必须先调用'打开浏览器聊天窗口'MCP工具，确保窗口已成功启动，否则无法展示内容。\n"
+                "2. 如果浏览器聊天窗口未成功启动，则无需调用本工具，且代码内容无需朗读。\n"
+                "参数说明：\n"
+                "- content：要展示的代码内容，必须为markdown格式，才能正常渲染。\n"
                 ,
                 PropertyList({
                     Property("content", kPropertyTypeString),
