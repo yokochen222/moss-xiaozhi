@@ -128,10 +128,12 @@ public:
         ESP_LOGI(TAG, "注册红外遥控工具");
         McpServer::GetInstance().AddTool(
             name(),
-            "MOSS红外遥控控制能力；需要着重注意调用工具时候传输的字母是严格区分大小写的\n"
-            "参数：action='send_ir' 作用为发送指定的红外指令；command='要发送的参数' 如 command='xx01'；需要用户提供具体指令且字母均为小写，录入command='xx00' 将会开启学习红外指令模式，学习到的值会通过终端输出  \n"
-            "参数：action='room_light' 作用为开关房间灯；command='turnOn' 或者 command='turnOff'\n"
-            "参数：action='air_condition' 作用为空调设备的控制，可以控制空调的开、关、温度及模式切换；command='要执行的指令'开机：command='powerOn'，关机：command='powerOff'，制冷模式：command='cool'，制热模式：command='hot'，除湿模式：command='dry'；温度调节范围支持16-32度设置度 参数为字符串格式的数字，例如：空调开到16度 参数则为 command='16';\n"
+            "MOSS红外遥控控制能力，支持以下操作（action）及参数（command）：\n"
+            "1. 发送自定义红外指令：action=\"send_ir\"，command=\"xx01\"（自定义指令，字母需小写）；如需进入学习模式，command=\"xx00\"，学习到的值会通过终端输出。\n"
+            "2. 房间灯光控制：action=\"room_light\"，command=\"turnOn\"（开灯）或 command=\"turnOff\"（关灯）。\n"
+            "3. 空调控制：action=\"air_condition\"，command 可选：\"powerOn\"（开机）、\"powerOff\"（关机）、\"cool\"（制冷）、\"hot\"（制热）、\"dry\"（除湿）、\"16\"~\"32\"（温度，字符串数字）。\n"
+            "4. 获取红外遥控器状态：action=\"get_status\"，无需 command 参数。\n"
+            "注意：所有参数区分大小写，command 必须为字符串类型。\n"
             ,
             PropertyList({
                 Property("action", kPropertyTypeString),
@@ -140,8 +142,11 @@ public:
             [this](const PropertyList& properties) -> ReturnValue {
                 auto action = properties["action"].value<std::string>();
                 auto command = properties["command"].value<std::string>();
-                std::transform(command.begin(), command.end(), command.begin(), [](unsigned char c){ return std::tolower(c); });
+
+                ESP_LOGI(TAG, "红外控制参数: command=%s, action=%s", command.c_str(), action.c_str());
+
                 if (action == "send_ir") {
+                    std::transform(command.begin(), command.end(), command.begin(), [](unsigned char c){ return std::tolower(c); });
                     if (!command.empty()) {
                         SendIrCommand(command);
                         return "已发送自定义红外指令";
@@ -149,11 +154,14 @@ public:
                         return "缺少command参数";
                     }
                 } else if (action == "room_light") {
+                    ESP_LOGI(TAG, "room_light 查表前: command=%s", command.c_str());
                     auto ir_command = RoomLightMap[command];
+                    ESP_LOGI(TAG, "room_light 查表后: ir_command=%s", ir_command.c_str());
                     if (!command.empty() && !ir_command.empty()) {
                         SendIrCommand("zf=" + ir_command);
                         return "已发送房间灯光指令";
                     } else {
+                        ESP_LOGI(TAG, "无效的房间灯光指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
                         return "无效的房间灯光指令";
                     }
                 } else if (action == "air_condition") {
@@ -162,6 +170,7 @@ public:
                         SendIrCommand("zf=" + ir_command);
                         return "已发送空调指令";
                     } else {
+                        ESP_LOGI(TAG, "无效的空调指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
                         return "无效的空调指令";
                     }
                 } else if (action == "get_status") {
