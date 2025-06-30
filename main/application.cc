@@ -615,6 +615,9 @@ void Application::Start() {
         });
     });
     audio_processor_->OnVadStateChange([this](bool speaking) {
+        if (listening_mode_ == kListeningModeRealtime && speaking && device_state_ == kDeviceStateSpeaking) {
+            LocalAbortSpeaking();
+        }
         if (device_state_ == kDeviceStateListening) {
             Schedule([this, speaking]() {
                 if (speaking) {
@@ -1088,6 +1091,22 @@ void Application::SetAecMode(AecMode mode) {
         // If the AEC mode is changed, close the audio channel
         if (protocol_ && protocol_->IsAudioChannelOpened()) {
             protocol_->CloseAudioChannel();
+        }
+    });
+}
+
+void Application::LocalAbortSpeaking() {
+    ESP_LOGI(TAG, "Local abort speaking (no server notification)");
+    aborted_ = true;
+    // 不调用 protocol_->SendAbortSpeaking
+    // 直接切换状态
+    Schedule([this]() {
+        if (device_state_ == kDeviceStateSpeaking) {
+            if (listening_mode_ == kListeningModeManualStop) {
+                SetDeviceState(kDeviceStateIdle);
+            } else {
+                SetDeviceState(kDeviceStateListening);
+            }
         }
     });
 }
