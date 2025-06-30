@@ -249,11 +249,11 @@ const app = createApp({
 });
 app.component('text-block', {
     props: ['text', 'role'],
-    template: `<div :class="['moss-chat', {moss: role !== 'user'}]"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><div class="moss-code-box">{{text}}</div></div></div>`
+    template: `<div :class="['moss-chat', {moss: role !== 'user'}]"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=2637089270&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><div class="moss-code-box">{{text}}</div></div></div>`
 });
 app.component('code-block', {
     props: ['markdown', 'role'],
-    template: `<div class="moss-chat moss"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=8144064&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><button @click="copyCode" class="copy-btn">{{isCopied ? '已复制' : '复制'}}</button><div class="moss-code-box" ref="codeBlockRef"><div v-html="renderedMarkdown"></div></div></div></div>`,
+    template: `<div class="moss-chat moss"><div class="moss-chat-avatar"><img v-if="role === 'user'" class="avatar-img avatar-user" src="https://q1.qlogo.cn/g?b=qq&nk=2637089270&s=640"/><img v-else class="avatar-img avatar-moss" src="https://glone.oss-cn-hangzhou.aliyuncs.com/MOSS/f25b9f57-aeca-4d2d-875c-b3cd33a16f47.webp"/></div><div class="moss-chat-item moss-code-section"><button @click="copyCode" class="copy-btn">{{isCopied ? '已复制' : '复制'}}</button><div class="moss-code-box" ref="codeBlockRef"><div v-html="renderedMarkdown"></div></div></div></div>`,
     setup(props) {
         const isCopied = ref(false);
         const renderedMarkdown = computed(() => {
