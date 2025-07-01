@@ -50,28 +50,22 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
     codec_ = codec;                                 
     int ref_num = codec_->input_reference() ? 1 : 0; 
  
-    srmodel_list_t *models = esp_srmodel_init("model"); // 初始化语音识别模型列表，从"model"目录加载
+    srmodel_list_t *models = esp_srmodel_init("model"); 
  
-    // 遍历所有加载的模型
     for (int i = 0; i < models->num; i++)
     {                                                            
-        // ESP_LOGI(TAG, "Model %d: %s", i, models->model_name[i]); // 删除模型打印
 
-        if (strstr(models->model_name[i], ESP_MN_PREFIX) != NULL)   //此处 ESP_MN_PREFIX 为 "mn" 也就是新加的模型库
+        if (strstr(models->model_name[i], ESP_MN_PREFIX) != NULL)  
         {
-            // 获取 multinet 模型句柄
             multinet = esp_mn_handle_from_name(models->model_name[i]);
             if (!multinet)
             {
-                // ESP_LOGI("MULTINET", "failed to create multinet handle");
                 continue;
             }
  
-            //加载模型数据
             model_data = multinet->create(models->model_name[i], 6000);
             if (!model_data)
             {
-                // ESP_LOGI("MULTINET", "failed to create model_data handle");
                 continue;
             }
         }
@@ -84,13 +78,12 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
             esp_mn_commands_add(3, "xiao nuo");
             esp_mn_commands_update();
         }
-        esp_mn_active_commands_print();  //只保留这行打印
+        esp_mn_active_commands_print();
 
         if (strstr(models->model_name[i], ESP_WN_PREFIX) != NULL)
         {                                                                    
             wakenet_model_ = models->model_name[i];                         
             auto words = esp_srmodel_get_wake_words(models, wakenet_model_); 
-            // split by ";" to get all wake words
             std::stringstream ss(words); 
             std::string word;
             while (std::getline(ss, word, ';'))
@@ -125,7 +118,6 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
         this_->AudioDetectionTask();
         vTaskDelete(NULL); }, "audio_detection", 4096, this, 3, nullptr);
  
-    //新增一个任务
     xTaskCreate([](void *arg)
                 {
         auto this_ = (AfeWakeWord*)arg;
@@ -169,8 +161,6 @@ size_t AfeWakeWord::GetFeedSize() {
 void AfeWakeWord::AudioDetectionTask() {
     auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
     auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
-    // ESP_LOGI(TAG, "Audio detection task started, feed size: %d fetch size: %d",
-    //     feed_size, fetch_size);
 
     while (true) {
         xEventGroupWaitBits(event_group_, DETECTION_RUNNING_EVENT, pdFALSE, pdTRUE, portMAX_DELAY);
@@ -180,19 +170,15 @@ void AfeWakeWord::AudioDetectionTask() {
             continue;;
         }
 
-        // Store the wake word data for voice recognition, like who is speaking
         StoreWakeWordData(res->data, res->data_size / sizeof(int16_t));
 
         if (res->wakeup_state == WAKENET_DETECTED) {
-            // 不要立即停止检测，让命令词检测继续工作
-            // StopDetection();
             last_detected_wake_word_ = wake_words_[res->wake_word_index - 1];
 
             if (wake_word_detected_callback_) {
                 wake_word_detected_callback_(last_detected_wake_word_);
             }
         }
-        // 通知命令词检测任务
         else if (res->data && model_data)
         {
             xTaskNotifyGive(command_detection_task_);
@@ -201,9 +187,7 @@ void AfeWakeWord::AudioDetectionTask() {
 }
 
 void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
-    // store audio data to wake_word_pcm_
     wake_word_pcm_.emplace_back(std::vector<int16_t>(data, data + samples));
-    // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
     while (wake_word_pcm_.size() > 2000 / 30) {
         wake_word_pcm_.pop_front();
     }
@@ -255,68 +239,47 @@ bool AfeWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {
 
 void AfeWakeWord::CommandDetectionTask()
 {
-    // ESP_LOGI(TAG, "Command detection task started");
     while (true)
     {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //阻塞 收到通知后再跑
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); 
  
         esp_mn_state_t mn_state;
         esp_mn_results_t *mn_result;
  
-        // 从AudioDetectionTask获取最新的音频数据
-        // 这里需要从AFE获取音频数据进行命令词检测
         if (model_data && afe_data_)
         {
-            // 获取音频数据 - 使用阻塞方式获取
             auto res = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);
             if (res && res->data && res->ret_value == ESP_OK)
             {
-                // ESP_LOGI(TAG, "Processing audio data for command detection, data_size: %d", res->data_size);
                 mn_state = multinet->detect(model_data, res->data);
-                //判断是否检测到命令词
                 if (mn_state == ESP_MN_STATE_DETECTING)
                 {
-                    // ESP_LOGI(TAG, "Command detection: detecting...");
                     continue;
                 }
                 else if (mn_state == ESP_MN_STATE_DETECTED)
                 {
                     mn_result = multinet->get_results(model_data);
-                    //此处id就是你添加命令词的id 注意 第一个是0 了，在此处自己可以写个回调函数任意处理 也可以控制其他设备 也可以当作唤醒词处理
                     if (mn_result != nullptr && mn_result->num > 0)
                     {
                         int command_id = mn_result->phrase_id[0];
-                        // ESP_LOGI(TAG, "Command detected: id=%d", command_id);
                         if (command_id == 0)
                         {
-                            // ESP_LOGI(TAG, "Invoking: 你好MOSS");
                             Application::GetInstance().WakeWordInvoke("你好MOSS");
                         }
                         else if (command_id == 1)
                         {
-                            // ESP_LOGI(TAG, "Invoking: MOSS");
                             Application::GetInstance().WakeWordInvoke("MOSS");
                         }
                         else if (command_id == 2)
                         {
-                            // ESP_LOGI(TAG, "Invoking: 忆梦");
                             Application::GetInstance().WakeWordInvoke("忆梦");
                         }
                     }
                 }
-                // else
-                // {
-                //     ESP_LOGI(TAG, "Command detection state: %d", mn_state);
-                // }
+                
             }
-            // else
-            // {
-            //     ESP_LOGW(TAG, "Failed to get audio data for command detection");
-            // }
+            
         }
-        // else
-        // {
-        //     ESP_LOGW(TAG, "model_data or afe_data_ is null");
-        // }
+        
     }
 }
