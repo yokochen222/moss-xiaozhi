@@ -24,6 +24,7 @@ TaskHandle_t command_detection_task_ = nullptr;
 esp_mn_iface_t *multinet;   
 model_iface_data_t *model_data;
 
+std::vector<std::pair<std::string, std::string>> command_phrases_;
 
 AfeWakeWord::AfeWakeWord()
     : afe_data_(nullptr),
@@ -73,9 +74,14 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
         {
             //此处使用拼音+空格的方式添加想要自定义的唤醒词
             esp_mn_commands_clear();
-            esp_mn_commands_add(1, "ni hao mo si");
-            esp_mn_commands_add(2, "mo si");
-            esp_mn_commands_add(3, "xiao nuo");
+            command_phrases_.clear();
+            command_phrases_.emplace_back("ni hao mo si", "你好MOSS");
+            command_phrases_.emplace_back("ni hao mou si", "你好MOSS");
+            command_phrases_.emplace_back("mo si", "MOSS");
+            command_phrases_.emplace_back("mou si", "MOSS");
+            for (int i = 0; i < command_phrases_.size(); ++i) {
+                esp_mn_commands_add(i + 1, command_phrases_[i].first.c_str());
+            }
             esp_mn_commands_update();
         }
         esp_mn_active_commands_print();
@@ -262,17 +268,8 @@ void AfeWakeWord::CommandDetectionTask()
                     if (mn_result != nullptr && mn_result->num > 0)
                     {
                         int command_id = mn_result->phrase_id[0];
-                        if (command_id == 0)
-                        {
-                            Application::GetInstance().WakeWordInvoke("你好MOSS");
-                        }
-                        else if (command_id == 1)
-                        {
-                            Application::GetInstance().WakeWordInvoke("MOSS");
-                        }
-                        else if (command_id == 2)
-                        {
-                            Application::GetInstance().WakeWordInvoke("忆梦");
+                        if (command_id > 0 && command_id <= command_phrases_.size()) {
+                            Application::GetInstance().WakeWordInvoke(command_phrases_[command_id - 1].second);
                         }
                     }
                 }
