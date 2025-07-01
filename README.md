@@ -100,7 +100,8 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 
   **注意**小智最新版本代码 默认是没有开启 唤醒词检测的，需要手动在menuconfig开启
 
-###更新
+### 更新
+
 - 增加命令词唤醒版本要求1.7.3。
 - 增加 命令词唤醒：你好moss 、moss
 

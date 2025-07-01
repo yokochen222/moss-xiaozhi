@@ -55,7 +55,6 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
  
     for (int i = 0; i < models->num; i++)
     {                                                            
-
         if (strstr(models->model_name[i], ESP_MN_PREFIX) != NULL)  
         {
             multinet = esp_mn_handle_from_name(models->model_name[i]);
@@ -69,6 +68,9 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
             {
                 continue;
             }
+
+            // 优化：调用成员函数配置命令词
+            SetupSpeechCommands();
         }
         if (model_data)
         {
@@ -165,9 +167,6 @@ size_t AfeWakeWord::GetFeedSize() {
 }
 
 void AfeWakeWord::AudioDetectionTask() {
-    auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
-    auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
-
     while (true) {
         xEventGroupWaitBits(event_group_, DETECTION_RUNNING_EVENT, pdFALSE, pdTRUE, portMAX_DELAY);
 
@@ -279,4 +278,18 @@ void AfeWakeWord::CommandDetectionTask()
         }
         
     }
+}
+
+void AfeWakeWord::SetupSpeechCommands() {
+    esp_mn_commands_clear();
+    command_phrases_.clear();
+    command_phrases_.emplace_back("ni hao mo si", "你好MOSS");
+    command_phrases_.emplace_back("ni hao mou si", "你好MOSS");
+    command_phrases_.emplace_back("mo si", "MOSS");
+    command_phrases_.emplace_back("mou si", "MOSS");
+    for (int j = 0; j < command_phrases_.size(); ++j) {
+        esp_mn_commands_add(j + 1, command_phrases_[j].first.c_str());
+    }
+    esp_mn_commands_update();
+    esp_mn_active_commands_print();
 }
