@@ -935,7 +935,7 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
             audio_processor_->Stop();
-            wake_word_->StartDetection();
+            wake_word_->StartDetection(); // 对话结束/空闲时恢复命令词检测
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -963,8 +963,8 @@ void Application::SetDeviceState(DeviceState state) {
                 }
                 opus_encoder_->ResetState();
                 audio_processor_->Start();
-                wake_word_->StopDetection();
             }
+            wake_word_->StopDetection(); // 进入Listening时暂停命令词检测
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);

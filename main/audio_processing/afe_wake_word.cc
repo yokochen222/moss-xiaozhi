@@ -69,24 +69,8 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
                 continue;
             }
 
-            // 优化：调用成员函数配置命令词
             SetupSpeechCommands();
         }
-        if (model_data)
-        {
-            //此处使用拼音+空格的方式添加想要自定义的唤醒词
-            esp_mn_commands_clear();
-            command_phrases_.clear();
-            command_phrases_.emplace_back("ni hao mo si", "你好MOSS");
-            command_phrases_.emplace_back("ni hao mou si", "你好MOSS");
-            command_phrases_.emplace_back("mo si", "MOSS");
-            command_phrases_.emplace_back("mou si", "MOSS");
-            for (int i = 0; i < command_phrases_.size(); ++i) {
-                esp_mn_commands_add(i + 1, command_phrases_[i].first.c_str());
-            }
-            esp_mn_commands_update();
-        }
-        esp_mn_active_commands_print();
 
         if (strstr(models->model_name[i], ESP_WN_PREFIX) != NULL)
         {                                                                    
@@ -134,7 +118,10 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
 }
 
 void AfeWakeWord::OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) {
-    wake_word_detected_callback_ = callback;
+    wake_word_detected_callback_ = [this, callback](const std::string& wake_word) {
+        StopDetection(); // 唤醒后暂停命令词检测
+        if (callback) callback(wake_word);
+    };
 }
 
 void AfeWakeWord::StartDetection() {
@@ -285,8 +272,20 @@ void AfeWakeWord::SetupSpeechCommands() {
     command_phrases_.clear();
     command_phrases_.emplace_back("ni hao mo si", "你好MOSS");
     command_phrases_.emplace_back("ni hao mou si", "你好MOSS");
-    command_phrases_.emplace_back("mo si", "MOSS");
-    command_phrases_.emplace_back("mou si", "MOSS");
+    command_phrases_.emplace_back("mo si", "你好MOSS");
+    command_phrases_.emplace_back("mou si", "你好MOSS");
+    command_phrases_.emplace_back("mo shi", "你好MOSS");
+    command_phrases_.emplace_back("mao shi", "你好MOSS");
+    command_phrases_.emplace_back("mao si", "你好MOSS");
+    command_phrases_.emplace_back("mao se", "你好MOSS");
+    command_phrases_.emplace_back("mou se", "你好MOSS");
+    command_phrases_.emplace_back("mu se", "你好MOSS");
+    command_phrases_.emplace_back("mu shi", "你好MOSS");
+    command_phrases_.emplace_back("ma si", "你好MOSS");
+    command_phrases_.emplace_back("ma shi", "你好MOSS");
+    command_phrases_.emplace_back("ma se", "你好MOSS");
+    command_phrases_.emplace_back("mu se", "你好MOSS");
+    command_phrases_.emplace_back("mu shi", "你好MOSS");
     for (int j = 0; j < command_phrases_.size(); ++j) {
         esp_mn_commands_add(j + 1, command_phrases_[j].first.c_str());
     }
