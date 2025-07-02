@@ -119,7 +119,7 @@ void AfeWakeWord::Initialize(AudioCodec *codec)
 
 void AfeWakeWord::OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) {
     wake_word_detected_callback_ = [this, callback](const std::string& wake_word) {
-        StopDetection(); // 唤醒后暂停命令词检测
+        StopDetection(); 
         if (callback) callback(wake_word);
     };
 }
