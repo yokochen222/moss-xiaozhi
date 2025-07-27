@@ -2,7 +2,6 @@
 #define WIFI_BOARD_H
 
 #include "board.h"
-#include "extend/chat_web_server/web_server.h"
 
 class WifiBoard : public Board {
 protected:
@@ -14,10 +13,7 @@ public:
     WifiBoard();
     virtual std::string GetBoardType() override;
     virtual void StartNetwork() override;
-    virtual Http* CreateHttp() override;
-    virtual WebSocket* CreateWebSocket() override;
-    virtual Mqtt* CreateMqtt() override;
-    virtual Udp* CreateUdp() override;
+    virtual NetworkInterface* GetNetwork() override;
     virtual const char* GetNetworkStateIcon() override;
     virtual void SetPowerSaveMode(bool enabled) override;
     virtual void ResetWifiConfiguration();
