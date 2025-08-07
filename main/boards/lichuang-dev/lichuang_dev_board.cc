@@ -2,6 +2,7 @@
 #include "audio/codecs/box_audio_codec.h"
 #include "display/oled_display.h"
 #include "esp_lcd_panel_sh1106.h"
+#include "esp_lcd_panel_ssd1306.h"
 #include "display/display.h"  // 包含NoDisplay定义
 #include "application.h"
 #include "button.h"
@@ -123,7 +124,7 @@ private:
                 .dc_low_on_data = 0,
                 .disable_control_phase = 0,
             },
-            .scl_speed_hz = 50 * 1000,  // 进一步降低I2C速度到50kHz
+            .scl_speed_hz = 400 * 1000,  // 恢复标准I2C速度
         };
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c_v2(display_i2c_bus_, &io_config, &panel_io_));
@@ -132,29 +133,21 @@ private:
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = -1;
         panel_config.bits_per_pixel = 1;
-
+        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
+        
+        // 添加SSD1306专用配置
         esp_lcd_panel_ssd1306_config_t ssd1306_config = {
             .height = static_cast<uint8_t>(DISPLAY_HEIGHT),
         };
         panel_config.vendor_config = &ssd1306_config;
 
-        // 尝试SH1106驱动（兼容SSD1306的另一种驱动）
-        esp_err_t ret = ESP_OK;
+        ESP_LOGI(TAG, "Install SSD1306 driver");
 #ifdef SH1106
-        ret = esp_lcd_new_panel_sh1106(panel_io_, &panel_config, &panel_);
+        ESP_ERROR_CHECK(esp_lcd_new_panel_sh1106(panel_io_, &panel_config, &panel_));
 #else
-        ret = esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_);
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "SSD1306 init failed, trying SH1106...");
-            ret = esp_lcd_new_panel_sh1106(panel_io_, &panel_config, &panel_);
-        }
+        ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
 #endif
-        
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize display: %s", esp_err_to_name(ret));
-            display_ = new NoDisplay();
-            return;
-        }
+        ESP_LOGI(TAG, "SSD1306 driver installed");
         ESP_LOGI(TAG, "OLED driver installed");
 
         // Reset the display
@@ -164,11 +157,13 @@ private:
         ESP_LOGI(TAG, "Initializing OLED display...");
         vTaskDelay(pdMS_TO_TICKS(100));  // 等待复位完成
         
-        if (esp_lcd_panel_init(panel_) != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize display");
+        esp_err_t init_ret = esp_lcd_panel_init(panel_);
+        if (init_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Panel init failed: %s", esp_err_to_name(init_ret));
             display_ = new NoDisplay();
             return;
         }
+        
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false));
 
         // Set the display to on
