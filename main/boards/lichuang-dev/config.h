@@ -32,9 +32,8 @@
 #define DISPLAY_MIRROR_Y true
 #define DISPLAY_SWAP_XY false
 
-// OLED uses I2C, share with audio codec on same bus
-#define DISPLAY_SDA_PIN  GPIO_NUM_1
-#define DISPLAY_SCL_PIN  GPIO_NUM_2
+#define DISPLAY_SDA_PIN  GPIO_NUM_6
+#define DISPLAY_SCL_PIN  GPIO_NUM_7
 
 
 #endif // _BOARD_CONFIG_H_
