@@ -11,7 +11,7 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 
 **注意！！！ 以下淘宝链接均为作者手搓时购买的店铺 非广告 非广告 非广告**
 
-1、MOSS 3D打印外壳：小黄鱼 搜独角兽模型（他家现在也有成品在卖·有监控加小爱音响改版和小智版本（我之前买的时候他家还没有，只买了外壳））
+1、MOSS 3D打印外壳：入群联系管理员 或联系vx：ccloveme821
 
 2、ESP32 N16R8  开发板一块
 
