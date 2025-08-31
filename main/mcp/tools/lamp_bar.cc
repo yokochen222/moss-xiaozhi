@@ -113,24 +113,29 @@ void LampBarTool::FlowTask(void* arg) {
 }
 
 void LampBarTool::UpdateEyeLED(bool state) {
+    // 获取当前74HC595的输出状态
+    uint8_t current = shift_register_->GetCurrentData();
+    
     if (state) {
-        // 点亮眼部LED (Q5，位5)
-        uint8_t current = shift_register_->GetCurrentData();
-        current |= (1 << 5);  // 设置位5为1
-        shift_register_->SetOutputs(current);
+        // 点亮眼部LED (Q5，位5)，保持其他位不变
+        current |= (1 << 5);
     } else {
-        // 关闭眼部LED (Q5，位5)
-        uint8_t current = shift_register_->GetCurrentData();
-        current &= ~(1 << 5);  // 清除位5
-        shift_register_->SetOutputs(current);
+        // 关闭眼部LED (Q5，位5)，保持其他位不变
+        current &= ~(1 << 5);
     }
+    
+    // 更新输出，保持流水灯状态
+    shift_register_->SetOutputs(current);
 }
 
 void LampBarTool::EyeBreathingTask(void* arg) {
     LampBarTool* instance = static_cast<LampBarTool*>(arg);
-    int direction = 1;
-    int duty = 0;
-    const int max_duty = 100;  // 简化版本，使用100级亮度
+    float duty = 0.0f;  // 使用浮点数实现更平滑的渐变
+    float direction = 1.0f;
+    const float max_duty = 100.0f;
+    const float step = 0.8f;  // 大幅减小步长，让呼吸更慢
+    
+    ESP_LOGI(TAG, "眼部呼吸灯光任务启动");
     
     while (instance->eye_breathing_) {
         if (instance->eye_pause_) {
@@ -138,25 +143,42 @@ void LampBarTool::EyeBreathingTask(void* arg) {
             continue;
         }
         
-        duty += direction * 2;
+        duty += direction * step;
         if (duty >= max_duty) {
             duty = max_duty;
-            direction = -1;
-        } else if (duty <= 0) {
-            duty = 0;
-            direction = 1;
+            direction = -1.0f;
+        } else if (duty <= 0.0f) {
+            duty = 0.0f;
+            direction = 1.0f;
         }
         
-        // 根据亮度控制眼部LED
-        if (duty > 50) {
-            instance->UpdateEyeLED(true);
-        } else {
+        // 添加日志，帮助调试
+        if (static_cast<int>(duty) % 30 == 0) {  // 每30步记录一次
+            ESP_LOGD(TAG, "呼吸亮度: %.1f, 方向: %.1f", duty, direction);
+        }
+        
+        // 使用简化的算法实现缓慢的呼吸效果
+        if (duty < 3.0f) {  // 当亮度很低时，完全关闭LED
             instance->UpdateEyeLED(false);
+            vTaskDelay(pdMS_TO_TICKS(80));  // 保持关闭状态更长时间
+        } else if (duty > 97.0f) {  // 当亮度很高时，完全点亮LED
+            instance->UpdateEyeLED(true);
+            vTaskDelay(pdMS_TO_TICKS(80));  // 保持点亮状态更长时间
+        } else {
+            // 中间区域使用简单的开关控制，但变化很慢
+            if (duty > 50.0f) {
+                instance->UpdateEyeLED(true);
+            } else {
+                instance->UpdateEyeLED(false);
+            }
+            vTaskDelay(pdMS_TO_TICKS(60));  // 大幅增加延时，让呼吸更慢
         }
         
+        // 给其他任务一些运行时间
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     
+    ESP_LOGI(TAG, "眼部呼吸灯光任务停止");
     // 停止时关闭眼部LED
     instance->UpdateEyeLED(false);
     vTaskDelete(NULL);
@@ -174,9 +196,12 @@ void LampBarTool::Register() {
         "- action='eye_on'：开启眼部灯光常亮模式\n"
         "- action='eye_off'：关闭眼部灯光常亮模式\n"
         "- action='eye_breathing_start'：开启眼部呼吸灯光模式\n"
+        "- action='eye_breathing_smooth'：开启平滑眼部呼吸灯光模式\n"
         "- action='eye_breathing_pause'：暂停眼部呼吸灯光效果\n"
         "- action='eye_breathing_resume'：恢复眼部呼吸灯光效果\n"
         "- action='eye_breathing_stop'：关闭眼部呼吸灯光效果\n"
+        "调试功能：\n"
+        "- action='test_eye'：测试眼部LED是否工作\n"
         "系统控制：\n"
         "- action='get_status'：获取所有灯光当前状态信息\n"
         "- action='reset_driver'：重置74HC595驱动\n"
@@ -228,9 +253,25 @@ void LampBarTool::Register() {
                     eye_breathing_ = true;
                     eye_pause_ = false;
                     eye_power_ = true;
-                    xTaskCreate(EyeBreathingTask, "EyeBreathingTask", 2048, this, 5, &eye_task_);
+                    ESP_LOGI(TAG, "创建眼部呼吸灯光任务");
+                    xTaskCreate(EyeBreathingTask, "EyeBreathingTask", 2048, this, 3, &eye_task_);
+                    ESP_LOGI(TAG, "眼部呼吸灯光任务创建成功，任务句柄: %p", eye_task_);
+                } else {
+                    ESP_LOGW(TAG, "眼部呼吸灯光任务已在运行中");
                 }
                 return "开始眼部呼吸灯光效果";
+            } else if (action == "eye_breathing_smooth") {
+                if (!eye_breathing_) {
+                    eye_breathing_ = true;
+                    eye_pause_ = false;
+                    eye_power_ = true;
+                    ESP_LOGI(TAG, "创建平滑眼部呼吸灯光任务");
+                    xTaskCreate(EyeBreathingTask, "EyeBreathingTask", 2048, this, 3, &eye_task_);
+                    ESP_LOGI(TAG, "平滑眼部呼吸灯光任务创建成功，任务句柄: %p", eye_task_);
+                } else {
+                    ESP_LOGW(TAG, "眼部呼吸灯光任务已在运行中");
+                }
+                return "开始平滑眼部呼吸灯光效果";
             } else if (action == "eye_breathing_pause") {
                 eye_pause_ = true;
                 return "暂停眼部呼吸灯光效果";
@@ -246,6 +287,25 @@ void LampBarTool::Register() {
                 UpdateEyeLED(false);
                 eye_power_ = false;
                 return "关闭眼部呼吸灯光效果";
+            } else if (action == "test_eye") {
+                ESP_LOGI(TAG, "测试眼部LED功能");
+                // 测试眼部LED开关
+                ESP_LOGI(TAG, "开启眼部LED (Q5)");
+                UpdateEyeLED(true);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                
+                ESP_LOGI(TAG, "关闭眼部LED (Q5)");
+                UpdateEyeLED(false);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                
+                ESP_LOGI(TAG, "再次开启眼部LED (Q5)");
+                UpdateEyeLED(true);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                
+                ESP_LOGI(TAG, "最终关闭眼部LED (Q5)");
+                UpdateEyeLED(false);
+                
+                return "眼部LED测试完成，请观察Q5引脚是否正常开关";
             } else if (action == "get_status") {
                 std::string status = "MOSS灯光系统状态:\n";
                 status += "流水灯:\n";
@@ -295,7 +355,7 @@ void LampBarTool::Register() {
                 
                 return "所有灯光系统已强制重启，所有状态已重置";
             } else {    
-                return "未知动作: " + action + "\n支持的动作: start_flow, stop_flow, eye_on, eye_off, eye_breathing_start, eye_breathing_pause, eye_breathing_resume, eye_breathing_stop, get_status, reset_driver, force_restart";
+                return "未知动作: " + action + "\n支持的动作: start_flow, stop_flow, eye_on, eye_off, eye_breathing_start, eye_breathing_smooth, eye_breathing_pause, eye_breathing_resume, eye_breathing_stop, test_eye, get_status, reset_driver, force_restart";
             }
         }
     );
