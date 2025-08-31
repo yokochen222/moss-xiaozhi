@@ -27,11 +27,15 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "audio" "protocols" "mcp")
+set(INCLUDE_DIRS "." "display" "audio" "protocols" "mcp" "mcp/utils")
 
 # 添加 MCP 工具文件 - 自动包含所有工具
 file(GLOB MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
+
+# 添加 MCP 工具文件 - 自动包含所有工具
+file(GLOB MCP_UTILS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils/*.cc)
+list(APPEND SOURCES ${MCP_UTILS_SOURCES})
 
 # 添加板级公共文件
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

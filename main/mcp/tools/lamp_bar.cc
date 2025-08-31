@@ -1,6 +1,7 @@
 #include "mcp_tools.h"
 #include "board.h"
 #include "audio_codec.h"
+#include "../utils/74hc595_driver.h"
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include "freertos/FreeRTOS.h"
@@ -8,7 +9,11 @@
 
 #define TAG "LampBarTool"
 #define LED_COUNT 5
-const gpio_num_t led_pins[LED_COUNT] = {GPIO_NUM_8, GPIO_NUM_3, GPIO_NUM_9, GPIO_NUM_10, GPIO_NUM_11};
+
+// 74HC595引脚定义
+#define SER_PIN GPIO_NUM_9   // 数据引脚
+#define RCK_PIN GPIO_NUM_10  // 锁存引脚
+#define SCK_PIN GPIO_NUM_11  // 时钟引脚
 
 namespace mcp_tools {
 
@@ -17,12 +22,14 @@ private:
     bool power_ = false;
     bool flowing_ = false;
     TaskHandle_t flow_task_ = nullptr;
+    ShiftRegister74HC595* shift_register_;
+    
     LampBarTool();
-    ~LampBarTool() = default;
+    ~LampBarTool();
     LampBarTool(const LampBarTool&) = delete;
     LampBarTool& operator=(const LampBarTool&) = delete;
 
-    void InitializeGpio();
+    void InitializeShiftRegister();
     static void FlowTask(void* arg);
 
 public:
@@ -34,65 +41,60 @@ public:
 };
 
 LampBarTool::LampBarTool() : McpTool("self.lamp_bar.control", "控制MOSS的流水灯效果") {
-    InitializeGpio();
+    InitializeShiftRegister();
 }
 
-void LampBarTool::InitializeGpio() {
-    for(int i = 0; i < LED_COUNT; i++) {
-        gpio_config_t config = {
-            .pin_bit_mask = (1ULL << led_pins[i]),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        ESP_ERROR_CHECK(gpio_config(&config));
-        gpio_set_level(led_pins[i], 0);
+LampBarTool::~LampBarTool() {
+    if (shift_register_) {
+        delete shift_register_;
     }
+}
+
+void LampBarTool::InitializeShiftRegister() {
+    // 创建74HC595驱动实例
+    shift_register_ = new ShiftRegister74HC595(SER_PIN, RCK_PIN, SCK_PIN);
+    shift_register_->Initialize();
+    
+    // 初始化时关闭所有LED
+    shift_register_->ClearAll();
 }
 
 void LampBarTool::FlowTask(void* arg) {
     LampBarTool* instance = static_cast<LampBarTool*>(arg);
+    
     while(instance->flowing_) {
-        gpio_set_level(led_pins[0], 1);
-        gpio_set_level(led_pins[1], 0);
-        gpio_set_level(led_pins[2], 0);
-        gpio_set_level(led_pins[3], 0);
-        gpio_set_level(led_pins[4], 1);
+        // 流水灯效果1: 两端亮，中间暗
+        uint8_t pattern1 = 0b10001;  // LED0和LED4亮
+        instance->shift_register_->SetOutputs(pattern1);
         vTaskDelay(pdMS_TO_TICKS(110));
-        gpio_set_level(led_pins[0], 0);
-        gpio_set_level(led_pins[1], 1);
-        gpio_set_level(led_pins[2], 0);
-        gpio_set_level(led_pins[3], 1);
-        gpio_set_level(led_pins[4], 0);
+        
+        // 流水灯效果2: 交替亮
+        uint8_t pattern2 = 0b01010;  // LED1和LED3亮
+        instance->shift_register_->SetOutputs(pattern2);
         vTaskDelay(pdMS_TO_TICKS(100));
-        gpio_set_level(led_pins[0], 0);
-        gpio_set_level(led_pins[1], 1);
-        gpio_set_level(led_pins[2], 1);
-        gpio_set_level(led_pins[3], 0);
-        gpio_set_level(led_pins[4], 0);
+        
+        // 流水灯效果3: 中间亮
+        uint8_t pattern3 = 0b00110;  // LED2和LED3亮
+        instance->shift_register_->SetOutputs(pattern3);
         vTaskDelay(pdMS_TO_TICKS(90));
-        gpio_set_level(led_pins[0], 1);
-        gpio_set_level(led_pins[1], 0);
-        gpio_set_level(led_pins[2], 1);
-        gpio_set_level(led_pins[3], 1);
-        gpio_set_level(led_pins[4], 0);
+        
+        // 流水灯效果4: 交叉亮
+        uint8_t pattern4 = 0b10110;  // LED0, LED2, LED3亮
+        instance->shift_register_->SetOutputs(pattern4);
         vTaskDelay(pdMS_TO_TICKS(100));
-        gpio_set_level(led_pins[0], 0);
-        gpio_set_level(led_pins[1], 0);
-        gpio_set_level(led_pins[2], 1);
-        gpio_set_level(led_pins[3], 0);
-        gpio_set_level(led_pins[4], 1);
+        
+        // 流水灯效果5: 两端亮
+        uint8_t pattern5 = 0b10001;  // LED0和LED4亮
+        instance->shift_register_->SetOutputs(pattern5);
         vTaskDelay(pdMS_TO_TICKS(130));
     }
-    for(int i = 0; i < LED_COUNT; i++) {
-        gpio_set_level(led_pins[i], 0);
-    }
+    
+    // 停止时关闭所有LED
+    instance->shift_register_->ClearAll();
     vTaskDelete(NULL);
 }
 
 void LampBarTool::Register() {
-    ESP_LOGI(TAG, "注册流水灯控制工具");
     McpServer::GetInstance().AddTool(
         name(),
         "MOSS设备流水灯控制工具\n"
@@ -100,6 +102,8 @@ void LampBarTool::Register() {
         "- action='start_flow'：开启流水灯效果\n"
         "- action='stop_flow'：关闭流水灯效果\n"
         "- action='get_status'：获取流水灯当前状态信息\n"
+        "- action='reset_driver'：重置74HC595驱动\n"
+        "- action='force_restart'：强制重启流水灯系统\n"
         ,
         PropertyList({
             Property("action", kPropertyTypeString)
@@ -114,20 +118,54 @@ void LampBarTool::Register() {
                 }
                 return "流水灯效果已开启";
             } else if (action == "stop_flow") {
-                for(int i = 0; i < LED_COUNT; i++) {
-                    gpio_set_level(led_pins[i], 0);
+                if (flowing_) {
+                    flowing_ = false;
+                    power_ = false;
+                    
+                    // 等待任务结束
+                    if (flow_task_ != nullptr) {
+                        vTaskDelay(pdMS_TO_TICKS(100)); // 给任务一点时间结束
+                        flow_task_ = nullptr;
+                    }
+                    
+                    // 关闭所有LED
+                    shift_register_->ClearAll();
                 }
-                flowing_ = false;
-                power_ = false;
                 return "流水灯效果已关闭";
-            } else if (action == "get_status") {
+                        } else if (action == "get_status") {
                 std::string status = "流水灯状态:\n";
                 status += "电源: " + std::string(power_ ? "开启" : "关闭") + "\n";
                 status += "流水效果: " + std::string(flowing_ ? "运行中" : "停止") + "\n";
                 status += "LED数量: " + std::to_string(LED_COUNT) + "\n";
+                status += "任务句柄: " + std::string(flow_task_ != nullptr ? "有效" : "无效") + "\n";
+                status += "使用74HC595移位寄存器控制";
                 return status;
-            } else {
-                return "未知动作: " + action + "\n支持的动作: start_flow, stop_flow, get_status";
+            } else if (action == "reset_driver") {
+                shift_register_->Reset();
+                return "74HC595驱动已重置";
+            } else if (action == "force_restart") {
+                // 强制停止当前任务
+                if (flowing_) {
+                    flowing_ = false;
+                    power_ = false;
+                    
+                    if (flow_task_ != nullptr) {
+                        flow_task_ = nullptr;
+                    }
+                }
+                
+                // 重置驱动
+                shift_register_->Reset();
+                
+                // 关闭所有LED
+                shift_register_->ClearAll();
+                
+                // 等待一下
+                vTaskDelay(pdMS_TO_TICKS(500));
+                
+                return "流水灯系统已强制重启，所有状态已重置";
+            } else {    
+                return "未知动作: " + action + "\n支持的动作: start_flow, stop_flow, get_status, reset_driver, force_restart";
             }
         }
     );
@@ -136,4 +174,4 @@ void LampBarTool::Register() {
 } // namespace mcp_tools
 
 static auto& g_lamp_bar_tool_instance = mcp_tools::LampBarTool::GetInstance();
-DECLARE_MCP_TOOL_INSTANCE(g_lamp_bar_tool_instance); 
+DECLARE_MCP_TOOL_INSTANCE(g_lamp_bar_tool_instance);
