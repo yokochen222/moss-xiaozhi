@@ -11,9 +11,9 @@
 #define LED_COUNT 5
 
 // 74HC595引脚定义
-#define SER_PIN GPIO_NUM_9   // 数据引脚
-#define RCK_PIN GPIO_NUM_10  // 锁存引脚
-#define SCK_PIN GPIO_NUM_11  // 时钟引脚
+#define SER_PIN GPIO_NUM_39   // 数据引脚
+#define RCK_PIN GPIO_NUM_40  // 锁存引脚
+#define SCK_PIN GPIO_NUM_41  // 时钟引脚
 
 namespace mcp_tools {
 

@@ -4,23 +4,17 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <cmath>
+#include "../utils/74hc595_driver.h"
 
 #define TAG "MotorTool"
 
 #define STEPS_PER_REVOLUTION 512
 #define STEP_DELAY_MS 10
 
-// 第一个电机 (Pitch / 俯仰)
-#define MOTOR_PIN_A ((gpio_num_t)13)
-#define MOTOR_PIN_B ((gpio_num_t)14)
-#define MOTOR_PIN_C ((gpio_num_t)21)
-#define MOTOR_PIN_D ((gpio_num_t)46)
-
-// 第二个电机 (Yaw / 左右)
-#define MOTOR2_PIN_A ((gpio_num_t)42)
-#define MOTOR2_PIN_B ((gpio_num_t)41)
-#define MOTOR2_PIN_C ((gpio_num_t)40)
-#define MOTOR2_PIN_D ((gpio_num_t)39)
+// 74HC595引脚定义
+#define SER_PIN GPIO_NUM_9   // 数据引脚
+#define RCK_PIN GPIO_NUM_10  // 锁存引脚
+#define SCK_PIN GPIO_NUM_11  // 时钟引脚
 
 namespace mcp_tools {
 
@@ -35,50 +29,41 @@ private:
 
     static const uint8_t phasecw[8];
     static const uint8_t phaseccw[8];
+    
+    ShiftRegister74HC595* shift_register_;
 
     MotorTool();
-    ~MotorTool() = default;
+    ~MotorTool();
     MotorTool(const MotorTool&) = delete;
     MotorTool& operator=(const MotorTool&) = delete;
 
     void set_motor_phase(uint8_t phase) {
-        gpio_set_level(MOTOR_PIN_A, (phase & 0x08) >> 3);
-        gpio_set_level(MOTOR_PIN_B, (phase & 0x04) >> 2);
-        gpio_set_level(MOTOR_PIN_C, (phase & 0x02) >> 1);
-        gpio_set_level(MOTOR_PIN_D, (phase & 0x01));
+        // 第一个电机使用Q0-Q3 (低4位)
+        uint8_t current_data = shift_register_->GetCurrentData();
+        // 清除Q0-Q3位，保持Q4-Q7不变
+        current_data &= 0xF0;
+        // 设置Q0-Q3为电机相位
+        current_data |= (phase & 0x0F);
+        shift_register_->SetOutputs(current_data);
     }
 
     void set_motor2_phase(uint8_t phase) {
-        gpio_set_level(MOTOR2_PIN_A, (phase & 0x08) >> 3);
-        gpio_set_level(MOTOR2_PIN_B, (phase & 0x04) >> 2);
-        gpio_set_level(MOTOR2_PIN_C, (phase & 0x02) >> 1);
-        gpio_set_level(MOTOR2_PIN_D, (phase & 0x01));
+        // 第二个电机使用Q4-Q7 (高4位)
+        uint8_t current_data = shift_register_->GetCurrentData();
+        // 清除Q4-Q7位，保持Q0-Q3不变
+        current_data &= 0x0F;
+        // 设置Q4-Q7为电机相位，需要左移4位
+        current_data |= ((phase & 0x0F) << 4);
+        shift_register_->SetOutputs(current_data);
     }
 
-    void initialize_gpio() {
-        gpio_config_t io_conf = {};
-        io_conf.intr_type = GPIO_INTR_DISABLE;
-        io_conf.mode = GPIO_MODE_OUTPUT;
-        io_conf.pin_bit_mask =
-            (1ULL << MOTOR_PIN_A) |
-            (1ULL << MOTOR_PIN_B) |
-            (1ULL << MOTOR_PIN_C) |
-            (1ULL << MOTOR_PIN_D);
-        gpio_config(&io_conf);
-        set_motor_phase(0x00);
-    }
-
-    void initialize_yaw_gpio() {
-        gpio_config_t io_conf = {};
-        io_conf.intr_type = GPIO_INTR_DISABLE;
-        io_conf.mode = GPIO_MODE_OUTPUT;
-        io_conf.pin_bit_mask =
-            (1ULL << MOTOR2_PIN_A) |
-            (1ULL << MOTOR2_PIN_B) |
-            (1ULL << MOTOR2_PIN_C) |
-            (1ULL << MOTOR2_PIN_D);
-        gpio_config(&io_conf);
-        set_motor2_phase(0x00);
+    void initialize_shift_register() {
+        // 创建74HC595驱动实例
+        shift_register_ = new ShiftRegister74HC595(SER_PIN, RCK_PIN, SCK_PIN);
+        shift_register_->Initialize();
+        
+        // 初始化时关闭所有电机
+        shift_register_->ClearAll();
     }
 
     static void RotationTask(void *pvParameters) {
@@ -158,8 +143,13 @@ const uint8_t MotorTool::phasecw[8]  = {0x08, 0x0C, 0x04, 0x06, 0x02, 0x03, 0x01
 const uint8_t MotorTool::phaseccw[8] = {0x09, 0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08};
 
 MotorTool::MotorTool() : McpTool("self.motor.control", "步进电机控制器") {
-    initialize_gpio();
-    initialize_yaw_gpio();
+    initialize_shift_register();
+}
+
+MotorTool::~MotorTool() {
+    if (shift_register_) {
+        delete shift_register_;
+    }
 }
 
 } // namespace mcp_tools
