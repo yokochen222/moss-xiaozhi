@@ -8,6 +8,7 @@
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
+#include "assets/lang_config.h"
 // #include "iot/thing_manager.h"
 
 #include <esp_log.h>
@@ -42,6 +43,8 @@ class LichuangDevBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
+    Button volume_up_button_;
+    Button volume_down_button_;
     Display* display_;
     i2c_master_bus_handle_t display_i2c_bus_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -87,6 +90,36 @@ private:
                 ResetWifiConfiguration();
             }
             app.ToggleChatState();
+        });
+
+        volume_up_button_.OnClick([this]() {
+            auto codec = GetAudioCodec();
+            auto volume = codec->output_volume() + 10;
+            if (volume > 100) {
+                volume = 100;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        volume_up_button_.OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(100);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+        });
+
+        volume_down_button_.OnClick([this]() {
+            auto codec = GetAudioCodec();
+            auto volume = codec->output_volume() - 10;
+            if (volume < 0) {
+                volume = 0;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        volume_down_button_.OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(0);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
@@ -151,7 +184,10 @@ private:
     }
 
 public:
-    LichuangDevBoard() : boot_button_(BOOT_BUTTON_GPIO) {
+    LichuangDevBoard() : 
+        boot_button_(BOOT_BUTTON_GPIO),
+        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
         InitializeI2c();
         InitializeDisplayI2c();
         InitializeOledDisplay();
