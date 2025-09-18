@@ -32,8 +32,8 @@
 #define DISPLAY_MIRROR_Y true
 #define DISPLAY_SWAP_XY false
 
-#define DISPLAY_SDA_PIN  GPIO_NUM_6
-#define DISPLAY_SCL_PIN  GPIO_NUM_7
+#define DISPLAY_SDA_PIN  GPIO_NUM_7
+#define DISPLAY_SCL_PIN  GPIO_NUM_6
 
 
 #endif // _BOARD_CONFIG_H_
