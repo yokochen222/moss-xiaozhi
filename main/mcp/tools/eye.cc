@@ -27,6 +27,7 @@ private:
     bool pause_ = false;
     TaskHandle_t breathing_task_handle_ = nullptr; // 新增：用于管理任务句柄
     SemaphoreHandle_t pwm_mutex_; // 新增：防止PWM并发访问的互斥锁
+    
 
     LampEyeTool();
     ~LampEyeTool() = default;
