@@ -18,9 +18,9 @@ namespace mcp_tools {
 class LampEyeTool : public McpTool {
 private:
 #ifdef CONFIG_IDF_TARGET_ESP32
-    gpio_num_t gpio_num_ = GPIO_NUM_21;
+    gpio_num_t gpio_num_ = GPIO_NUM_15;
 #else
-    gpio_num_t gpio_num_ = GPIO_NUM_21;
+    gpio_num_t gpio_num_ = GPIO_NUM_15;
 #endif
     bool power_ = false;
     bool breathing_ = false;
