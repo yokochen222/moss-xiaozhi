@@ -30,7 +30,7 @@ private:
     
 
     LampEyeTool();
-    ~LampEyeTool() = default;
+    ~LampEyeTool();
     LampEyeTool(const LampEyeTool&) = delete;
     LampEyeTool& operator=(const LampEyeTool&) = delete;
 
@@ -49,6 +49,37 @@ public:
 LampEyeTool::LampEyeTool() : McpTool("self.lamp_eye.control", "控制MOSS的眼部灯光") {
     pwm_mutex_ = xSemaphoreCreateMutex(); // 初始化互斥锁
     InitializeGpio();
+}
+
+LampEyeTool::~LampEyeTool() {
+    // 确保停止呼吸模式
+    if (breathing_) {
+        breathing_ = false;
+        pause_ = false;
+        power_ = false;
+        
+        // 等待任务退出
+        int wait_count = 0;
+        while (breathing_task_handle_ && wait_count < 50) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            wait_count++;
+        }
+        
+        // 强制删除任务
+        if (breathing_task_handle_) {
+            vTaskDelete(breathing_task_handle_);
+            breathing_task_handle_ = nullptr;
+        }
+        
+        // 关闭灯光
+        SetDuty(0);
+    }
+    
+    // 删除互斥锁
+    if (pwm_mutex_) {
+        vSemaphoreDelete(pwm_mutex_);
+        pwm_mutex_ = nullptr;
+    }
 }
 
 void LampEyeTool::InitializeGpio() {
@@ -75,10 +106,12 @@ void LampEyeTool::InitializeGpio() {
 
 // 封装的设置 duty 方法，使用互斥锁保护
 void LampEyeTool::SetDuty(int duty) {
-    if (xSemaphoreTake(pwm_mutex_, portMAX_DELAY)) {
+    if (pwm_mutex_ && xSemaphoreTake(pwm_mutex_, pdMS_TO_TICKS(100))) {
         ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
         ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
         xSemaphoreGive(pwm_mutex_);
+    } else {
+        ESP_LOGW(TAG, "无法获取PWM互斥锁，跳过设置duty");
     }
 }
 
@@ -87,6 +120,8 @@ void LampEyeTool::BreathingTask(void* arg) {
     int direction = 1;
     int duty = 0;
 
+    ESP_LOGI(TAG, "呼吸任务开始");
+    
     while (instance->breathing_) {
         if (instance->pause_) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -106,6 +141,12 @@ void LampEyeTool::BreathingTask(void* arg) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
+    // 确保灯光关闭
+    instance->SetDuty(0);
+    ESP_LOGI(TAG, "呼吸任务结束");
+    
+    // 清除任务句柄
+    instance->breathing_task_handle_ = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -151,16 +192,30 @@ void LampEyeTool::Register() {
                 return "恢复呼吸灯光效果";
             } else if (action == "stop_breathing") {
                 if (breathing_) {
+                    ESP_LOGI(TAG, "停止呼吸模式");
+                    
+                    // 先设置停止标志
                     breathing_ = false;
-
+                    pause_ = false;
+                    power_ = false;
+                    
+                    // 等待任务自然退出（最多等待1秒）
+                    int wait_count = 0;
+                    while (breathing_task_handle_ && wait_count < 50) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                        wait_count++;
+                    }
+                    
+                    // 如果任务仍然存在，强制删除
                     if (breathing_task_handle_) {
+                        ESP_LOGW(TAG, "强制删除呼吸任务");
                         vTaskDelete(breathing_task_handle_);
                         breathing_task_handle_ = nullptr;
                     }
-
+                    
+                    // 确保灯光关闭
                     SetDuty(0);
-                    power_ = false;
-                    pause_ = false;
+                    ESP_LOGI(TAG, "呼吸模式已停止");
                 }
                 return "关闭呼吸灯光效果";
             } else if (action == "get_status") {
