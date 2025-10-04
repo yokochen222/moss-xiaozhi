@@ -1,0 +1,14 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "MOSS AI桌搭助手",
+            "sdkconfig_append": [
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v1/16m_custom_wakeword.csv\"",
+                "CONFIG_PARTITION_TABLE_FILENAME=\"partitions/v1/16m_custom_wakeword.csv\""
+            ]
+        }
+    ]
+}
