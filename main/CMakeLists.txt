@@ -27,7 +27,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "audio" "protocols" "mcp" "mcp/utils")
+set(INCLUDE_DIRS "." "display" "audio" "protocols" "mcp" "mcp/utils" "common/sdcard")
 
 # 添加 MCP 工具文件 - 自动包含所有工具
 file(GLOB MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
@@ -41,6 +41,10 @@ list(APPEND SOURCES ${MCP_UTILS_SOURCES})
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
 list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
+
+# 添加公共工具文件
+file(GLOB COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/common/*/*.cc)
+list(APPEND SOURCES ${COMMON_SOURCES})
 
 # 根据 BOARD_TYPE 配置添加对应的板级文件
 if(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI)
