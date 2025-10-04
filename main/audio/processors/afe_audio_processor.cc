@@ -10,7 +10,7 @@ AfeAudioProcessor::AfeAudioProcessor()
     event_group_ = xEventGroupCreate();
 }
 
-void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
+void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srmodel_list_t* models_list) {
     codec_ = codec;
     frame_samples_ = frame_duration_ms * 16000 / 1000;
 
@@ -27,15 +27,20 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
         input_format.push_back('R');
     }
 
-    srmodel_list_t *models = esp_srmodel_init("model");
+    srmodel_list_t *models;
+    if (models_list == nullptr) {
+        models = esp_srmodel_init("model");
+    } else {
+        models = models_list;
+    }
+
     char* ns_model_name = esp_srmodel_filter(models, ESP_NSNET_PREFIX, NULL);
     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
     
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
-    afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;  // VoIP高性能模式，适合减少混响
-    afe_config->aec_filter_length = 12;  // 进一步增加AEC滤波器长度，更强回声消除
-    afe_config->vad_mode = VAD_MODE_2;  // 更严格的VAD模式，优先过滤混响
-    afe_config->vad_min_noise_ms = 35;  // 较短的最小噪声时间，快速切断混响
+    afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
+    afe_config->vad_mode = VAD_MODE_0;
+    afe_config->vad_min_noise_ms = 100;
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
     }
@@ -43,15 +48,12 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     if (ns_model_name != nullptr) {
         afe_config->ns_init = true;
         afe_config->ns_model_name = ns_model_name;
-        afe_config->afe_ns_mode = AFE_NS_MODE_NET;  // 使用神经网络降噪，效果更好
+        afe_config->afe_ns_mode = AFE_NS_MODE_NET;
     } else {
         afe_config->ns_init = false;
     }
 
-    afe_config->afe_perferred_core = 1;
-    afe_config->afe_perferred_priority = 1;
-    afe_config->agc_init = true;  // 重新启用AGC，自动调节音量以确保声音足够大
-    afe_config->agc_mode = AFE_AGC_MODE_WEBRTC;  // 使用WebRTC AGC，智能音量控制
+    afe_config->agc_init = false;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
 #ifdef CONFIG_USE_DEVICE_AEC
@@ -83,7 +85,7 @@ size_t AfeAudioProcessor::GetFeedSize() {
     if (afe_data_ == nullptr) {
         return 0;
     }
-    return afe_iface_->get_feed_chunksize(afe_data_) * codec_->input_channels();
+    return afe_iface_->get_feed_chunksize(afe_data_);
 }
 
 void AfeAudioProcessor::Feed(std::vector<int16_t>&& data) {
