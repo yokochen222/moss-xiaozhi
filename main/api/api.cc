@@ -93,14 +93,19 @@ void ApiServer::Stop() {
 void ApiServer::AddIrReceivedData(const std::string& data) {
     std::lock_guard<std::mutex> lock(ir_data_mutex_);
     
+    // 去除换行符和回车符
+    std::string clean_data = data;
+    clean_data.erase(std::remove(clean_data.begin(), clean_data.end(), '\n'), clean_data.end());
+    clean_data.erase(std::remove(clean_data.begin(), clean_data.end(), '\r'), clean_data.end());
+    
     // 限制存储的数据条数，避免内存溢出
-    const size_t max_data_count = 100;
+    const size_t max_data_count = 1;
     if (ir_received_data_.size() >= max_data_count) {
         ir_received_data_.erase(ir_received_data_.begin());
     }
     
-    ir_received_data_.push_back(data);
-    ESP_LOGI(TAG, "Added IR data: %s", data.c_str());
+    ir_received_data_.push_back(clean_data);
+    ESP_LOGI(TAG, "Added IR data: %s", clean_data.c_str());
 }
 
 std::vector<std::string> ApiServer::GetIrReceivedData() {
@@ -116,7 +121,8 @@ void ApiServer::ClearIrReceivedData() {
 
 // HTTP处理器函数实现
 static esp_err_t HandleIrSend(httpd_req_t *req) {
-    ApiServer* instance = static_cast<ApiServer*>(req->user_ctx);
+    // 注意：user_ctx在这个处理器中暂未使用，但保留以备将来扩展
+    // ApiServer* instance = static_cast<ApiServer*>(req->user_ctx);
     
     // 解析请求体
     std::string body = ParseRequestBody(req);
@@ -166,19 +172,23 @@ static esp_err_t HandleIrSend(httpd_req_t *req) {
 static esp_err_t HandleIrRead(httpd_req_t *req) {
     ApiServer* instance = static_cast<ApiServer*>(req->user_ctx);
     
-    // 获取红外数据
+    // 获取红外数据（应该只有一条最新的数据）
     std::vector<std::string> ir_data = instance->GetIrReceivedData();
     
     // 构造响应
     cJSON* response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "status", "success");
     
-    cJSON* data_array = cJSON_CreateArray();
-    for (const auto& data : ir_data) {
-        cJSON_AddItemToArray(data_array, cJSON_CreateString(data.c_str()));
+    if (ir_data.empty()) {
+        // 没有数据时返回空字符串
+        cJSON_AddStringToObject(response, "ir_data", "");
+        cJSON_AddNumberToObject(response, "count", 0);
+    } else {
+        // 获取最新的数据（已经在存储时清理过换行符）
+        std::string latest_data = ir_data.back();
+        cJSON_AddStringToObject(response, "ir_data", latest_data.c_str());
+        cJSON_AddNumberToObject(response, "count", 1);
     }
-    cJSON_AddItemToObject(response, "ir_data", data_array);
-    cJSON_AddNumberToObject(response, "count", ir_data.size());
     
     char* response_str = cJSON_PrintUnformatted(response);
     std::string response_json(response_str);
