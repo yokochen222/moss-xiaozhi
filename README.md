@@ -89,7 +89,7 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 
 另外搞了一个交流群（1012964410），有需要的小伙伴以及有问题可以在群里问，看到了回复
 
-![1749396910364](image/README/1012964410.png)
+![1749396910364](image/README/1012964410.jpg)
 
 ### 更新
 
