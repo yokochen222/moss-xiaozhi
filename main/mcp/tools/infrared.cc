@@ -1,6 +1,6 @@
 #include "mcp_tools.h"
 #include "board.h"
-#include <driver/uart.h>
+#include "device/infrared.h"
 #include <esp_log.h>
 #include <map>
 #include <algorithm>
@@ -11,6 +11,7 @@ static std::map<std::string, std::string> RoomLightMap = {
     {"turnOn", "8914,-4623,442,-660,459,-660,461,-660,459,-660,459,-661,459,-661,459,-660,461,-660,461,-1784,442,-1784,441,-1785,442,-1784,440,-1785,442,-1784,443,-1784,440,-1785,442,-661,459,-661,459,-661,459,-662,461,-660,461,-660,462,-1784,442,-660,461,-1784,441,-1785,441,-1785,442,-1785,442,-1784,441,-1785,442,-660,461,-1785,441,-40046,8910,-2365,443,-60638,len=72"},
     {"turnOff", "8927,-4630,442,-659,463,-659,463,-659,462,-660,462,-660,463,-659,463,-660,461,-661,461,-1788,441,-1786,440,-1787,439,-1788,441,-1787,440,-1787,440,-1788,439,-1789,441,-660,459,-662,459,-662,461,-661,462,-660,461,-661,459,-1788,439,-662,461,-1787,440,-1788,440,-1787,439,-1788,440,-1789,439,-1788,440,-661,462,-1786,440,-40044,8929,-2368,439,-60638,len=72"}
 };
+
 static std::map<std::string, std::string> AirBtnMap = {
     {"powerOn", "5970,-7521,412,-718,382,-719,401,-718,405,-718,406,-717,406,-717,381,-720,403,-718,405,-718,406,-717,406,-717,381,-718,403,-719,405,-718,405,-717,408,-718,379,-719,403,-697,427,-717,409,-716,408,-694,402,-719,404,-717,406,-717,409,-717,382,-719,403,-718,405,-717,408,-692,432,-716,408,-693,403,-696,428,-692,434,-690,434,-714,385,-719,403,-715,409,-712,413,-713,411,-713,386,-720,403,-716,408,-694,431,-713,413,-691,406,-718,403,-715,411,-691,434,-711,412,-713,386,-720,403,-715,410,-713,412,-711,414,-694,403,-700,400,-738,410,-1779,381,-1805,402,-718,382,-737,411,-1778,404,-1781,402,-717,408,-711,388,-735,413,-711,413,-694,381,-739,409,-711,413,-712,414,-1769,411,-712,414,-710,406,-700,424,-1776,408,-698,425,-1760,422,-698,426,-692,433,-1756,426,-689,436,-1754,427,-688,436,-689,436,-1746,436,-687,437,-1746,436,-1749,434,-1752,430,-690,434,-687,438,-1745,437,-1750,432,-688,436,-1748,437,-7521,433,-60612,len=198"},
     {"powerOff", "5962,-7544,388,-699,428,-692,432,-688,437,-689,408,-716,409,-698,428,-689,436,-687,437,-688,410,-717,409,-694,430,-690,435,-687,438,-685,410,-717,408,-694,432,-689,436,-686,438,-686,409,-717,410,-693,434,-685,438,-686,437,-689,408,-699,424,-695,430,-689,436,-689,435,-689,405,-718,409,-693,430,-688,436,-690,435,-690,406,-717,406,-696,430,-690,434,-691,434,-691,405,-718,406,-696,427,-693,432,-691,434,-691,405,-719,405,-696,428,-716,408,-717,408,-715,384,-717,404,-718,404,-717,408,-717,408,-717,406,-694,403,-718,404,-719,404,-718,406,-1771,411,-718,405,-718,379,-1799,411,-1771,410,-720,403,-720,378,-721,400,-722,403,-721,403,-720,402,-721,376,-722,401,-1785,399,-721,377,-745,424,-701,425,-1752,404,-726,423,-1754,405,-724,423,-700,423,-1752,431,-701,423,-1752,430,-701,397,-726,374,-1802,405,-724,376,-1801,408,-1775,409,-722,401,-697,403,-720,404,-1779,403,-1783,401,-722,403,-1781,402,-7555,428,-60612,len=198"},
@@ -40,88 +41,15 @@ namespace mcp_tools {
 
 class InfraredTool : public McpTool {
 private:
-    uart_port_t uart_num_ = UART_NUM_2;
-    TaskHandle_t uart_listener_task_handle_ = nullptr;
-    bool uart_ok_ = false;
-
-    void InitializeUart() {
-        const uart_config_t uart_config = {
-            .baud_rate = 9600,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-            .rx_flow_ctrl_thresh = 0,
-            .source_clk = UART_SCLK_DEFAULT,
-        };
-        esp_err_t ret;
-        ret = uart_driver_install(uart_num_, 1024, 0, 0, NULL, 0);
-        ESP_LOGI(TAG, "uart_driver_install: %d", ret);
-        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_driver_install failed: %s", esp_err_to_name(ret)); return; }
-        ret = uart_param_config(uart_num_, &uart_config);
-        ESP_LOGI(TAG, "uart_param_config: %d", ret);
-        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_param_config failed: %s", esp_err_to_name(ret)); return; }
-        ret = uart_set_pin(uart_num_, GPIO_NUM_17, GPIO_NUM_18, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        ESP_LOGI(TAG, "uart_set_pin: %d", ret);
-        if (ret != ESP_OK) { ESP_LOGE(TAG, "uart_set_pin failed: %s", esp_err_to_name(ret)); return; }
-        uart_ok_ = true;
-    }
-
-    void SendIrCommand(const std::string &command) {
-        if (!uart_ok_) {
-            ESP_LOGE(TAG, "UART not initialized, cannot send IR command");
-            return;
-        }
-        ESP_LOGI(TAG, "Sending IR command: %s", command.c_str());
-        uart_write_bytes(uart_num_, command.c_str(), command.length());
-    }
-
-    std::string ReadFromUart() {
-        if (!uart_ok_) return "";
-        uint8_t data[1024];
-        int len = uart_read_bytes(uart_num_, data, sizeof(data), pdMS_TO_TICKS(1000));
-        if (len > 0) {
-            return std::string(reinterpret_cast<char *>(data), len);
-        }
-        return "";
-    }
-
-    static void UartListenerTask(void *pvParameters) {
-        InfraredTool *infrared_instance = reinterpret_cast<InfraredTool *>(pvParameters);
-        while (infrared_instance->uart_ok_) {
-            std::string response = infrared_instance->ReadFromUart();
-            if (!response.empty()) {
-                ESP_LOGI(TAG, "Received serial data: %s", response.c_str());
-            }
-        }
-        vTaskDelete(NULL);
-    }
-
-    void StartUartListenerTask() {
-        if (!uart_ok_) {
-            ESP_LOGE(TAG, "UART not initialized, listener task not started!");
-            return;
-        }
-        BaseType_t xReturned = xTaskCreate(
-            UartListenerTask,
-            "UartListenerTask",
-            4096,
-            this,
-            tskIDLE_PRIORITY + 1,
-            &uart_listener_task_handle_);
-        if (xReturned != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create UART listener task");
-        }
-    }
+    InfraredDevice& infrared_device_;
 
 public:
     static InfraredTool& GetInstance() {
         static InfraredTool instance;
         return instance;
     }
-    InfraredTool() : McpTool("self.infrared.control", "MOSS红外遥控控制能力即红外遥控器，用于控制空调和房间灯光和学习红外指令") {
-        InitializeUart();
-        StartUartListenerTask();
+    InfraredTool() : McpTool("self.infrared.control", "MOSS红外遥控控制能力即红外遥控器，用于控制空调和房间灯光和学习红外指令"), 
+                     infrared_device_(InfraredDevice::GetInstance()) {
     }
 
     void Register() override {
@@ -148,8 +76,11 @@ public:
                 if (action == "send_ir") {
                     std::transform(command.begin(), command.end(), command.begin(), [](unsigned char c){ return std::tolower(c); });
                     if (!command.empty()) {
-                        SendIrCommand(command);
-                        return "已发送自定义红外指令";
+                        if (infrared_device_.SendIrCommand(command)) {
+                            return "已发送自定义红外指令";
+                        } else {
+                            return "发送红外指令失败";
+                        }
                     } else {
                         return "缺少command参数";
                     }
@@ -158,8 +89,11 @@ public:
                     auto ir_command = RoomLightMap[command];
                     ESP_LOGI(TAG, "room_light 查表后: ir_command=%s", ir_command.c_str());
                     if (!command.empty() && !ir_command.empty()) {
-                        SendIrCommand("zf=" + ir_command);
-                        return "已发送房间灯光指令";
+                        if (infrared_device_.SendIrCommand("zf=" + ir_command)) {
+                            return "已发送房间灯光指令";
+                        } else {
+                            return "发送房间灯光指令失败";
+                        }
                     } else {
                         ESP_LOGI(TAG, "无效的房间灯光指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
                         return "无效的房间灯光指令";
@@ -167,14 +101,17 @@ public:
                 } else if (action == "air_condition") {
                     auto ir_command = AirBtnMap[command];
                     if (!command.empty() && !ir_command.empty()) {
-                        SendIrCommand("zf=" + ir_command);
-                        return "已发送空调指令";
+                        if (infrared_device_.SendIrCommand("zf=" + ir_command)) {
+                            return "已发送空调指令";
+                        } else {
+                            return "发送空调指令失败";
+                        }
                     } else {
                         ESP_LOGI(TAG, "无效的空调指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
                         return "无效的空调指令";
                     }
                 } else if (action == "get_status") {
-                    return uart_ok_ ? "红外遥控器正常" : "UART初始化失败";
+                    return infrared_device_.IsReady() ? "红外遥控器正常" : "红外设备初始化失败";
                 } else {
                     return "未知动作: " + action + "\n支持的动作: send_ir, room_light, air_condition, get_status";
                 }

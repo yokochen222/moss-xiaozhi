@@ -28,6 +28,10 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
+            "api/api.cc"
+            "device/infrared.cc"
+            "device/lamp_bar.cc"
+            "device/lamp_eye.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -38,7 +42,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "mcp" "mcp/utils")
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols" "device" "api" "mcp" "mcp/utils")
 
 # 添加 MCP 工具文件 - 自动包含所有工具
 file(GLOB MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
