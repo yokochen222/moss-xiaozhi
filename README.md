@@ -2,6 +2,11 @@
 
 - 小智教程合集：https://ccnphfhqs21z.feishu.cn/wiki/F5krwD16viZoF0kKkvDcrZNYnhb
 - 小智官方仓库：https://github.com/78/xiaozhi-esp32
+觉得有用的兄弟们 别忘了点个 star 支持下
+
+另外搞了一个交流群（1012964410），有需要的小伙伴以及有问题可以在群里问，看到了回复
+
+![1749396910364](image/README/1012964410.jpg)
 
 ## 视频展示
 
@@ -85,11 +90,6 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 如果接线跟上述连接一致、可以直接拉取本项目到本地 编译烧录到板子。
 注意下 ESP IDF版本（5.3.2），本工程基于虾哥很早之前的版本实现的了，其他版本不保证会不会出问题
 
-觉得有用的兄弟们 别忘了点个 star 支持下
-
-另外搞了一个交流群（1012964410），有需要的小伙伴以及有问题可以在群里问，看到了回复
-
-![1749396910364](image/README/1012964410.jpg)
 
 ### 更新
 
