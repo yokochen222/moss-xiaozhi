@@ -50,6 +50,15 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
+        // Apply input gain amplification to ensure server receives amplified audio
+        float gain = codec_->input_gain();
+        if (gain > 0) {
+            int gain_factor = (int)gain;
+            for (size_t i = 0; i < data.size(); i++) {
+                int32_t amplified = data[i] * gain_factor;
+                data[i] = (amplified > INT16_MAX) ? INT16_MAX : (amplified < -INT16_MAX) ? -INT16_MAX : (int16_t)amplified;
+            }
+        }
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
 
