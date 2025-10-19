@@ -5,10 +5,15 @@
 #include <esp_log.h>
 #include <cstring>
 #include <driver/i2s_common.h>
+#include <driver/gpio.h>
 
 #define TAG "AudioCodec"
 
 AudioCodec::AudioCodec() {
+    // 初始化 NS4150B 使能引脚 (GPIO48)，上电默认高电平
+    gpio_set_direction(GPIO_NUM_48, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_48, 1);
+    ESP_LOGI(TAG, "NS4150B EN (GPIO48) initialized to HIGH");
 }
 
 AudioCodec::~AudioCodec() {
@@ -74,4 +79,8 @@ void AudioCodec::EnableOutput(bool enable) {
     }
     output_enabled_ = enable;
     ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
+    
+    // // 控制 NS4150B 的使能引脚 (GPIO48)
+    // gpio_set_level(GPIO_NUM_48, enable ? 1 : 0);
+    // ESP_LOGI(TAG, "Set NS4150B EN (GPIO48) to %s", enable ? "HIGH" : "LOW");
 }
