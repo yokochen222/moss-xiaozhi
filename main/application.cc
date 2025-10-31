@@ -133,46 +133,46 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10; // 重置重试延迟时间
 
-        if (ota_.HasNewVersion()) {
-            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
+        // if (ota_.HasNewVersion()) {
+        //     Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
 
-            vTaskDelay(pdMS_TO_TICKS(3000));
+        //     vTaskDelay(pdMS_TO_TICKS(3000));
 
-            SetDeviceState(kDeviceStateUpgrading);
+        //     SetDeviceState(kDeviceStateUpgrading);
             
-            display->SetIcon(FONT_AWESOME_DOWNLOAD);
-            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
-            display->SetChatMessage("system", message.c_str());
+        //     display->SetIcon(FONT_AWESOME_DOWNLOAD);
+        //     std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
+        //     display->SetChatMessage("system", message.c_str());
 
-            auto& board = Board::GetInstance();
-            board.SetPowerSaveMode(false);
-            wake_word_->StopDetection();
-            // 预先关闭音频输出，避免升级过程有音频操作
-            auto codec = board.GetAudioCodec();
-            codec->EnableInput(false);
-            codec->EnableOutput(false);
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                audio_decode_queue_.clear();
-            }
-            background_task_->WaitForCompletion();
-            delete background_task_;
-            background_task_ = nullptr;
-            vTaskDelay(pdMS_TO_TICKS(1000));
+        //     auto& board = Board::GetInstance();
+        //     board.SetPowerSaveMode(false);
+        //     wake_word_->StopDetection();
+        //     // 预先关闭音频输出，避免升级过程有音频操作
+        //     auto codec = board.GetAudioCodec();
+        //     codec->EnableInput(false);
+        //     codec->EnableOutput(false);
+        //     {
+        //         std::lock_guard<std::mutex> lock(mutex_);
+        //         audio_decode_queue_.clear();
+        //     }
+        //     background_task_->WaitForCompletion();
+        //     delete background_task_;
+        //     background_task_ = nullptr;
+        //     vTaskDelay(pdMS_TO_TICKS(1000));
 
-            ota_.StartUpgrade([display](int progress, size_t speed) {
-                char buffer[64];
-                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-                display->SetChatMessage("system", buffer);
-            });
+        //     ota_.StartUpgrade([display](int progress, size_t speed) {
+        //         char buffer[64];
+        //         snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+        //         display->SetChatMessage("system", buffer);
+        //     });
 
-            // If upgrade success, the device will reboot and never reach here
-            display->SetStatus(Lang::Strings::UPGRADE_FAILED);
-            ESP_LOGI(TAG, "Firmware upgrade failed...");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            Reboot();
-            return;
-        }
+        //     // If upgrade success, the device will reboot and never reach here
+        //     display->SetStatus(Lang::Strings::UPGRADE_FAILED);
+        //     ESP_LOGI(TAG, "Firmware upgrade failed...");
+        //     vTaskDelay(pdMS_TO_TICKS(3000));
+        //     Reboot();
+        //     return;
+        // }
 
         // No new version, mark the current version as valid
         ota_.MarkCurrentVersionValid();
@@ -424,7 +424,7 @@ void Application::Start() {
     display->UpdateStatusBar(true);
 
     // Check for new firmware version or get the MQTT broker address
-    CheckNewVersion();
+    CheckNewVersion(); 
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
