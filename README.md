@@ -79,7 +79,7 @@ https://www.bilibili.com/video/BV1TpTNzbE3u/?vd_source=3cdb33659e80ec67cacea8b3c
 
 ![1749396910364](https://s21.ax1x.com/2025/06/09/pVFKIiV.md.png)
 
-## 为了防止MOSS壳子内排线乱 画了个简单的底座板子(不会贴片)，如果有需要可以在立创下单打版
+## (文件已经迁移到群内，请加群获取也更新了版本)为了防止MOSS壳子内排线乱 画了个简单的底座板子，如果有需要可以在立创下单打版
 
 源文件在pcb/MOSS_PCB.zip
 
