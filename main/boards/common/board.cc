@@ -9,8 +9,15 @@
 #include <esp_ota_ops.h>
 #include <esp_chip_info.h>
 #include <esp_random.h>
+#include <cstdlib>
 
 #define TAG "Board"
+
+void* __attribute__((weak)) create_board() {
+    ESP_LOGE(TAG, "No board implementation found. Check BOARD_TYPE config and board source registration.");
+    std::abort();
+    return nullptr;
+}
 
 Board::Board() {
     Settings settings("board", true);
