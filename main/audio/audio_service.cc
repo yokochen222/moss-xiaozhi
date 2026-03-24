@@ -660,12 +660,14 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     models_list_ = models_list;
+    is_afe_wake_word_ = false;
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     if (esp_srmodel_filter(models_list_, ESP_MN_PREFIX, NULL) != nullptr) {
         wake_word_ = std::make_unique<CustomWakeWord>();
     } else if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
         wake_word_ = std::make_unique<AfeWakeWord>();
+        is_afe_wake_word_ = true;
     } else {
         wake_word_ = nullptr;
     }
@@ -688,7 +690,7 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
 
 bool AudioService::IsAfeWakeWord() {
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
-    return wake_word_ != nullptr && dynamic_cast<AfeWakeWord*>(wake_word_.get()) != nullptr;
+    return wake_word_ != nullptr && is_afe_wake_word_;
 #else
     return false;
 #endif
