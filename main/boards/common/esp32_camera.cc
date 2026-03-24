@@ -61,7 +61,7 @@ bool Esp32Camera::Capture() {
     ESP_LOGI(TAG, "Camera captured %d frames in %d ms", frames_to_get, int((end_time - start_time) / 1000));
 
     // 显示预览图片
-    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
+    auto display = Board::GetInstance().GetDisplay();
     if (display != nullptr) {
         auto data = (uint8_t*)heap_caps_malloc(fb_->len, MALLOC_CAP_SPIRAM);
         if (data == nullptr) {

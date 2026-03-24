@@ -172,7 +172,7 @@ void McpServer::AddUserOnlyTools() {
 
     // Display control
 #ifdef HAVE_LVGL
-    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
+    auto display = Board::GetInstance().GetDisplay();
     if (display) {
         AddUserOnlyTool("self.screen.get_info", "Information about the screen, including width, height, etc.",
             PropertyList(),
@@ -180,11 +180,7 @@ void McpServer::AddUserOnlyTools() {
                 cJSON *json = cJSON_CreateObject();
                 cJSON_AddNumberToObject(json, "width", display->width());
                 cJSON_AddNumberToObject(json, "height", display->height());
-                if (dynamic_cast<OledDisplay*>(display)) {
-                    cJSON_AddBoolToObject(json, "monochrome", true);
-                } else {
-                    cJSON_AddBoolToObject(json, "monochrome", false);
-                }
+                cJSON_AddBoolToObject(json, "monochrome", display->IsMonochrome());
                 return json;
             });
 

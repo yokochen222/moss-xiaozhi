@@ -13,7 +13,10 @@
 #include <esp_pm.h>
 
 #include <string>
+#include <memory>
 #include <chrono>
+
+class LvglImage;
 
 class Theme {
 public:
@@ -39,6 +42,9 @@ public:
     virtual Theme* GetTheme() { return current_theme_; }
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
+    virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) {}
+    virtual bool SnapshotToJpeg(std::string& jpeg_data, int quality = 80) { return false; }
+    virtual bool IsMonochrome() const { return false; }
 
     inline int width() const { return width_; }
     inline int height() const { return height_; }
