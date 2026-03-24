@@ -17,6 +17,9 @@
 #include <chrono>
 
 class LvglImage;
+namespace emote {
+class EmoteDisplay;
+}
 
 class Theme {
 public:
@@ -45,6 +48,7 @@ public:
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) {}
     virtual bool SnapshotToJpeg(std::string& jpeg_data, int quality = 80) { return false; }
     virtual bool IsMonochrome() const { return false; }
+    virtual emote::EmoteDisplay* AsEmoteDisplay() { return nullptr; }
 
     inline int width() const { return width_; }
     inline int height() const { return height_; }

@@ -66,6 +66,7 @@ public:
     virtual void ShowNotification(const char* notification, int duration_ms = 3000) override;
     virtual void UpdateStatusBar(bool update_all = false) override;
     virtual void SetPowerSaveMode(bool on) override;
+    virtual emote::EmoteDisplay* AsEmoteDisplay() override { return this; }
     virtual void SetPreviewImage(const void* image);
 
     void AddEmojiData(const std::string &name, const void* data, size_t size, uint8_t fps = 0, bool loop = false, bool lack = false);
