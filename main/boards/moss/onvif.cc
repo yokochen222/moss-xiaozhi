@@ -323,7 +323,7 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
     int status = 0;
     std::string auth_header;
     
-    // 第一次尝试：使用之前可能缓存的认证信息，或者直接使用Basic认证
+    // 直接使用Digest认证（跳过Basic尝试）
     {
         auto http = network->CreateHttp(3);
         if (!http) {
@@ -332,7 +332,6 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
         }
         
         http->SetTimeout(30000);
-        http->SetHeader("Authorization", "Basic " + Base64Encode(username_ + ":" + password_));
         
         if (!http->Open("GET", url)) {
             ESP_LOGE(TAG, "Failed to open connection for snapshot");
@@ -347,7 +346,7 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
             http->Close();
             
             if (!image_data.empty()) {
-                ESP_LOGI(TAG, "Snapshot retrieved with Basic auth: %d bytes", image_data.size());
+                ESP_LOGI(TAG, "Snapshot retrieved: %d bytes", image_data.size());
                 return true;
             }
         }
@@ -365,9 +364,6 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
         if (ParseDigestParams(auth_params, digest_auth)) {
             ESP_LOGI(TAG, "Need digest auth: realm=%s, nonce=%s, qop=%s", 
                      digest_auth.realm.c_str(), digest_auth.nonce.c_str(), digest_auth.qop.c_str());
-            
-            // 等待一小段时间确保之前的连接完全关闭
-            vTaskDelay(pdMS_TO_TICKS(200));
             
             // 创建新的HTTP客户端用于Digest认证
             auto http = network->CreateHttp(3);
@@ -388,21 +384,12 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
                 ESP_LOGE(TAG, "Failed to open digest auth connection");
                 return false;
             }
-            ESP_LOGI(TAG, "Digest auth connection opened, waiting for response...");
-            
-            // 给连接一点时间稳定
-            vTaskDelay(pdMS_TO_TICKS(50));
             
             // 获取状态码
             status = http->GetStatusCode();
             ESP_LOGI(TAG, "Snapshot digest auth status: %d", status);
             
             if (status == 200) {
-                ESP_LOGI(TAG, "Reading snapshot data...");
-                
-                // 给网络一些时间接收响应体
-                vTaskDelay(pdMS_TO_TICKS(100));
-                
                 // 检查响应头
                 std::string content_length = http->GetResponseHeader("Content-Length");
                 std::string transfer_encoding = http->GetResponseHeader("Transfer-Encoding");
@@ -505,7 +492,8 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
     int status = 0;
     std::string auth_header;
     
-    // 第一次尝试：Basic认证
+    // 直接使用Digest认证（摄像头只支持Digest，跳过Basic尝试）
+    // 先获取nonce
     {
         auto http = network->CreateHttp(3);
         if (!http) {
@@ -513,32 +501,28 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
             return R"({"success": false, "message": "创建HTTP客户端失败"})";
         }
         
-        http->SetTimeout(15000);
-        http->SetHeader("Authorization", "Basic " + Base64Encode(username_ + ":" + password_));
+        http->SetTimeout(10000);
         
         if (!http->Open("GET", url)) {
-            ESP_LOGE(TAG, "Failed to open connection for snapshot");
+            ESP_LOGE(TAG, "Failed to open connection for nonce");
             return R"({"success": false, "message": "连接摄像头失败"})";
         }
         
         status = http->GetStatusCode();
-        ESP_LOGI(TAG, "Snapshot first attempt status: %d", status);
         
         if (status == 401) {
             auth_header = http->GetResponseHeader("WWW-Authenticate");
-            ESP_LOGI(TAG, "First attempt got 401, WWW-Authenticate: %s", auth_header.c_str());
+            ESP_LOGI(TAG, "Got nonce header: %s", auth_header.c_str());
         }
         http->Close();
     }
     
-    // 如果需要Digest认证
-    if (status == 401 && !auth_header.empty()) {
+    // 如果获取到nonce，进行Digest认证
+    if (!auth_header.empty()) {
         std::string auth_params = ExtractAuthHeader(auth_header);
         DigestAuth digest_auth;
         if (ParseDigestParams(auth_params, digest_auth)) {
-            ESP_LOGI(TAG, "Need digest auth for snapshot");
-            
-            vTaskDelay(pdMS_TO_TICKS(100));
+            ESP_LOGI(TAG, "Using digest auth for snapshot");
             
             auto http = network->CreateHttp(3);
             if (!http) {
@@ -546,7 +530,7 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
                 return R"({"success": false, "message": "创建HTTP客户端失败"})";
             }
             
-            http->SetTimeout(15000);
+            http->SetTimeout(10000);
             
             std::string digest_header = BuildDigestAuthHeader(
                 username_, password_, "GET", snapshot_url, digest_auth);
@@ -557,7 +541,6 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
                 return R"({"success": false, "message": "连接摄像头失败"})";
             }
             
-            vTaskDelay(pdMS_TO_TICKS(50));
             status = http->GetStatusCode();
             ESP_LOGI(TAG, "Snapshot digest auth status: %d", status);
             
@@ -569,8 +552,6 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
             
             // 获取截图数据
             ESP_LOGI(TAG, "Reading snapshot data...");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            
             std::string image_data = http->ReadAll();
             http->Close();
             
