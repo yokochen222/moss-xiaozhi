@@ -26,23 +26,31 @@ public:
             "功能说明：\n"
             "- 获取摄像头截图并上传到AI服务器识别内容\n"
             "- 控制摄像头云台左右上下移动\n"
+            "- 精确定位到指定角度\n"
+            "- 获取当前云台位置\n"
             "\n"
             "参数说明：\n"
             "- action: 操作类型\n"
             "  * 'init' - 初始化摄像头连接\n"
             "  * 'snapshot' - 获取截图并上传到AI服务器识别\n"
-            "  * 'move' - 云台移动\n"
+            "  * 'move' - 云台持续移动（需配合 stop 停止）\n"
             "  * 'stop' - 停止云台移动\n"
+            "  * 'status' - 获取当前云台位置\n"
+            "  * 'move_to' - 精确定位到指定角度\n"
             "\n"
-            "- x: 水平移动值 (-1.0 到 1.0)\n"
+            "- x: 水平移动值 (-1.0 到 1.0)，move 时有效\n"
             "  * 正值 = 向右移动\n"
             "  * 负值 = 向左移动\n"
             "  * 0 = 不移动\n"
             "\n"
-            "- y: 垂直移动值 (-1.0 到 1.0)\n"
+            "- y: 垂直移动值 (-1.0 到 1.0)，move 时有效\n"
             "  * 正值 = 向下移动\n"
             "  * 负值 = 向上移动\n"
             "  * 0 = 不移动\n"
+            "\n"
+            "- pan: 目标水平角度 (-1.0 到 1.0)，move_to 时有效\n"
+            "- tilt: 目标垂直角度 (-1.0 到 1.0)，move_to 时有效\n"
+            "- speed: 移动速度 (0.1 到 1.0)，move_to 时有效，默认 0.5\n"
             "\n"
             "- question: 向AI提出的问题（可选，默认：请描述这张图片的内容）\n"
             "\n"
@@ -55,21 +63,28 @@ public:
                 Property("action", kPropertyTypeString),
                 Property("x", kPropertyTypeFloat, 0.0f, -1.0f, 1.0f),
                 Property("y", kPropertyTypeFloat, 0.0f, -1.0f, 1.0f),
+                Property("pan", kPropertyTypeFloat, 0.0f, -1.0f, 1.0f),
+                Property("tilt", kPropertyTypeFloat, 0.0f, -1.0f, 1.0f),
+                Property("speed", kPropertyTypeFloat, 0.5f, 0.1f, 1.0f),
                 Property("question", kPropertyTypeString, "请描述这张图片的内容")
             }),
             [this](const PropertyList& properties) -> ReturnValue {
                 auto action = properties["action"].value<std::string>();
                 auto x = properties["x"].value<float>();
                 auto y = properties["y"].value<float>();
+                auto pan = properties["pan"].value<float>();
+                auto tilt = properties["tilt"].value<float>();
+                auto speed = properties["speed"].value<float>();
                 auto question = properties["question"].value<std::string>();
 
-                return OnvifAction(action, x, y, question);
+                return OnvifAction(action, x, y, pan, tilt, speed, question);
             }
         );
     }
 
 private:
-    ReturnValue OnvifAction(const std::string& action, float x, float y, const std::string& question) {
+    ReturnValue OnvifAction(const std::string& action, float x, float y,
+                           float pan, float tilt, float speed, const std::string& question) {
         auto& onvif = OnvifCamera::GetInstance();
 
         if (action == "init") {
@@ -142,8 +157,37 @@ private:
             } else {
                 return "云台停止命令失败";
             }
+        } else if (action == "status") {
+            OnvifCamera::PTZStatus status;
+            if (onvif.GetStatus(status)) {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "当前云台位置:\n"
+                    "- 水平角度 (pan): %.2f\n"
+                    "- 垂直角度 (tilt): %.2f\n"
+                    "- 缩放 (zoom): %.2f",
+                    status.pan, status.tilt, status.zoom);
+                return std::string(buf);
+            } else {
+                return "获取云台状态失败";
+            }
+        } else if (action == "move_to") {
+            // 限制速度范围
+            float move_speed = std::max(0.1f, std::min(1.0f, speed));
+            if (onvif.MoveToAngle(pan, tilt, move_speed)) {
+                char buf[128];
+                snprintf(buf, sizeof(buf),
+                    "云台已移动到指定位置:\n"
+                    "- 目标水平角度 (pan): %.2f\n"
+                    "- 目标垂直角度 (tilt): %.2f\n"
+                    "- 移动速度: %.2f",
+                    pan, tilt, move_speed);
+                return std::string(buf);
+            } else {
+                return "精确定位失败";
+            }
         } else {
-            return "未知操作: " + action + "\n支持的操作: init, snapshot, move, stop";
+            return "未知操作: " + action + "\n支持的操作: init, snapshot, move, stop, status, move_to";
         }
     }
 };

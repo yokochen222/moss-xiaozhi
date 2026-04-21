@@ -118,7 +118,9 @@ static bool ParseDigestParams(const std::string& params, DigestAuth& auth) {
 static std::string BuildDigestAuthHeader(const std::string& username, const std::string& password,
                                          const std::string& method, const std::string& uri,
                                          const DigestAuth& auth) {
-    static const char* nc = "00000001";
+    static uint32_t nonce_count = 1;
+    static char nc_buf[9];
+    snprintf(nc_buf, sizeof(nc_buf), "%08lx", (unsigned long)nonce_count++);
     
     // 生成cnonce
     char cnonce[33];
@@ -126,12 +128,19 @@ static std::string BuildDigestAuthHeader(const std::string& username, const std:
     uint32_t rand2 = esp_random();
     snprintf(cnonce, sizeof(cnonce), "%08lx%08lx", (unsigned long)rand1, (unsigned long)rand2);
     
-    // 计算 HA1 和 HA2
-    std::string A1 = username + ":" + auth.realm + ":" + password;
-    std::string A2 = method + ":" + uri;
-    std::string HA1 = Md5Hash(A1);
-    std::string HA2 = Md5Hash(A2);
-    std::string response = Md5Hash(HA1 + ":" + auth.nonce + ":" + nc + ":" + cnonce + ":" + auth.qop + ":" + HA2);
+    // 计算 HA1 和 HA2（使用栈缓冲区减少堆分配）
+    char ha1_input[512];
+    char ha2_input[256];
+    int ha1_len = snprintf(ha1_input, sizeof(ha1_input), "%s:%s:%s", username.c_str(), auth.realm.c_str(), password.c_str());
+    int ha2_len = snprintf(ha2_input, sizeof(ha2_input), "%s:%s", method.c_str(), uri.c_str());
+    std::string HA1 = Md5Hash(std::string(ha1_input, ha1_len));
+    std::string HA2 = Md5Hash(std::string(ha2_input, ha2_len));
+    
+    // 预计算 response 字符串长度，避免动态扩展
+    char response_input[1024];
+    int resp_len = snprintf(response_input, sizeof(response_input), "%s:%s:%s:%s:%s:%s",
+                            HA1.c_str(), auth.nonce.c_str(), nc_buf, cnonce, auth.qop.c_str(), HA2.c_str());
+    std::string response = Md5Hash(std::string(response_input, resp_len));
     
     // 使用 snprintf 替代 ostringstream，避免动态内存分配
     char header_buf[1024];
@@ -141,13 +150,13 @@ static std::string BuildDigestAuthHeader(const std::string& username, const std:
             "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", "
             "cnonce=\"%s\", nc=%s, qop=%s, response=\"%s\", opaque=\"%s\"",
             username.c_str(), auth.realm.c_str(), auth.nonce.c_str(), uri.c_str(),
-            cnonce, nc, auth.qop.c_str(), response.c_str(), auth.opaque.c_str());
+            cnonce, nc_buf, auth.qop.c_str(), response.c_str(), auth.opaque.c_str());
     } else {
         len = snprintf(header_buf, sizeof(header_buf),
             "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", "
             "cnonce=\"%s\", nc=%s, qop=%s, response=\"%s\"",
             username.c_str(), auth.realm.c_str(), auth.nonce.c_str(), uri.c_str(),
-            cnonce, nc, auth.qop.c_str(), response.c_str());
+            cnonce, nc_buf, auth.qop.c_str(), response.c_str());
     }
     
     return std::string(header_buf, len);
@@ -163,6 +172,15 @@ static const char* SOAP_ENVELOPE_TEMPLATE = R"(<?xml version="1.0" encoding="UTF
 
 static const char* DEVICE_SERVICE_ENDPOINT = "/onvif/device_service";
 static const char* PTZ_SERVICE_ENDPOINT = "/onvif/ptz_service";
+
+// 静态错误消息，减少 ROM 占用
+static const char* ERR_CAMERA_NOT_CONNECTED = R"({"success": false, "message": "摄像头未连接"})";
+static const char* ERR_NETWORK_UNAVAILABLE = R"({"success": false, "message": "网络不可用"})";
+static const char* ERR_SNAPSHOT_FAILED = R"({"success": false, "message": "获取截图失败"})";
+static const char* ERR_SNAPSHOT_EMPTY = R"({"success": false, "message": "截图数据为空"})";
+static const char* ERR_UPLOAD_FAILED = R"({"success": false, "message": "上传图片失败"})";
+static const char* ERR_HTTP_CLIENT_FAILED = R"({"success": false, "message": "创建HTTP客户端失败"})";
+static const char* ERR_CONNECT_FAILED = R"({"success": false, "message": "连接AI服务器失败"})";
 
 OnvifCamera& OnvifCamera::GetInstance() {
     static OnvifCamera instance;
@@ -225,7 +243,6 @@ bool OnvifCamera::SendSoapRequest(const std::string& endpoint, const std::string
     http->SetTimeout(10000);
 
     std::string url = "http://" + ip_ + ":" + std::to_string(port_) + endpoint;
-    ESP_LOGI(TAG, "Sending SOAP request to: %s", url.c_str());
     
     http->SetHeader("Content-Type", "application/soap+xml; charset=utf-8");
     http->SetHeader("SOAPAction", soap_action);
@@ -243,19 +260,14 @@ bool OnvifCamera::SendSoapRequest(const std::string& endpoint, const std::string
     if (status == 401) {
         // 需要Digest认证，先获取WWW-Authenticate头
         std::string auth_header = http->GetResponseHeader("WWW-Authenticate");
-        ESP_LOGI(TAG, "Got 401, WWW-Authenticate: %s", auth_header.c_str());
+        // 先读取完响应体再关闭，避免 TCP receive failed
+        http->ReadAll();
         http->Close();
-        
-        // 等待连接完全关闭
-        vTaskDelay(pdMS_TO_TICKS(100));
         
         // 解析认证参数
         std::string auth_params = ExtractAuthHeader(auth_header);
         DigestAuth digest_auth;
         if (ParseDigestParams(auth_params, digest_auth)) {
-            ESP_LOGI(TAG, "Parsed digest auth: realm=%s, nonce=%s, qop=%s", 
-                     digest_auth.realm.c_str(), digest_auth.nonce.c_str(), digest_auth.qop.c_str());
-            
             // 重新建立连接并添加Digest认证
             http = network->CreateHttp(3);
             http->SetTimeout(10000);
@@ -274,7 +286,6 @@ bool OnvifCamera::SendSoapRequest(const std::string& endpoint, const std::string
             http->Write("", 0);
             
             status = http->GetStatusCode();
-            ESP_LOGI(TAG, "Digest auth HTTP status: %d", status);
         }
     }
     
@@ -291,13 +302,10 @@ bool OnvifCamera::GetProfiles(std::string& profile_token) {
     if (SendSoapRequest(DEVICE_SERVICE_ENDPOINT,
                         "http://www.onvif.org/ver10/media/wsdl/GetProfiles",
                         BuildSoapEnvelope(body), response)) {
-        ESP_LOGI(TAG, "GetProfiles response: %s", response.c_str());
-        
         // 先尝试找第二个profile（通常是子码流）
         auto pos = response.find("protoken_ch0002");
         if (pos != std::string::npos) {
             profile_token = "protoken_ch0002";
-            ESP_LOGI(TAG, "Using sub stream profile: %s", profile_token.c_str());
             return true;
         }
         
@@ -305,7 +313,6 @@ bool OnvifCamera::GetProfiles(std::string& profile_token) {
         pos = response.find("protoken_ch0001");
         if (pos != std::string::npos) {
             profile_token = "protoken_ch0001";
-            ESP_LOGI(TAG, "Using main stream profile: %s", profile_token.c_str());
             return true;
         }
         
@@ -316,7 +323,6 @@ bool OnvifCamera::GetProfiles(std::string& profile_token) {
             auto end = response.find("\"", start);
             if (end != std::string::npos) {
                 profile_token = response.substr(start, end - start);
-                ESP_LOGI(TAG, "Using profile token: %s", profile_token.c_str());
                 return true;
             }
         }
@@ -336,7 +342,6 @@ bool OnvifCamera::GetSnapshotUri(std::string& uri, const std::string& profile_to
     if (SendSoapRequest(DEVICE_SERVICE_ENDPOINT,
                         "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri",
                         BuildSoapEnvelope(body), response)) {
-        ESP_LOGI(TAG, "GetSnapshotUri response: %s", response.c_str());
         auto start = response.find("<tt:Uri>");
         auto end = response.find("</tt:Uri>");
         if (start != std::string::npos && end != std::string::npos) {
@@ -346,7 +351,6 @@ bool OnvifCamera::GetSnapshotUri(std::string& uri, const std::string& profile_to
             if (uri_pos != std::string::npos) {
                 uri = "http://" + ip_ + ":" + std::to_string(port_) + uri.substr(uri.find("/", uri_pos));
             }
-            ESP_LOGI(TAG, "Snapshot URI: %s", uri.c_str());
             return true;
         }
     }
@@ -368,7 +372,6 @@ static bool BuildSnapshotUrl(const std::string& ip, int port,
     
     if (!profile_token.empty() && camera.GetSnapshotUri(snapshot_uri, profile_token)) {
         url = snapshot_uri;
-        ESP_LOGI(TAG, "Using snapshot URI from GetSnapshotUri: %s", url.c_str());
         return true;
     }
     
@@ -377,41 +380,18 @@ static bool BuildSnapshotUrl(const std::string& ip, int port,
     snprintf(buf, sizeof(buf), "http://%s:%d/onvif/getsnapshot/?channel=2", 
              ip.c_str(), port);
     url = buf;
-    ESP_LOGI(TAG, "GetSnapshotUri failed, using fallback: %s", url.c_str());
     return false;
 }
 
-// 提取 URL 中的路径部分
-static std::string ExtractPathFromUrl(const std::string& url, const std::string& ip, int port) {
-    size_t ip_pos = url.find(ip);
-    if (ip_pos == std::string::npos) {
-        // 找不到 IP，尝试找协议后的第一个 /
-        size_t slash = url.find("://");
+// 提取 URL 中的路径部分（简化版本）
+static std::string ExtractPathFromUrl(const std::string& url) {
+    // 查找协议后的第一个 /
+    size_t slash = url.find("://");
+    if (slash != std::string::npos) {
+        slash = url.find("/", slash + 3);
         if (slash != std::string::npos) {
-            slash = url.find("/", slash + 3);
-            if (slash != std::string::npos) {
-                return url.substr(slash);
-            }
+            return url.substr(slash);
         }
-        return url;
-    }
-    
-    // 跳过 IP:port
-    size_t start = ip_pos + ip.length();
-    size_t colon = url.find(":", ip_pos);
-    size_t slash = url.find("/", ip_pos);
-    
-    if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
-        // 有端口号
-        char port_str[8];
-        snprintf(port_str, sizeof(port_str), ":%d", port);
-        if (url.compare(colon, strlen(port_str), port_str) == 0) {
-            start = colon + strlen(port_str);
-        }
-    }
-    
-    if (slash != std::string::npos && slash >= start) {
-        return url.substr(slash);
     }
     return url;
 }
@@ -453,7 +433,6 @@ static bool FetchSnapshotWithAuth(NetworkInterface* network,
     }
     
     std::string auth_header = http->GetResponseHeader("WWW-Authenticate");
-    ESP_LOGI(TAG, "Got WWW-Authenticate: %s", auth_header.c_str());
     http->Close();
     
     // 第二步：解析认证参数并发起 Digest 认证请求
@@ -482,7 +461,6 @@ static bool FetchSnapshotWithAuth(NetworkInterface* network,
     }
     
     status = http->GetStatusCode();
-    ESP_LOGI(TAG, "Digest auth status: %d", status);
     
     if (status != 200) {
         http->Close();
@@ -510,8 +488,7 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
     std::string url;
     BuildSnapshotUrl(ip_, port_, profile_token_, url);
     
-    std::string path = ExtractPathFromUrl(url, ip_, port_);
-    ESP_LOGI(TAG, "Getting snapshot from: %s (path: %s)", url.c_str(), path.c_str());
+    std::string path = ExtractPathFromUrl(url);
     
     return FetchSnapshotWithAuth(network, url, path, username_, password_, 30000, image_data);
 }
@@ -562,39 +539,162 @@ bool OnvifCamera::Stop() {
     return success;
 }
 
+bool OnvifCamera::GetStatus(PTZStatus& status) {
+    // 检查缓存（避免频繁请求）
+    int64_t now = esp_log_timestamp();
+    if (now - status_cache_time_ < STATUS_CACHE_MS) {
+        status = cached_ptz_status_;
+        ESP_LOGD(TAG, "Using cached PTZ status: pan=%.2f, tilt=%.2f", status.pan, status.tilt);
+        return true;
+    }
+    
+    std::string response;
+    char body[512];
+    snprintf(body, sizeof(body),
+        R"(<ptz:GetStatus xmlns:ptz="http://www.onvif.org/ver20/ptz/wsdl">
+          <ptz:ProfileToken>%s</ptz:ProfileToken>
+        </ptz:GetStatus>)", profile_token_.c_str());
+    
+    if (SendSoapRequest(PTZ_SERVICE_ENDPOINT,
+                        "http://www.onvif.org/ver20/ptz/wsdl/GetStatus",
+                        BuildSoapEnvelope(body), response)) {
+        // 解析 PTZ 位置
+        float pan = 0, tilt = 0, zoom = 0;
+        
+        // 查找 PanTilt 的 position 属性
+        auto pan_pos = response.find("PanTilt x=\"");
+        if (pan_pos != std::string::npos) {
+            auto start = pan_pos + 12;
+            auto end = response.find("\"", start);
+            if (end != std::string::npos) {
+                pan = atof(response.substr(start, end - start).c_str());
+            }
+        }
+        
+        auto tilt_pos = response.find("PanTilt y=\"");
+        if (tilt_pos != std::string::npos) {
+            auto start = tilt_pos + 11;
+            auto end = response.find("\"", start);
+            if (end != std::string::npos) {
+                tilt = atof(response.substr(start, end - start).c_str());
+            }
+        }
+        
+        // 查找 Zoom
+        auto zoom_pos = response.find("Zoom x=\"");
+        if (zoom_pos != std::string::npos) {
+            auto start = zoom_pos + 9;
+            auto end = response.find("\"", start);
+            if (end != std::string::npos) {
+                zoom = atof(response.substr(start, end - start).c_str());
+            }
+        }
+        
+        // 更新缓存
+        cached_ptz_status_ = {pan, tilt, zoom};
+        status_cache_time_ = now;
+        status = cached_ptz_status_;
+        
+        ESP_LOGI(TAG, "PTZ status: pan=%.2f, tilt=%.2f, zoom=%.2f", pan, tilt, zoom);
+        return true;
+    }
+    
+    ESP_LOGE(TAG, "Failed to get PTZ status");
+    return false;
+}
+
+bool OnvifCamera::GetStatus() {
+    PTZStatus status;
+    return GetStatus(status);
+}
+
+bool OnvifCamera::MoveToAngle(float pan, float tilt, float speed) {
+    // 限制速度范围
+    if (speed <= 0.0f) speed = 0.1f;
+    if (speed > 1.0f) speed = 1.0f;
+    
+    // 限制角度范围（-1.0 ~ 1.0）
+    pan = std::max(-1.0f, std::min(1.0f, pan));
+    tilt = std::max(-1.0f, std::min(1.0f, tilt));
+    
+    // 获取当前位置
+    PTZStatus current;
+    if (!GetStatus(current)) {
+        ESP_LOGW(TAG, "Failed to get current position, using (0,0) as reference");
+        current = {0.0f, 0.0f, 0.0f};
+    }
+    
+    // 计算需要移动的距离
+    float pan_diff = pan - current.pan;
+    float tilt_diff = tilt - current.tilt;
+    float max_diff = std::max(std::abs(pan_diff), std::abs(tilt_diff));
+    
+    if (max_diff < 0.01f) {
+        ESP_LOGI(TAG, "Already at target position (pan=%.2f, tilt=%.2f)", pan, tilt);
+        return true;
+    }
+    
+    // 计算移动时间（秒）: 时间 = 距离 / 速度
+    float move_time = max_diff / speed;
+    
+    // 确定移动方向
+    float dir_x = (pan_diff != 0) ? (pan_diff / std::abs(pan_diff)) : 0;
+    float dir_y = (tilt_diff != 0) ? (tilt_diff / std::abs(tilt_diff)) : 0;
+    
+    ESP_LOGI(TAG, "Moving to pan=%.2f, tilt=%.2f (current: %.2f, %.2f), time=%.1fs, speed=%.2f",
+             pan, tilt, current.pan, current.tilt, move_time, speed);
+    
+    // 发送持续移动命令
+    if (!Move(dir_x * speed, dir_y * speed)) {
+        return false;
+    }
+    
+    // 等待移动完成
+    int delay_ms = static_cast<int>(move_time * 1000);
+    if (delay_ms > 0) {
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+    
+    // 停止移动
+    Stop();
+    
+    // 使缓存失效，下次将重新获取
+    status_cache_time_ = 0;
+    
+    ESP_LOGI(TAG, "Move to angle completed");
+    return true;
+}
+
 std::string OnvifCamera::ExplainSnapshot(const std::string& question,
                                         const std::string& explain_url,
                                         const std::string& auth_token) {
     if (ip_.empty() || !connected_) {
         ESP_LOGE(TAG, "Camera not initialized or not connected");
-        return R"({"success": false, "message": "摄像头未连接"})";
+        return ERR_CAMERA_NOT_CONNECTED;
     }
     
     auto network = Board::GetInstance().GetNetwork();
     if (!network) {
         ESP_LOGE(TAG, "Network not available");
-        return R"({"success": false, "message": "网络不可用"})";
+        return ERR_NETWORK_UNAVAILABLE;
     }
     
     std::string url;
     BuildSnapshotUrl(ip_, port_, profile_token_, url);
     
-    std::string path = ExtractPathFromUrl(url, ip_, port_);
-    ESP_LOGI(TAG, "Getting snapshot from: %s (path: %s)", url.c_str(), path.c_str());
+    std::string path = ExtractPathFromUrl(url);
     
     // 获取截图数据
     std::string image_data;
     if (!FetchSnapshotWithAuth(network, url, path, username_, password_, 10000, image_data)) {
         ESP_LOGE(TAG, "Failed to get snapshot");
-        return R"({"success": false, "message": "获取截图失败"})";
+        return ERR_SNAPSHOT_FAILED;
     }
     
     if (image_data.empty()) {
         ESP_LOGE(TAG, "Snapshot data is empty");
-        return R"({"success": false, "message": "截图数据为空"})";
+        return ERR_SNAPSHOT_EMPTY;
     }
-    
-    ESP_LOGI(TAG, "Snapshot retrieved: %d bytes, uploading to AI server", (int)image_data.size());
     
     // 上传到AI服务器
     return UploadToExplainServer(question, explain_url, auth_token, image_data);
@@ -607,13 +707,13 @@ std::string OnvifCamera::UploadToExplainServer(const std::string& question,
     auto network = Board::GetInstance().GetNetwork();
     if (!network) {
         ESP_LOGE(TAG, "Network not available for upload");
-        return R"({"success": false, "message": "网络不可用"})";
+        return ERR_NETWORK_UNAVAILABLE;
     }
     
     auto http = network->CreateHttp(3);
     if (!http) {
         ESP_LOGE(TAG, "Failed to create HTTP client for upload");
-        return R"({"success": false, "message": "创建HTTP客户端失败"})";
+        return ERR_HTTP_CLIENT_FAILED;
     }
     
     std::string boundary = "----ONVIF_CAMERA_BOUNDARY";
@@ -630,25 +730,26 @@ std::string OnvifCamera::UploadToExplainServer(const std::string& question,
     
     if (!http->Open("POST", explain_url)) {
         ESP_LOGE(TAG, "Failed to connect to explain URL");
-        return R"({"success": false, "message": "连接AI服务器失败"})";
+        return ERR_CONNECT_FAILED;
     }
     
-    // 构造multipart/form-data请求体
-    // 第一块：question字段
-    std::string question_field;
-    question_field += "--" + boundary + "\r\n";
-    question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
-    question_field += "\r\n";
-    question_field += question + "\r\n";
-    http->Write(question_field.c_str(), question_field.size());
+    // 构造multipart/form-data请求体（使用栈缓冲区减少堆分配）
+    char part_header[512];
+    int header_len = snprintf(part_header, sizeof(part_header),
+        "--%s\r\n"
+        "Content-Disposition: form-data; name=\"question\"\r\n"
+        "\r\n", boundary.c_str());
+    http->Write(part_header, header_len);
+    http->Write(question.c_str(), question.size());
+    http->Write("\r\n", 2);
     
-    // 第二块：文件字段头部
-    std::string file_header;
-    file_header += "--" + boundary + "\r\n";
-    file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"onvif_snapshot.jpg\"\r\n";
-    file_header += "Content-Type: image/jpeg\r\n";
-    file_header += "\r\n";
-    http->Write(file_header.c_str(), file_header.size());
+    // 文件字段头部
+    int file_header_len = snprintf(part_header, sizeof(part_header),
+        "--%s\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"onvif_snapshot.jpg\"\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "\r\n", boundary.c_str());
+    http->Write(part_header, file_header_len);
     
     // 第三块：图片数据（分块发送以节省内存）
     const size_t chunk_size = 4096;
@@ -664,10 +765,10 @@ std::string OnvifCamera::UploadToExplainServer(const std::string& question,
     
     ESP_LOGI(TAG, "Uploaded %d bytes to AI server", (int)total_sent);
     
-    // 第四块：multipart尾部
-    std::string multipart_footer;
-    multipart_footer += "\r\n--" + boundary + "--\r\n";
-    http->Write(multipart_footer.c_str(), multipart_footer.size());
+    // multipart尾部
+    char footer[64];
+    int footer_len = snprintf(footer, sizeof(footer), "\r\n--%s--\r\n", boundary.c_str());
+    http->Write(footer, footer_len);
     
     // 结束块
     http->Write("", 0);
@@ -676,7 +777,7 @@ std::string OnvifCamera::UploadToExplainServer(const std::string& question,
     if (status != 200) {
         ESP_LOGE(TAG, "Upload failed, status code: %d", status);
         http->Close();
-        return R"({"success": false, "message": "上传图片失败"})";
+        return ERR_UPLOAD_FAILED;
     }
     
     std::string result = http->ReadAll();
