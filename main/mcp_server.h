@@ -345,6 +345,10 @@ public:
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);
 
+    // 获取AI图像识别服务器配置
+    const std::string& GetExplainUrl() const { return explain_url_; }
+    const std::string& GetExplainToken() const { return explain_token_; }
+
 private:
     McpServer();
     ~McpServer();
@@ -358,6 +362,8 @@ private:
     void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
 
     std::vector<McpTool*> tools_;
+    std::string explain_url_;
+    std::string explain_token_;
 };
 
 #endif // MCP_SERVER_H

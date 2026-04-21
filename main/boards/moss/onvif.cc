@@ -1,5 +1,6 @@
 #include "onvif.h"
 #include "board.h"
+#include "system_info.h"
 #include <esp_log.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
@@ -142,7 +143,7 @@ static const char* SOAP_ENVELOPE_TEMPLATE = R"(<?xml version="1.0" encoding="UTF
 
 static const char* DEVICE_SERVICE_ENDPOINT = "/onvif/device_service";
 static const char* PTZ_SERVICE_ENDPOINT = "/onvif/ptz_service";
-static const char* SNAPSHOT_ENDPOINT = "/onvif/getsnapshot/?channel=1";
+static const char* SNAPSHOT_ENDPOINT = "/onvif/getsnapshot/?channel=2";
 
 OnvifCamera& OnvifCamera::GetInstance() {
     static OnvifCamera instance;
@@ -315,7 +316,7 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
         return false;
     }
 
-    std::string snapshot_url = "/onvif/getsnapshot/?channel=1";
+    std::string snapshot_url = "/onvif/getsnapshot/?channel=2";
     std::string url = "http://" + ip_ + ":" + std::to_string(port_) + snapshot_url;
     ESP_LOGI(TAG, "Getting snapshot from: %s", url.c_str());
 
@@ -480,4 +481,201 @@ bool OnvifCamera::Stop() {
     }
     
     return success;
+}
+
+std::string OnvifCamera::ExplainSnapshot(const std::string& question,
+                                        const std::string& explain_url,
+                                        const std::string& auth_token) {
+    if (ip_.empty() || !connected_) {
+        ESP_LOGE(TAG, "Camera not connected, please call Initialize first");
+        return R"({"success": false, "message": "摄像头未连接"})";
+    }
+    
+    auto network = Board::GetInstance().GetNetwork();
+    if (!network) {
+        ESP_LOGE(TAG, "Network not available");
+        return R"({"success": false, "message": "网络不可用"})";
+    }
+    
+    // 使用低分辨率参数 resolution=2
+    std::string snapshot_url = "/onvif/getsnapshot/?channel=2&resolution=2";
+    std::string url = "http://" + ip_ + ":" + std::to_string(port_) + snapshot_url;
+    ESP_LOGI(TAG, "Getting snapshot from: %s", url.c_str());
+    
+    int status = 0;
+    std::string auth_header;
+    
+    // 第一次尝试：Basic认证
+    {
+        auto http = network->CreateHttp(3);
+        if (!http) {
+            ESP_LOGE(TAG, "Failed to create HTTP client");
+            return R"({"success": false, "message": "创建HTTP客户端失败"})";
+        }
+        
+        http->SetTimeout(15000);
+        http->SetHeader("Authorization", "Basic " + Base64Encode(username_ + ":" + password_));
+        
+        if (!http->Open("GET", url)) {
+            ESP_LOGE(TAG, "Failed to open connection for snapshot");
+            return R"({"success": false, "message": "连接摄像头失败"})";
+        }
+        
+        status = http->GetStatusCode();
+        ESP_LOGI(TAG, "Snapshot first attempt status: %d", status);
+        
+        if (status == 401) {
+            auth_header = http->GetResponseHeader("WWW-Authenticate");
+            ESP_LOGI(TAG, "First attempt got 401, WWW-Authenticate: %s", auth_header.c_str());
+        }
+        http->Close();
+    }
+    
+    // 如果需要Digest认证
+    if (status == 401 && !auth_header.empty()) {
+        std::string auth_params = ExtractAuthHeader(auth_header);
+        DigestAuth digest_auth;
+        if (ParseDigestParams(auth_params, digest_auth)) {
+            ESP_LOGI(TAG, "Need digest auth for snapshot");
+            
+            vTaskDelay(pdMS_TO_TICKS(100));
+            
+            auto http = network->CreateHttp(3);
+            if (!http) {
+                ESP_LOGE(TAG, "Failed to create HTTP client for digest auth");
+                return R"({"success": false, "message": "创建HTTP客户端失败"})";
+            }
+            
+            http->SetTimeout(15000);
+            
+            std::string digest_header = BuildDigestAuthHeader(
+                username_, password_, "GET", snapshot_url, digest_auth);
+            http->SetHeader("Authorization", digest_header);
+            
+            if (!http->Open("GET", url)) {
+                ESP_LOGE(TAG, "Failed to open digest auth connection");
+                return R"({"success": false, "message": "连接摄像头失败"})";
+            }
+            
+            vTaskDelay(pdMS_TO_TICKS(50));
+            status = http->GetStatusCode();
+            ESP_LOGI(TAG, "Snapshot digest auth status: %d", status);
+            
+            if (status != 200) {
+                http->Close();
+                ESP_LOGE(TAG, "Snapshot digest auth failed, status: %d", status);
+                return R"({"success": false, "message": "摄像头认证失败"})";
+            }
+            
+            // 获取截图数据
+            ESP_LOGI(TAG, "Reading snapshot data...");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            
+            std::string image_data = http->ReadAll();
+            http->Close();
+            
+            if (image_data.empty()) {
+                ESP_LOGE(TAG, "Snapshot data is empty");
+                return R"({"success": false, "message": "截图数据为空"})";
+            }
+            
+            ESP_LOGI(TAG, "Snapshot retrieved: %d bytes, uploading to AI server", (int)image_data.size());
+            
+            // 流式上传到AI服务器
+            return UploadToExplainServer(question, explain_url, auth_token, image_data);
+        }
+    }
+    
+    if (status != 200) {
+        ESP_LOGE(TAG, "Snapshot request failed, status: %d", status);
+        return R"({"success": false, "message": "获取截图失败"})";
+    }
+    
+    return R"({"success": false, "message": "未知错误"})";
+}
+
+std::string OnvifCamera::UploadToExplainServer(const std::string& question,
+                                               const std::string& explain_url,
+                                               const std::string& auth_token,
+                                               const std::string& image_data) {
+    auto network = Board::GetInstance().GetNetwork();
+    if (!network) {
+        ESP_LOGE(TAG, "Network not available for upload");
+        return R"({"success": false, "message": "网络不可用"})";
+    }
+    
+    auto http = network->CreateHttp(3);
+    if (!http) {
+        ESP_LOGE(TAG, "Failed to create HTTP client for upload");
+        return R"({"success": false, "message": "创建HTTP客户端失败"})";
+    }
+    
+    std::string boundary = "----ONVIF_CAMERA_BOUNDARY";
+    
+    // 设置HTTP头
+    http->SetTimeout(30000);
+    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+    http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+    if (!auth_token.empty()) {
+        http->SetHeader("Authorization", "Bearer " + auth_token);
+    }
+    http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    http->SetHeader("Transfer-Encoding", "chunked");
+    
+    if (!http->Open("POST", explain_url)) {
+        ESP_LOGE(TAG, "Failed to connect to explain URL");
+        return R"({"success": false, "message": "连接AI服务器失败"})";
+    }
+    
+    // 构造multipart/form-data请求体
+    // 第一块：question字段
+    std::string question_field;
+    question_field += "--" + boundary + "\r\n";
+    question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
+    question_field += "\r\n";
+    question_field += question + "\r\n";
+    http->Write(question_field.c_str(), question_field.size());
+    
+    // 第二块：文件字段头部
+    std::string file_header;
+    file_header += "--" + boundary + "\r\n";
+    file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"onvif_snapshot.jpg\"\r\n";
+    file_header += "Content-Type: image/jpeg\r\n";
+    file_header += "\r\n";
+    http->Write(file_header.c_str(), file_header.size());
+    
+    // 第三块：图片数据（分块发送以节省内存）
+    const size_t chunk_size = 4096;
+    size_t offset = 0;
+    size_t total_sent = 0;
+    
+    while (offset < image_data.size()) {
+        size_t len = std::min(chunk_size, image_data.size() - offset);
+        http->Write(image_data.data() + offset, len);
+        offset += len;
+        total_sent += len;
+    }
+    
+    ESP_LOGI(TAG, "Uploaded %d bytes to AI server", (int)total_sent);
+    
+    // 第四块：multipart尾部
+    std::string multipart_footer;
+    multipart_footer += "\r\n--" + boundary + "--\r\n";
+    http->Write(multipart_footer.c_str(), multipart_footer.size());
+    
+    // 结束块
+    http->Write("", 0);
+    
+    int status = http->GetStatusCode();
+    if (status != 200) {
+        ESP_LOGE(TAG, "Upload failed, status code: %d", status);
+        http->Close();
+        return R"({"success": false, "message": "上传图片失败"})";
+    }
+    
+    std::string result = http->ReadAll();
+    http->Close();
+    
+    ESP_LOGI(TAG, "AI server response: %s", result.c_str());
+    return result;
 }

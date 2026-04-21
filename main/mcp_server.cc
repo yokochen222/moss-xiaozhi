@@ -335,14 +335,14 @@ void McpServer::ParseCapabilities(const cJSON* capabilities) {
         auto url = cJSON_GetObjectItem(vision, "url");
         auto token = cJSON_GetObjectItem(vision, "token");
         if (cJSON_IsString(url)) {
+            explain_url_ = std::string(url->valuestring);
+            if (cJSON_IsString(token)) {
+                explain_token_ = std::string(token->valuestring);
+            }
+            
             auto camera = Board::GetInstance().GetCamera();
             if (camera) {
-                std::string url_str = std::string(url->valuestring);
-                std::string token_str;
-                if (cJSON_IsString(token)) {
-                    token_str = std::string(token->valuestring);
-                }
-                camera->SetExplainUrl(url_str, token_str);
+                camera->SetExplainUrl(explain_url_, explain_token_);
             }
         }
     }
