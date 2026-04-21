@@ -29,6 +29,9 @@ public:
     bool Move(float x, float y);
     bool Stop();
 
+    bool GetSnapshotUri(std::string& uri);
+    bool GetSnapshotUri(std::string& uri, const std::string& profile_token);
+
 private:
     std::string UploadToExplainServer(const std::string& question,
                                      const std::string& explain_url,
@@ -42,7 +45,6 @@ private:
 
     bool SendSoapRequest(const std::string& endpoint, const std::string& soap_action, 
                          const std::string& body, std::string& response);
-    bool GetSnapshotUri(std::string& uri);
     bool GetProfiles(std::string& profile_token);
     std::string BuildSoapEnvelope(const std::string& body);
     bool GetSnapshotWithDigestAuth(std::string& image_data);

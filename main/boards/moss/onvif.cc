@@ -12,29 +12,47 @@
 
 #define TAG "OnvifCamera"
 
-static std::string Base64Encode(const std::string& data) {
-    size_t dlen = 0, olen = 0;
-    mbedtls_base64_encode((unsigned char*)nullptr, 0, &dlen, (const unsigned char*)data.data(), data.size());
-    std::string result(dlen, 0);
-    mbedtls_base64_encode((unsigned char*)result.data(), result.size(), &olen, (const unsigned char*)data.data(), data.size());
-    return result;
-}
-
-static std::string Md5Hash(const std::string& input) {
-    unsigned char hash[16];
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_MD5);
-    mbedtls_md_setup(&ctx, info, 0);
-    mbedtls_md_update(&ctx, (const unsigned char*)input.data(), input.size());
-    mbedtls_md_finish(&ctx, hash);
-    mbedtls_md_free(&ctx);
-    char hex[33];
-    for (int i = 0; i < 16; i++) {
-        snprintf(hex + i * 2, 3, "%02x", hash[i]);
+// MD5 哈希器类 - 复用上下文避免重复初始化开销
+class Md5Hasher {
+public:
+    Md5Hasher() {
+        mbedtls_md_init(&ctx_);
+        info_ = mbedtls_md_info_from_type(MBEDTLS_MD_MD5);
+        mbedtls_md_setup(&ctx_, info_, 0);
     }
-    hex[32] = '\0';
-    return std::string(hex);
+    ~Md5Hasher() { mbedtls_md_free(&ctx_); }
+    Md5Hasher(const Md5Hasher&) = delete;
+    Md5Hasher& operator=(const Md5Hasher&) = delete;
+    
+    void update(const std::string& data) {
+        mbedtls_md_update(&ctx_, (const unsigned char*)data.data(), data.size());
+    }
+    
+    std::string final() {
+        unsigned char hash[16];
+        mbedtls_md_finish(&ctx_, hash);
+        char hex[33];
+        for (int i = 0; i < 16; i++) {
+            snprintf(hex + i * 2, 3, "%02x", hash[i]);
+        }
+        hex[32] = '\0';
+        return std::string(hex);
+    }
+    
+    static std::string hash(const std::string& input) {
+        Md5Hasher hasher;
+        hasher.update(input);
+        return hasher.final();
+    }
+    
+private:
+    mbedtls_md_context_t ctx_;
+    const mbedtls_md_info_t* info_;
+};
+
+// 简化的 MD5 哈希函数
+static std::string Md5Hash(const std::string& input) {
+    return Md5Hasher::hash(input);
 }
 
 // Digest认证数据
@@ -100,7 +118,7 @@ static bool ParseDigestParams(const std::string& params, DigestAuth& auth) {
 static std::string BuildDigestAuthHeader(const std::string& username, const std::string& password,
                                          const std::string& method, const std::string& uri,
                                          const DigestAuth& auth) {
-    std::string nc = "00000001";
+    static const char* nc = "00000001";
     
     // 生成cnonce
     char cnonce[33];
@@ -108,29 +126,31 @@ static std::string BuildDigestAuthHeader(const std::string& username, const std:
     uint32_t rand2 = esp_random();
     snprintf(cnonce, sizeof(cnonce), "%08lx%08lx", (unsigned long)rand1, (unsigned long)rand2);
     
+    // 计算 HA1 和 HA2
     std::string A1 = username + ":" + auth.realm + ":" + password;
     std::string A2 = method + ":" + uri;
-    
     std::string HA1 = Md5Hash(A1);
     std::string HA2 = Md5Hash(A2);
-    
     std::string response = Md5Hash(HA1 + ":" + auth.nonce + ":" + nc + ":" + cnonce + ":" + auth.qop + ":" + HA2);
     
-    std::ostringstream header;
-    header << "Digest ";
-    header << "username=\"" << username << "\", ";
-    header << "realm=\"" << auth.realm << "\", ";
-    header << "nonce=\"" << auth.nonce << "\", ";
-    header << "uri=\"" << uri << "\", ";
-    header << "cnonce=\"" << cnonce << "\", ";
-    header << "nc=" << nc << ", ";
-    header << "qop=" << auth.qop << ", ";
-    header << "response=\"" << response << "\"";
+    // 使用 snprintf 替代 ostringstream，避免动态内存分配
+    char header_buf[1024];
+    int len;
     if (!auth.opaque.empty()) {
-        header << ", opaque=\"" << auth.opaque << "\"";
+        len = snprintf(header_buf, sizeof(header_buf),
+            "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", "
+            "cnonce=\"%s\", nc=%s, qop=%s, response=\"%s\", opaque=\"%s\"",
+            username.c_str(), auth.realm.c_str(), auth.nonce.c_str(), uri.c_str(),
+            cnonce, nc, auth.qop.c_str(), response.c_str(), auth.opaque.c_str());
+    } else {
+        len = snprintf(header_buf, sizeof(header_buf),
+            "Digest username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", "
+            "cnonce=\"%s\", nc=%s, qop=%s, response=\"%s\"",
+            username.c_str(), auth.realm.c_str(), auth.nonce.c_str(), uri.c_str(),
+            cnonce, nc, auth.qop.c_str(), response.c_str());
     }
     
-    return header.str();
+    return std::string(header_buf, len);
 }
 
 static const char* SOAP_ENVELOPE_TEMPLATE = R"(<?xml version="1.0" encoding="UTF-8"?>
@@ -143,7 +163,6 @@ static const char* SOAP_ENVELOPE_TEMPLATE = R"(<?xml version="1.0" encoding="UTF
 
 static const char* DEVICE_SERVICE_ENDPOINT = "/onvif/device_service";
 static const char* PTZ_SERVICE_ENDPOINT = "/onvif/ptz_service";
-static const char* SNAPSHOT_ENDPOINT = "/onvif/getsnapshot/?channel=2";
 
 OnvifCamera& OnvifCamera::GetInstance() {
     static OnvifCamera instance;
@@ -173,6 +192,12 @@ bool OnvifCamera::Initialize(const std::string& ip, int port, const std::string&
         if (response.find("GetDeviceInformationResponse") != std::string::npos) {
             connected_ = true;
             ESP_LOGI(TAG, "ONVIF camera connected successfully");
+            
+            // 获取子码流profile
+            if (GetProfiles(profile_token_)) {
+                ESP_LOGI(TAG, "Got profile token: %s (sub stream if available)", profile_token_.c_str());
+            }
+            
             return true;
         }
     }
@@ -266,9 +291,62 @@ bool OnvifCamera::GetProfiles(std::string& profile_token) {
     if (SendSoapRequest(DEVICE_SERVICE_ENDPOINT,
                         "http://www.onvif.org/ver10/media/wsdl/GetProfiles",
                         BuildSoapEnvelope(body), response)) {
-        auto pos = response.find("protoken_ch0001");
+        ESP_LOGI(TAG, "GetProfiles response: %s", response.c_str());
+        
+        // 先尝试找第二个profile（通常是子码流）
+        auto pos = response.find("protoken_ch0002");
+        if (pos != std::string::npos) {
+            profile_token = "protoken_ch0002";
+            ESP_LOGI(TAG, "Using sub stream profile: %s", profile_token.c_str());
+            return true;
+        }
+        
+        // 如果没有第二个，找第一个
+        pos = response.find("protoken_ch0001");
         if (pos != std::string::npos) {
             profile_token = "protoken_ch0001";
+            ESP_LOGI(TAG, "Using main stream profile: %s", profile_token.c_str());
+            return true;
+        }
+        
+        // 尝试从token属性中提取
+        pos = response.find("token=\"");
+        if (pos != std::string::npos) {
+            auto start = pos + 7;
+            auto end = response.find("\"", start);
+            if (end != std::string::npos) {
+                profile_token = response.substr(start, end - start);
+                ESP_LOGI(TAG, "Using profile token: %s", profile_token.c_str());
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+bool OnvifCamera::GetSnapshotUri(std::string& uri, const std::string& profile_token) {
+    std::string response;
+    char body[512];
+    snprintf(body, sizeof(body), 
+        R"(<trt:GetSnapshotUri xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+          <trt:ProfileToken>%s</trt:ProfileToken>
+        </trt:GetSnapshotUri>)", profile_token.c_str());
+    
+    if (SendSoapRequest(DEVICE_SERVICE_ENDPOINT,
+                        "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri",
+                        BuildSoapEnvelope(body), response)) {
+        ESP_LOGI(TAG, "GetSnapshotUri response: %s", response.c_str());
+        auto start = response.find("<tt:Uri>");
+        auto end = response.find("</tt:Uri>");
+        if (start != std::string::npos && end != std::string::npos) {
+            uri = response.substr(start + 8, end - start - 8);
+            // 替换为本地地址
+            auto uri_pos = uri.find("192.168.");
+            if (uri_pos != std::string::npos) {
+                uri = "http://" + ip_ + ":" + std::to_string(port_) + uri.substr(uri.find("/", uri_pos));
+            }
+            ESP_LOGI(TAG, "Snapshot URI: %s", uri.c_str());
             return true;
         }
     }
@@ -277,36 +355,149 @@ bool OnvifCamera::GetProfiles(std::string& profile_token) {
 }
 
 bool OnvifCamera::GetSnapshotUri(std::string& uri) {
-    std::string response;
-    char body[512];
-    snprintf(body, sizeof(body), 
-        R"(<trt:GetSnapshotUri xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
-          <trt:ProfileToken>%s</trt:ProfileToken>
-        </trt:GetSnapshotUri>)", profile_token_.c_str());
+    return GetSnapshotUri(uri, profile_token_);
+}
+
+// 构建截图 URL（优先使用 GetSnapshotUri，否则用 fallback）
+static bool BuildSnapshotUrl(const std::string& ip, int port, 
+                             const std::string& profile_token,
+                             std::string& url) {
+    // 尝试用 GetSnapshotUri 获取子码流的 snapshot URI
+    std::string snapshot_uri;
+    OnvifCamera& camera = OnvifCamera::GetInstance();
     
-    if (SendSoapRequest(DEVICE_SERVICE_ENDPOINT,
-                        "http://www.onvif.org/ver10/media/wsdl/GetSnapshotUri",
-                        BuildSoapEnvelope(body), response)) {
-        auto start = response.find("<tt:Uri>");
-        auto end = response.find("</tt:Uri>");
-        if (start != std::string::npos && end != std::string::npos) {
-            uri = response.substr(start + 8, end - start - 8);
-            return true;
+    if (!profile_token.empty() && camera.GetSnapshotUri(snapshot_uri, profile_token)) {
+        url = snapshot_uri;
+        ESP_LOGI(TAG, "Using snapshot URI from GetSnapshotUri: %s", url.c_str());
+        return true;
+    }
+    
+    // 回退到手动构造 URL
+    char buf[128];
+    snprintf(buf, sizeof(buf), "http://%s:%d/onvif/getsnapshot/?channel=2", 
+             ip.c_str(), port);
+    url = buf;
+    ESP_LOGI(TAG, "GetSnapshotUri failed, using fallback: %s", url.c_str());
+    return false;
+}
+
+// 提取 URL 中的路径部分
+static std::string ExtractPathFromUrl(const std::string& url, const std::string& ip, int port) {
+    size_t ip_pos = url.find(ip);
+    if (ip_pos == std::string::npos) {
+        // 找不到 IP，尝试找协议后的第一个 /
+        size_t slash = url.find("://");
+        if (slash != std::string::npos) {
+            slash = url.find("/", slash + 3);
+            if (slash != std::string::npos) {
+                return url.substr(slash);
+            }
+        }
+        return url;
+    }
+    
+    // 跳过 IP:port
+    size_t start = ip_pos + ip.length();
+    size_t colon = url.find(":", ip_pos);
+    size_t slash = url.find("/", ip_pos);
+    
+    if (colon != std::string::npos && (slash == std::string::npos || colon < slash)) {
+        // 有端口号
+        char port_str[8];
+        snprintf(port_str, sizeof(port_str), ":%d", port);
+        if (url.compare(colon, strlen(port_str), port_str) == 0) {
+            start = colon + strlen(port_str);
         }
     }
     
-    uri = "http://" + ip_ + ":" + std::to_string(port_) + SNAPSHOT_ENDPOINT;
-    return true;
+    if (slash != std::string::npos && slash >= start) {
+        return url.substr(slash);
+    }
+    return url;
 }
 
-bool OnvifCamera::GetSnapshot(std::string& image_data) {
-    if (ip_.empty()) {
-        ESP_LOGE(TAG, "Camera IP is empty, please call Initialize first");
+// 内部函数：使用 Digest 认证获取截图
+static bool FetchSnapshotWithAuth(NetworkInterface* network,
+                                  const std::string& url,
+                                  const std::string& snapshot_path,
+                                  const std::string& username,
+                                  const std::string& password,
+                                  int timeout_ms,
+                                  std::string& image_data) {
+    // 第一步：获取 nonce
+    auto http = network->CreateHttp(3);
+    if (!http) {
+        ESP_LOGE(TAG, "Failed to create HTTP client");
         return false;
     }
     
-    if (!connected_) {
-        ESP_LOGE(TAG, "Camera not connected, please call Initialize first");
+    http->SetTimeout(timeout_ms);
+    
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "Failed to open connection");
+        return false;
+    }
+    
+    int status = http->GetStatusCode();
+    
+    if (status == 200) {
+        image_data = http->ReadAll();
+        http->Close();
+        return !image_data.empty();
+    }
+    
+    if (status != 401) {
+        ESP_LOGW(TAG, "Unexpected status: %d", status);
+        http->Close();
+        return false;
+    }
+    
+    std::string auth_header = http->GetResponseHeader("WWW-Authenticate");
+    ESP_LOGI(TAG, "Got WWW-Authenticate: %s", auth_header.c_str());
+    http->Close();
+    
+    // 第二步：解析认证参数并发起 Digest 认证请求
+    std::string auth_params = ExtractAuthHeader(auth_header);
+    DigestAuth digest_auth;
+    if (!ParseDigestParams(auth_params, digest_auth)) {
+        ESP_LOGE(TAG, "Failed to parse digest auth params");
+        return false;
+    }
+    
+    http = network->CreateHttp(3);
+    if (!http) {
+        ESP_LOGE(TAG, "Failed to create HTTP client for digest auth");
+        return false;
+    }
+    
+    http->SetTimeout(timeout_ms);
+    
+    std::string digest_header = BuildDigestAuthHeader(
+        username, password, "GET", snapshot_path, digest_auth);
+    http->SetHeader("Authorization", digest_header);
+    
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "Failed to open digest auth connection");
+        return false;
+    }
+    
+    status = http->GetStatusCode();
+    ESP_LOGI(TAG, "Digest auth status: %d", status);
+    
+    if (status != 200) {
+        http->Close();
+        return false;
+    }
+    
+    image_data = http->ReadAll();
+    http->Close();
+    
+    return !image_data.empty();
+}
+
+bool OnvifCamera::GetSnapshot(std::string& image_data) {
+    if (ip_.empty() || !connected_) {
+        ESP_LOGE(TAG, "Camera not initialized or not connected");
         return false;
     }
     
@@ -315,113 +506,14 @@ bool OnvifCamera::GetSnapshot(std::string& image_data) {
         ESP_LOGE(TAG, "Network not available");
         return false;
     }
-
-    std::string snapshot_url = "/onvif/getsnapshot/?channel=2";
-    std::string url = "http://" + ip_ + ":" + std::to_string(port_) + snapshot_url;
-    ESP_LOGI(TAG, "Getting snapshot from: %s", url.c_str());
-
-    int status = 0;
-    std::string auth_header;
     
-    // 直接使用Digest认证（跳过Basic尝试）
-    {
-        auto http = network->CreateHttp(3);
-        if (!http) {
-            ESP_LOGE(TAG, "Failed to create HTTP client");
-            return false;
-        }
-        
-        http->SetTimeout(30000);
-        
-        if (!http->Open("GET", url)) {
-            ESP_LOGE(TAG, "Failed to open connection for snapshot");
-            return false;
-        }
-        
-        status = http->GetStatusCode();
-        ESP_LOGI(TAG, "Snapshot first attempt status: %d", status);
-        
-        if (status == 200) {
-            image_data = http->ReadAll();
-            http->Close();
-            
-            if (!image_data.empty()) {
-                ESP_LOGI(TAG, "Snapshot retrieved: %d bytes", image_data.size());
-                return true;
-            }
-        }
-        
-        // 获取认证头信息
-        auth_header = http->GetResponseHeader("WWW-Authenticate");
-        ESP_LOGI(TAG, "First attempt got %d, WWW-Authenticate: %s", status, auth_header.c_str());
-        http->Close();
-    }
+    std::string url;
+    BuildSnapshotUrl(ip_, port_, profile_token_, url);
     
-    // 如果需要Digest认证，进行第二次尝试
-    if (status == 401 && !auth_header.empty()) {
-        std::string auth_params = ExtractAuthHeader(auth_header);
-        DigestAuth digest_auth;
-        if (ParseDigestParams(auth_params, digest_auth)) {
-            ESP_LOGI(TAG, "Need digest auth: realm=%s, nonce=%s, qop=%s", 
-                     digest_auth.realm.c_str(), digest_auth.nonce.c_str(), digest_auth.qop.c_str());
-            
-            // 创建新的HTTP客户端用于Digest认证
-            auto http = network->CreateHttp(3);
-            if (!http) {
-                ESP_LOGE(TAG, "Failed to create HTTP client for digest auth");
-                return false;
-            }
-            
-            http->SetTimeout(30000);
-            
-            // 构建Digest认证头
-            std::string digest_header = BuildDigestAuthHeader(
-                username_, password_, "GET", snapshot_url, digest_auth);
-            http->SetHeader("Authorization", digest_header);
-            
-            ESP_LOGI(TAG, "Opening digest auth connection for snapshot...");
-            if (!http->Open("GET", url)) {
-                ESP_LOGE(TAG, "Failed to open digest auth connection");
-                return false;
-            }
-            
-            // 获取状态码
-            status = http->GetStatusCode();
-            ESP_LOGI(TAG, "Snapshot digest auth status: %d", status);
-            
-            if (status == 200) {
-                // 检查响应头
-                std::string content_length = http->GetResponseHeader("Content-Length");
-                std::string transfer_encoding = http->GetResponseHeader("Transfer-Encoding");
-                ESP_LOGI(TAG, "Response headers - Content-Length: %s, Transfer-Encoding: %s", 
-                         content_length.c_str(), transfer_encoding.c_str());
-                
-                if (!content_length.empty()) {
-                    size_t len = std::stoi(content_length);
-                    ESP_LOGI(TAG, "Content-Length: %d bytes", (int)len);
-                }
-                
-                image_data = http->ReadAll();
-                
-                if (image_data.empty()) {
-                    ESP_LOGW(TAG, "ReadAll returned empty data");
-                } else {
-                    ESP_LOGI(TAG, "ReadAll completed, size: %d bytes", (int)image_data.size());
-                    http->Close();
-                    ESP_LOGI(TAG, "Snapshot retrieved with Digest auth: %d bytes", image_data.size());
-                    return true;
-                }
-                http->Close();
-            }
-            
-            http->Close();
-        } else {
-            ESP_LOGE(TAG, "Failed to parse digest auth params");
-        }
-    }
+    std::string path = ExtractPathFromUrl(url, ip_, port_);
+    ESP_LOGI(TAG, "Getting snapshot from: %s (path: %s)", url.c_str(), path.c_str());
     
-    ESP_LOGE(TAG, "Snapshot request failed after all attempts, final status: %d", status);
-    return false;
+    return FetchSnapshotWithAuth(network, url, path, username_, password_, 30000, image_data);
 }
 
 bool OnvifCamera::Move(float x, float y) {
@@ -474,7 +566,7 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
                                         const std::string& explain_url,
                                         const std::string& auth_token) {
     if (ip_.empty() || !connected_) {
-        ESP_LOGE(TAG, "Camera not connected, please call Initialize first");
+        ESP_LOGE(TAG, "Camera not initialized or not connected");
         return R"({"success": false, "message": "摄像头未连接"})";
     }
     
@@ -484,95 +576,28 @@ std::string OnvifCamera::ExplainSnapshot(const std::string& question,
         return R"({"success": false, "message": "网络不可用"})";
     }
     
-    // 使用低分辨率参数 resolution=2
-    std::string snapshot_url = "/onvif/getsnapshot/?channel=2&resolution=2";
-    std::string url = "http://" + ip_ + ":" + std::to_string(port_) + snapshot_url;
-    ESP_LOGI(TAG, "Getting snapshot from: %s", url.c_str());
+    std::string url;
+    BuildSnapshotUrl(ip_, port_, profile_token_, url);
     
-    int status = 0;
-    std::string auth_header;
+    std::string path = ExtractPathFromUrl(url, ip_, port_);
+    ESP_LOGI(TAG, "Getting snapshot from: %s (path: %s)", url.c_str(), path.c_str());
     
-    // 直接使用Digest认证（摄像头只支持Digest，跳过Basic尝试）
-    // 先获取nonce
-    {
-        auto http = network->CreateHttp(3);
-        if (!http) {
-            ESP_LOGE(TAG, "Failed to create HTTP client");
-            return R"({"success": false, "message": "创建HTTP客户端失败"})";
-        }
-        
-        http->SetTimeout(10000);
-        
-        if (!http->Open("GET", url)) {
-            ESP_LOGE(TAG, "Failed to open connection for nonce");
-            return R"({"success": false, "message": "连接摄像头失败"})";
-        }
-        
-        status = http->GetStatusCode();
-        
-        if (status == 401) {
-            auth_header = http->GetResponseHeader("WWW-Authenticate");
-            ESP_LOGI(TAG, "Got nonce header: %s", auth_header.c_str());
-        }
-        http->Close();
-    }
-    
-    // 如果获取到nonce，进行Digest认证
-    if (!auth_header.empty()) {
-        std::string auth_params = ExtractAuthHeader(auth_header);
-        DigestAuth digest_auth;
-        if (ParseDigestParams(auth_params, digest_auth)) {
-            ESP_LOGI(TAG, "Using digest auth for snapshot");
-            
-            auto http = network->CreateHttp(3);
-            if (!http) {
-                ESP_LOGE(TAG, "Failed to create HTTP client for digest auth");
-                return R"({"success": false, "message": "创建HTTP客户端失败"})";
-            }
-            
-            http->SetTimeout(10000);
-            
-            std::string digest_header = BuildDigestAuthHeader(
-                username_, password_, "GET", snapshot_url, digest_auth);
-            http->SetHeader("Authorization", digest_header);
-            
-            if (!http->Open("GET", url)) {
-                ESP_LOGE(TAG, "Failed to open digest auth connection");
-                return R"({"success": false, "message": "连接摄像头失败"})";
-            }
-            
-            status = http->GetStatusCode();
-            ESP_LOGI(TAG, "Snapshot digest auth status: %d", status);
-            
-            if (status != 200) {
-                http->Close();
-                ESP_LOGE(TAG, "Snapshot digest auth failed, status: %d", status);
-                return R"({"success": false, "message": "摄像头认证失败"})";
-            }
-            
-            // 获取截图数据
-            ESP_LOGI(TAG, "Reading snapshot data...");
-            std::string image_data = http->ReadAll();
-            http->Close();
-            
-            if (image_data.empty()) {
-                ESP_LOGE(TAG, "Snapshot data is empty");
-                return R"({"success": false, "message": "截图数据为空"})";
-            }
-            
-            ESP_LOGI(TAG, "Snapshot retrieved: %d bytes, uploading to AI server", (int)image_data.size());
-            
-            // 流式上传到AI服务器
-            return UploadToExplainServer(question, explain_url, auth_token, image_data);
-        }
-    }
-    
-    if (status != 200) {
-        ESP_LOGE(TAG, "Snapshot request failed, status: %d", status);
+    // 获取截图数据
+    std::string image_data;
+    if (!FetchSnapshotWithAuth(network, url, path, username_, password_, 10000, image_data)) {
+        ESP_LOGE(TAG, "Failed to get snapshot");
         return R"({"success": false, "message": "获取截图失败"})";
     }
     
-    return R"({"success": false, "message": "未知错误"})";
+    if (image_data.empty()) {
+        ESP_LOGE(TAG, "Snapshot data is empty");
+        return R"({"success": false, "message": "截图数据为空"})";
+    }
+    
+    ESP_LOGI(TAG, "Snapshot retrieved: %d bytes, uploading to AI server", (int)image_data.size());
+    
+    // 上传到AI服务器
+    return UploadToExplainServer(question, explain_url, auth_token, image_data);
 }
 
 std::string OnvifCamera::UploadToExplainServer(const std::string& question,
