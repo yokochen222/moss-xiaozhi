@@ -52,17 +52,20 @@ using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*>;
 enum PropertyType {
     kPropertyTypeBoolean,
     kPropertyTypeInteger,
-    kPropertyTypeString
+    kPropertyTypeString,
+    kPropertyTypeFloat
 };
 
 class Property {
 private:
     std::string name_;
     PropertyType type_;
-    std::variant<bool, int, std::string> value_;
+    std::variant<bool, int, std::string, float> value_;
     bool has_default_value_;
     std::optional<int> min_value_;  // 新增：整数最小值
     std::optional<int> max_value_;  // 新增：整数最大值
+    std::optional<float> min_float_value_;  // 新增：浮点数最小值
+    std::optional<float> max_float_value_;  // 新增：浮点数最大值
 
 public:
     // Required field constructor
@@ -94,12 +97,26 @@ public:
         value_ = default_value;
     }
 
+    Property(const std::string& name, PropertyType type, float default_value, float min_value, float max_value)
+        : name_(name), type_(type), has_default_value_(true), min_float_value_(min_value), max_float_value_(max_value) {
+        if (type != kPropertyTypeFloat) {
+            throw std::invalid_argument("Float range limits only apply to float properties");
+        }
+        if (default_value < min_value || default_value > max_value) {
+            throw std::invalid_argument("Default value must be within the specified float range");
+        }
+        value_ = default_value;
+    }
+
     inline const std::string& name() const { return name_; }
     inline PropertyType type() const { return type_; }
     inline bool has_default_value() const { return has_default_value_; }
     inline bool has_range() const { return min_value_.has_value() && max_value_.has_value(); }
+    inline bool has_float_range() const { return min_float_value_.has_value() && max_float_value_.has_value(); }
     inline int min_value() const { return min_value_.value_or(0); }
     inline int max_value() const { return max_value_.value_or(0); }
+    inline float min_float_value() const { return min_float_value_.value_or(0.0f); }
+    inline float max_float_value() const { return max_float_value_.value_or(0.0f); }
 
     template<typename T>
     inline T value() const {
@@ -108,15 +125,6 @@ public:
 
     template<typename T>
     inline void set_value(const T& value) {
-        // 添加对设置的整数值进行范围检查
-        if constexpr (std::is_same_v<T, int>) {
-            if (min_value_.has_value() && value < min_value_.value()) {
-                throw std::invalid_argument("Value is below minimum allowed: " + std::to_string(min_value_.value()));
-            }
-            if (max_value_.has_value() && value > max_value_.value()) {
-                throw std::invalid_argument("Value exceeds maximum allowed: " + std::to_string(max_value_.value()));
-            }
-        }
         value_ = value;
     }
 
@@ -143,6 +151,17 @@ public:
             cJSON_AddStringToObject(json, "type", "string");
             if (has_default_value_) {
                 cJSON_AddStringToObject(json, "default", value<std::string>().c_str());
+            }
+        } else if (type_ == kPropertyTypeFloat) {
+            cJSON_AddStringToObject(json, "type", "number");
+            if (has_default_value_) {
+                cJSON_AddNumberToObject(json, "default", value<float>());
+            }
+            if (min_float_value_.has_value()) {
+                cJSON_AddNumberToObject(json, "minimum", min_float_value_.value());
+            }
+            if (max_float_value_.has_value()) {
+                cJSON_AddNumberToObject(json, "maximum", max_float_value_.value());
             }
         }
         

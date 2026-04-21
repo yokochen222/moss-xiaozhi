@@ -48,6 +48,9 @@ Application::Application() {
     aec_mode_ = kAecOff;
 #endif
 
+    // Suppress AFE ringbuffer full warnings to reduce log spam during network operations
+    esp_log_level_set("AFE", ESP_LOG_ERROR);
+
     esp_timer_create_args_t clock_timer_args = {
         .callback = [](void* arg) {
             Application* app = (Application*)arg;

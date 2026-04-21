@@ -530,6 +530,9 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
                 } else if (argument.type() == kPropertyTypeInteger && cJSON_IsNumber(value)) {
                     argument.set_value<int>(value->valueint);
                     found = true;
+                } else if (argument.type() == kPropertyTypeFloat && cJSON_IsNumber(value)) {
+                    argument.set_value<float>((float)value->valuedouble);
+                    found = true;
                 } else if (argument.type() == kPropertyTypeString && cJSON_IsString(value)) {
                     argument.set_value<std::string>(value->valuestring);
                     found = true;
