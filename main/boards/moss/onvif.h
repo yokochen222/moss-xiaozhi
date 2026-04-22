@@ -32,6 +32,10 @@ public:
     bool Move(float x, float y);
     bool Stop();
 
+    // 移动到指定角度（使用ContinuousMove + Stop实现）
+    // direction: "up"(上,0-90°) "down"(下,0-90°) "left"(左,0-350°) "right"(右,0-350°)
+    bool MoveToAngle(float angle, const std::string& direction);
+
     bool GetSnapshotUri(std::string& uri);
     bool GetSnapshotUri(std::string& uri, const std::string& profile_token);
 

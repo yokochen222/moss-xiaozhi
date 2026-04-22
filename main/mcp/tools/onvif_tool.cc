@@ -33,6 +33,9 @@ public:
             "- action: 操作类型\n"
             "  * 'save_camera_config' - 保存摄像头配置到设备存储\n"
             "  * 'snapshot' - 获取摄像头截图并上传到AI服务器识别内容\n"
+            "  * 'move_to_angle' - 移动摄像头到指定角度\n"
+            "- angle: 移动角度 0-90度 或者 0-350度（可选 当action为move_to_angle时必填）\n"
+            "- direction: 移动方向 up down left right（可选 当action为move_to_angle时必填）\n"
             "- ip: 摄像头IP地址（可选）\n"
             "- port: 摄像头端口号（可选，默认80）\n"
             "- username: 摄像头用户名（可选）\n"
@@ -44,6 +47,8 @@ public:
                 Property("port", kPropertyTypeInteger, 80),
                 Property("username", kPropertyTypeString, ""),
                 Property("password", kPropertyTypeString, ""),
+                Property("angle", kPropertyTypeFloat, 10.0f),
+                Property("direction", kPropertyTypeString, ""),
                 Property("question", kPropertyTypeString, "请描述这张图片的内容")
             }),
             [this](const PropertyList& properties) -> ReturnValue {
@@ -53,7 +58,9 @@ public:
                 auto port = properties["port"].value<int>();
                 auto username = properties["username"].value<std::string>();
                 auto password = properties["password"].value<std::string>();
-                return OnvifAction(question, action, ip, port, username, password);
+                auto angle = properties["angle"].value<float>();
+                auto direction = properties["direction"].value<std::string>();
+                return OnvifAction(question, action, ip, port, username, password, angle, direction);
             }
         );
     }
@@ -61,7 +68,7 @@ public:
 private:
     ReturnValue OnvifAction(const std::string& question, const std::string& action,
                            const std::string& ip, int port, const std::string& username,
-                           const std::string& password) {
+                           const std::string& password, float angle, const std::string& direction) {
 
         if (action.empty()) {
             return "操作类型不能为空";
@@ -119,6 +126,20 @@ private:
 
         if (!onvif.IsConnected()) {
             return "ONVIF摄像头连接失败，请检查网络和配置";
+        }
+
+        if (action == "move_to_angle") {
+            if (angle <= 0 || angle > 350) {
+                return "移动角度无效，请检查角度范围";
+            }
+            if (direction.empty() || (direction != "up" && direction != "down" && direction != "left" && direction != "right")) {
+                return "移动方向无效，请检查方向范围";
+            }
+            if (onvif.MoveToAngle(angle, direction)) {
+                return "移动成功";
+            } else {
+                return "移动失败，请检查摄像头连接";
+            }
         }
       
         if (action == "snapshot") {

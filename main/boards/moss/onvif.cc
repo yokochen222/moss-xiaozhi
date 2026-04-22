@@ -4,6 +4,7 @@
 #include <esp_log.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
 #include <cstdlib>
@@ -515,6 +516,108 @@ bool OnvifCamera::Move(float x, float y) {
     }
     
     return success;
+}
+
+
+// 由于云台限制 单次只允许一个方向移动
+// 当以 y 移动时 角度限位为0-90度
+// 当以 x 移动时 角度限位为0-350度
+// direction 为方向值 x 方向为左右 y 方向为上下
+bool OnvifCamera::MoveToAngle(float angle, const std::string& direction) {
+    // angle 为角度值 x 方向转动角度为0-350度 y 方向转动角度为0-90度
+    // direction 为方向值 x 方向为左右 y 方向为上下
+    // 已知上下电机y轴在速度为1或-1的情况下从0转动到90度需要4秒
+    // 已知左右转动电机x轴在速度为1或-1的情况下从0转动到350度需要10秒
+    // 根据速度和时间 需要计算出在什么时机调用stop函数 达到控制电机转动到指定角度的目的
+    // 当move指令发送成功后 返回结果
+    // 到达停止时间后调用stop
+    // direction的取值为 up down left right
+    // up 为向上 down 为向下 left 为向左 right 为向右
+    // 根据direction的取值 计算出x和y的值
+    // 然后调用Move函数 移动电机
+    // 返回是否成功
+
+    float x = 0, y = 0;
+    bool is_horizontal = false;  // 水平方向还是垂直方向
+
+    // 角度合法性检查和方向解析
+    if (direction == "left") {
+        x = 1;
+        is_horizontal = true;
+        if (angle < 0 || angle > 350) {
+            ESP_LOGE(TAG, "Left angle out of range: %.2f (valid: 0-350)", angle);
+            return false;
+        }
+    } else if (direction == "right") {
+        x = -1;
+        is_horizontal = true;
+        if (angle < 0 || angle > 350) {
+            ESP_LOGE(TAG, "Right angle out of range: %.2f (valid: 0-350)", angle);
+            return false;
+        }
+    } else if (direction == "up") {
+        y = 1;
+        is_horizontal = false;
+        if (angle < 0 || angle > 90) {
+            ESP_LOGE(TAG, "Up angle out of range: %.2f (valid: 0-90)", angle);
+            return false;
+        }
+    } else if (direction == "down") {
+        y = -1;
+        is_horizontal = false;
+        if (angle < 0 || angle > 90) {
+            ESP_LOGE(TAG, "Down angle out of range: %.2f (valid: 0-90)", angle);
+            return false;
+        }
+    } else {
+        ESP_LOGE(TAG, "Invalid direction: %s (valid: up/down/left/right)", direction.c_str());
+        return false;
+    }
+
+    // 计算需要的延时时间（毫秒）
+    // y轴: 速度1时，0→90度需要3秒
+    const float Y_SPEED_DEG_PER_SEC = 90.0f / 3.0f; 
+    // x轴: 速度1时，0→350度需要8秒
+    const float X_SPEED_DEG_PER_SEC = 350.0f / 8.0f; 
+
+    uint32_t delay_ms;
+    if (is_horizontal) {
+        delay_ms = static_cast<uint32_t>((angle / X_SPEED_DEG_PER_SEC) * 1000.0f);
+    } else {
+        delay_ms = static_cast<uint32_t>((angle / Y_SPEED_DEG_PER_SEC) * 1000.0f);
+    }
+
+    ESP_LOGI(TAG, "MoveToAngle: direction=%s, angle=%.2f, delay=%ums, x=%.1f, y=%.1f",
+             direction.c_str(), angle, delay_ms, x, y);
+
+    // 发送持续移动命令
+    if (!Move(x, y)) {
+        ESP_LOGE(TAG, "Failed to send move command");
+        return false;
+    }
+
+    // 创建一次性任务来执行 Stop()，避免定时器回调的上下文问题
+    if (delay_ms > 0) {
+        auto* params = new std::pair<uint32_t, bool>(delay_ms, true);
+        xTaskCreatePinnedToCore(
+            [](void* arg) {
+                auto* params = static_cast<std::pair<uint32_t, bool>*>(arg);
+                vTaskDelay(pdMS_TO_TICKS(params->first));
+                OnvifCamera::GetInstance().Stop();
+                ESP_LOGI(TAG, "PTZ stop executed by delayed task");
+                delete params;
+                vTaskDelete(nullptr);
+            },
+            "ptz_delay_stop",
+            8192,  // Stop() 需要较大的栈空间（SendSoapRequest 等）
+            params,
+            3,
+            nullptr,
+            0  // 绑定到 Core 0
+        );
+    }
+
+    return true;
 }
 
 bool OnvifCamera::Stop() {
