@@ -61,6 +61,20 @@ void start_code_scroll_loop(const LoopConfig& cfg);
 // 请求停止代码滚动任务 (仅置标志, 任务会在当前帧结束后退出).
 void stop_code_scroll_loop();
 
+// 是否仍有代码滚动任务在跑.
+bool is_code_scroll_running();
+
+// 等待代码滚动任务退出 (最多 timeout_ms).
+bool wait_code_scroll_stopped(int timeout_ms = 1000);
+
+// 在 panel 上绘制人脸跟踪 HUD（黑底 + 框 + 文字），关闭代码滚动后由跟踪回调调用.
+void draw_face_track_hud(esp_lcd_panel_handle_t panel, uint16_t* buf, int panel_w, int panel_h,
+                         bool has_face, int faces, int err_x, int err_y, int face_w, int face_h,
+                         int box_x1, int box_y1, int box_x2, int box_y2, int frame_w, int frame_h,
+                         uint32_t detect_ms, bool gimbal_moving,
+                         const uint16_t* preview_rgb565 = nullptr, int preview_w = 0,
+                         int preview_h = 0);
+
 // 跨 task 安全地更新 DialogState (临界区保护, splash task 与外部调用).
 // title / body 会被截断到各自 MAX 长度.
 // 3 参数版本: body 为空 (默认单行弹窗).

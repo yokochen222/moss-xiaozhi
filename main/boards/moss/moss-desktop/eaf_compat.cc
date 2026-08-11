@@ -1,7 +1,7 @@
 #include "eaf_iface.h"
 
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -62,10 +62,12 @@ void eaf_free_header(eaf_header_t* header) {
 }
 
 static uint8_t* alloc_aligned16(size_t size) {
-    uint8_t* p =
-        static_cast<uint8_t*>(heap_caps_aligned_alloc(16, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    // Prefer PSRAM: AFE leaves little contiguous internal DMA RAM for LCD SPI bounce buffers.
+    uint8_t* p = static_cast<uint8_t*>(
+        heap_caps_aligned_alloc(16, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (p == nullptr) {
-        p = static_cast<uint8_t*>(heap_caps_aligned_alloc(16, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        p = static_cast<uint8_t*>(
+            heap_caps_aligned_alloc(16, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (p == nullptr) {
         void* raw = nullptr;

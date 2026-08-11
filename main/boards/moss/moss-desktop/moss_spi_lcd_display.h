@@ -2,7 +2,9 @@
 #define MOSS_SPI_LCD_DISPLAY_H
 
 #include "lcd_display.h"
+#include "device/face_tracker.h"
 
+#include <mutex>
 #include <string>
 
 // 0.96" LCD board display: splash task owns the panel SPI (no LVGL).
@@ -32,6 +34,11 @@ public:
     void SetScreenOn(bool on);
     bool IsScreenOn() const { return screen_on_; }
 
+    // Face-track UI: stop code scroll and show detection HUD.
+    void EnterFaceTrackMode();
+    void ExitFaceTrackMode();
+    void UpdateFaceTrackOverlay(const FaceTrackerStatus& status);
+
 protected:
     bool Lock(int timeout_ms = 0) override;
     void Unlock() override;
@@ -41,6 +48,8 @@ private:
     uint16_t* splash_out_buf_ = nullptr;
     std::string current_status_;
     bool screen_on_ = true;
+    bool face_track_mode_ = false;
+    std::mutex face_ui_mutex_;
 
     void StartSplashLoop();
 };

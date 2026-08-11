@@ -6,6 +6,7 @@
        {
            "name": "moss-desktop",
            "sdkconfig_append": [
+               "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_moss_desktop.csv\"",
                "CONFIG_FREERTOS_HZ=1000",
                "CONFIG_USE_DEVICE_AEC=y",
                "CONFIG_ENABLE_VAD_INTERRUPT=y",
@@ -14,7 +15,12 @@
                "CONFIG_CAMERA_PSRAM_DMA=y",
                "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y",
                "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=49152",
-               "CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT=y"
+               "CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT=y",
+               "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y",
+               "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD=n",
+               "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_PARTITION=n",
+               "CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y",
+               "CONFIG_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y"
            ]
        }
    ]

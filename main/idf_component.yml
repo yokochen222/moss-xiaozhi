@@ -44,6 +44,14 @@ dependencies:
     version: ^2.1.6
     rules:
     - if: target in [esp32s3]
+
+  # Face detect for moss-desktop face tracking (only linked sources on that board).
+  # Model flash is disabled by default in sdkconfig.defaults.esp32s3; moss-desktop enables it.
+  espressif/human_face_detect:
+    version: "^0.5.0"
+    rules:
+    - if: target in [esp32s3]
+
   espressif/esp_video:
     version: ^2.3.0
     rules:

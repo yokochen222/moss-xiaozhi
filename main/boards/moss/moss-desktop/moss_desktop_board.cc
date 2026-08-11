@@ -4,6 +4,7 @@
 #include "button.h"
 #include "codecs/box_audio_codec.h"
 #include "config.h"
+#include "device/face_tracker.h"
 #include "device/stepper_gimbal.h"
 #include "display/display.h"
 #include "esp32_camera.h"
@@ -16,6 +17,7 @@
 #include <driver/i2c_master.h>
 #include <driver/ledc.h>
 #include <driver/spi_common.h>
+#include <esp_camera.h>
 #include <esp_heap_caps.h>
 #include <esp_lcd_io_spi.h>
 #include <esp_lcd_panel_ops.h>
@@ -26,6 +28,7 @@
 #include <freertos/task.h>
 #include <wifi_manager.h>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #define TAG "MossDesktopBoard"
@@ -64,11 +67,13 @@ private:
 };
 
 // 按需启停摄像头：平时释放 DVP DMA，避免与 LCD SPI / WiFi 争抢内部 DMA。
-class OnDemandEsp32Camera : public Camera {
+// FaceTrackCamera：跟踪态切 RGB565；默认 JPEG 路径语义不变。
+class OnDemandEsp32Camera : public Camera, public FaceTrackCamera {
 public:
     explicit OnDemandEsp32Camera(const camera_config_t& config) : config_(config) {}
 
     void SetExplainUrl(const std::string& url, const std::string& token) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         explain_url_ = url;
         explain_token_ = token;
         if (camera_) {
@@ -77,48 +82,164 @@ public:
     }
 
     bool Capture() override {
-        if (!EnsureStarted()) {
-            return false;
+        FaceTracker::GetInstance().PauseForExternalCameraUse();
+        bool ok = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!EnsureStartedLocked()) {
+                ok = false;
+            } else if (!camera_->Capture()) {
+                ReleaseLocked();
+                ok = false;
+            } else {
+                ok = true;
+            }
         }
-        if (!camera_->Capture()) {
-            Release();
-            return false;
+        if (!ok) {
+            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
         }
-        return true;
+        return ok;
     }
 
     bool SetHMirror(bool enabled) override {
-        if (!EnsureStarted()) {
+        if (FaceTracker::GetInstance().IsRunning()) {
+            ESP_LOGW(TAG, "SetHMirror ignored while face tracking is active");
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!EnsureStartedLocked()) {
             return false;
         }
         return camera_->SetHMirror(enabled);
     }
 
     bool SetVFlip(bool enabled) override {
-        if (!EnsureStarted()) {
+        if (FaceTracker::GetInstance().IsRunning()) {
+            ESP_LOGW(TAG, "SetVFlip ignored while face tracking is active");
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!EnsureStartedLocked()) {
             return false;
         }
         return camera_->SetVFlip(enabled);
     }
 
     std::string Explain(const std::string& question) override {
-        struct ReleaseGuard {
-            OnDemandEsp32Camera* self;
-            ~ReleaseGuard() { self->Release(); }
-        } guard{this};
-
-        if (!camera_) {
-            throw std::runtime_error("Camera not started");
+        Esp32Camera* cam = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!camera_) {
+                FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+                throw std::runtime_error("Camera not started");
+            }
+            cam = camera_.get();
         }
-        return camera_->Explain(question);
+
+        try {
+            std::string result = cam->Explain(question);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                ReleaseLocked();
+            }
+            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            return result;
+        } catch (...) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                ReleaseLocked();
+            }
+            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            throw;
+        }
+    }
+
+    bool AcquireTracking() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tracking_acquired_) {
+            return true;
+        }
+        // Drop JPEG instance if any.
+        ReleaseLocked();
+
+        auto& pca = Pca9685::GetInstance();
+        if (pca.IsReady()) {
+            pca.SetDvpPowerDown(false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        camera_config_t cfg = config_;
+        cfg.pixel_format = PIXFORMAT_RGB565;
+        cfg.frame_size = FRAMESIZE_QVGA;
+        cfg.jpeg_quality = 12;
+        cfg.fb_count = 1;
+        cfg.fb_location = CAMERA_FB_IN_PSRAM;
+        cfg.grab_mode = CAMERA_GRAB_LATEST;
+
+        const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+        const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        ESP_LOGI(TAG,
+                 "Tracking OV2640 start (RGB565 QVGA) free_int=%u free_dma=%u largest_dma=%u "
+                 "free_psram=%u",
+                 (unsigned)free_internal, (unsigned)free_dma, (unsigned)largest_dma,
+                 (unsigned)free_spiram);
+
+        esp_err_t err = esp_camera_init(&cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Tracking esp_camera_init failed: 0x%x", err);
+            return false;
+        }
+        sensor_t* s = esp_camera_sensor_get();
+        if (s && s->id.PID == OV2640_PID) {
+            s->set_whitebal(s, 1);
+            s->set_awb_gain(s, 1);
+            s->set_exposure_ctrl(s, 1);
+            s->set_aec2(s, 1);
+            s->set_gain_ctrl(s, 1);
+            s->set_lenc(s, 1);
+        }
+        tracking_acquired_ = true;
+        vTaskDelay(pdMS_TO_TICKS(200));
+        return true;
+    }
+
+    void ReleaseTracking() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ReleaseTrackingLocked();
+    }
+
+    bool IsTrackingAcquired() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tracking_acquired_;
+    }
+
+    camera_fb_t* GrabTrackingFrame() override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!tracking_acquired_) {
+            return nullptr;
+        }
+        return esp_camera_fb_get();
+    }
+
+    void ReturnTrackingFrame(camera_fb_t* fb) override {
+        if (!fb) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        esp_camera_fb_return(fb);
     }
 
 private:
-    bool EnsureStarted() {
+    bool EnsureStartedLocked() {
+        if (tracking_acquired_) {
+            // Caller should have paused tracker; force release if still held.
+            ReleaseTrackingLocked();
+        }
         if (camera_ && camera_->IsInitialized()) {
             return true;
         }
-        // Drop a previously failed instance so we can retry init.
         camera_.reset();
 
         auto& pca = Pca9685::GetInstance();
@@ -138,7 +259,8 @@ private:
                  (int)config_.xclk_freq_hz, (int)config_.frame_size, (unsigned)free_internal,
                  (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
         if (largest_dma < 8192) {
-            ESP_LOGW(TAG, "Internal DMA heap fragmented (largest=%u); rely on PSRAM DMA / small DMA buf",
+            ESP_LOGW(TAG,
+                     "Internal DMA heap fragmented (largest=%u); rely on PSRAM DMA / small DMA buf",
                      (unsigned)largest_dma);
         }
 
@@ -158,7 +280,7 @@ private:
         return true;
     }
 
-    void Release() {
+    void ReleaseLocked() {
         if (!camera_) {
             return;
         }
@@ -167,10 +289,21 @@ private:
         // Keep PWDN low (sensor powered) like moss-xiaozhi; only free DVP DMA.
     }
 
+    void ReleaseTrackingLocked() {
+        if (!tracking_acquired_) {
+            return;
+        }
+        ESP_LOGI(TAG, "Tracking OV2640 stop (free DVP DMA)");
+        esp_camera_deinit();
+        tracking_acquired_ = false;
+    }
+
     camera_config_t config_{};
     std::unique_ptr<Esp32Camera> camera_;
     std::string explain_url_;
     std::string explain_token_;
+    mutable std::mutex mutex_;
+    bool tracking_acquired_ = false;
 };
 
 // waveshare esp_lcd_st7735 default init lacks INVON for most 0.96" ST7735S modules.
@@ -255,6 +388,7 @@ private:
         config.grab_mode = CAMERA_GRAB_LATEST;
 
         camera_ = new OnDemandEsp32Camera(config);
+        FaceTracker::GetInstance().SetCamera(camera_);
         ESP_LOGI(TAG, "OV2640 registered (on-demand JPEG XCLK=%d XCLK=IO%d D6=IO%d)", XCLK_FREQ_HZ,
                  (int)CAMERA_PIN_XCLK, (int)CAMERA_PIN_D6);
     }
@@ -282,7 +416,7 @@ private:
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
         io_config.spi_mode = 0;
         io_config.pclk_hz = DISPLAY_SPI_CLOCK_HZ;
-        io_config.trans_queue_depth = 10;
+        io_config.trans_queue_depth = 2;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(DISPLAY_SPI_HOST, &io_config, &panel_io_));
@@ -325,6 +459,14 @@ private:
                                          DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                          DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         display_->SetStatus(Lang::Strings::INITIALIZING);
+
+        // Face-track UI: stop code scroll + draw HUD while tracking.
+        auto* moss_disp = static_cast<MossSpiLcdDisplay*>(display_);
+        FaceTracker::GetInstance().SetUiHooks(
+            [moss_disp]() { moss_disp->EnterFaceTrackMode(); },
+            [moss_disp]() { moss_disp->ExitFaceTrackMode(); });
+        FaceTracker::GetInstance().SetStatusSink(
+            [moss_disp](const FaceTrackerStatus& s) { moss_disp->UpdateFaceTrackOverlay(s); });
     }
 
     void InitializeButtons() {

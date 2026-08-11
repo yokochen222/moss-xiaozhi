@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_heap_caps.h>
@@ -170,6 +171,10 @@ void MossSpiLcdDisplay::StartSplashLoop() {
         ESP_LOGE(TAG, "StartSplashLoop skipped: panel or out_buf is null");
         return;
     }
+    if (moss_splash::is_code_scroll_running()) {
+        ESP_LOGW(TAG, "Code scroll already running");
+        return;
+    }
 
     // 第一条 status = BOOTING (ASCII, splash 立刻能画).
     moss_splash::set_dialog_state(&s_dialog, true, "BOOTING", kWarnColor);
@@ -188,6 +193,13 @@ void MossSpiLcdDisplay::StartSplashLoop() {
 void MossSpiLcdDisplay::SetStatus(const char* status) {
     if (status == nullptr) return;
     current_status_ = status;
+
+    {
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (face_track_mode_) {
+            return;  // HUD owns the panel while tracking.
+        }
+    }
 
     // 静默状态 (聆听说/待命/连接中) 不弹窗，只清空弹窗内容
     if (is_silent_status(status)) {
@@ -282,4 +294,42 @@ void MossSpiLcdDisplay::SetScreenOn(bool on) {
 void MossSpiLcdDisplay::DismissDialog() {
     moss_splash::dismiss_dialog(&s_dialog);
     ESP_LOGI(TAG, "Dialog dismissed");
+}
+
+void MossSpiLcdDisplay::EnterFaceTrackMode() {
+    std::lock_guard<std::mutex> lock(face_ui_mutex_);
+    if (face_track_mode_) {
+        return;
+    }
+    ESP_LOGI(TAG, "Enter face-track UI (stop code scroll)");
+    moss_splash::stop_code_scroll_loop();
+    moss_splash::wait_code_scroll_stopped(1500);
+    moss_splash::set_dialog_state(&s_dialog, false, "", kDialogColor, moss_splash::kPriorityNone);
+    face_track_mode_ = true;
+    if (panel_ && splash_out_buf_) {
+        moss_splash::draw_face_track_hud(panel_, splash_out_buf_, width_, height_, false, 0, 0, 0, 0,
+                                         0, 0, 0, 0, 0, 320, 240, 0, false, nullptr, 0, 0);
+    }
+}
+
+void MossSpiLcdDisplay::ExitFaceTrackMode() {
+    std::lock_guard<std::mutex> lock(face_ui_mutex_);
+    if (!face_track_mode_) {
+        return;
+    }
+    face_track_mode_ = false;
+    ESP_LOGI(TAG, "Exit face-track UI (restart code scroll)");
+    StartSplashLoop();
+}
+
+void MossSpiLcdDisplay::UpdateFaceTrackOverlay(const FaceTrackerStatus& status) {
+    std::lock_guard<std::mutex> lock(face_ui_mutex_);
+    if (!face_track_mode_ || panel_ == nullptr || splash_out_buf_ == nullptr) {
+        return;
+    }
+    moss_splash::draw_face_track_hud(
+        panel_, splash_out_buf_, width_, height_, status.has_face, static_cast<int>(status.faces),
+        status.err_x, status.err_y, status.face_w, status.face_h, status.box_x1, status.box_y1,
+        status.box_x2, status.box_y2, status.frame_w, status.frame_h, status.detect_ms,
+        status.gimbal_moving, status.preview_rgb565, status.preview_w, status.preview_h);
 }
