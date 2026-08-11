@@ -288,8 +288,8 @@ public:
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
             AUDIO_INPUT_REFERENCE,
-            32.0f,  // Physical MIC1 gain
-            2,      // Physical MIC3 is the playback reference input
+            AUDIO_CODEC_INPUT_GAIN,  // MIC1 gain — tune in config.h
+            2,                       // Physical MIC3 is the playback reference input
             0.0f);
         return &audio_codec;
     }

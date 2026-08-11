@@ -13,6 +13,7 @@
 
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <cstring>
@@ -43,9 +44,30 @@ Application::Application() {
                                                 .name = "clock_timer",
                                                 .skip_unhandled_events = true};
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+#if CONFIG_ENABLE_VAD_INTERRUPT
+    esp_timer_create_args_t vad_timer_args = {
+        .callback =
+            [](void* arg) {
+                auto* app = static_cast<Application*>(arg);
+                xEventGroupSetBits(app->event_group_, MAIN_EVENT_VAD_INTERRUPT_CONFIRM);
+            },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "vad_barge_in",
+        .skip_unhandled_events = true};
+    esp_timer_create(&vad_timer_args, &vad_interrupt_timer_);
+#endif
 }
 
 Application::~Application() {
+#if CONFIG_ENABLE_VAD_INTERRUPT
+    if (vad_interrupt_timer_ != nullptr) {
+        esp_timer_stop(vad_interrupt_timer_);
+        esp_timer_delete(vad_interrupt_timer_);
+        vad_interrupt_timer_ = nullptr;
+    }
+#endif
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -174,7 +196,11 @@ void Application::Run() {
         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
+        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED
+#if CONFIG_ENABLE_VAD_INTERRUPT
+        | MAIN_EVENT_VAD_INTERRUPT_CONFIRM
+#endif
+        ;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -247,17 +273,25 @@ void Application::Run() {
                 led->OnStateChanged();
             }
 #if CONFIG_ENABLE_VAD_INTERRUPT
-            // VAD interrupt: user speaks while device is talking -> abort and listen
+            // Barge-in candidate: rising edge after silence-arm. Confirm only after
+            // TTS is actually playing and speech is sustained (timer).
             if (GetDeviceState() == kDeviceStateSpeaking && protocol_) {
-                AbortSpeaking(kAbortReasonVadInterrupt);
-                while (audio_service_.PopPacketFromSendQueue())
-                    ;
-                // Stay in speaking state briefly, then transition to listening once playback drains
-                play_popup_on_listening_ = true;
-                SetListeningMode(GetDefaultListeningMode());
+                const bool voice = audio_service_.IsVoiceDetected();
+                if (!voice) {
+                    vad_interrupt_armed_ = true;
+                    CancelVadInterruptTimer();
+                } else if (vad_interrupt_armed_) {
+                    MaybeStartVadInterruptTimer();
+                }
             }
 #endif
         }
+
+#if CONFIG_ENABLE_VAD_INTERRUPT
+        if (bits & MAIN_EVENT_VAD_INTERRUPT_CONFIRM) {
+            HandleVadInterruptConfirm();
+        }
+#endif
 
         if (bits & MAIN_EVENT_SCHEDULE) {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -929,6 +963,10 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            CancelVadInterruptTimer();
+            vad_interrupt_armed_ = false;
+#endif
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
@@ -941,6 +979,9 @@ void Application::HandleStateChangedEvent() {
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            CancelVadInterruptTimer();
+#endif
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
@@ -971,6 +1012,12 @@ void Application::HandleStateChangedEvent() {
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
 #endif
             }
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            CancelVadInterruptTimer();
+            speaking_started_us_ = esp_timer_get_time();
+            // Wait for silence after the previous user turn before arming barge-in.
+            vad_interrupt_armed_ = !audio_service_.IsVoiceDetected();
+#endif
             audio_service_.ResetDecoder();
             break;
         case kDeviceStateWifiConfiguring:
@@ -982,6 +1029,55 @@ void Application::HandleStateChangedEvent() {
             break;
     }
 }
+
+#if CONFIG_ENABLE_VAD_INTERRUPT
+void Application::CancelVadInterruptTimer() {
+    if (vad_interrupt_timer_ != nullptr) {
+        esp_timer_stop(vad_interrupt_timer_);
+    }
+}
+
+void Application::MaybeStartVadInterruptTimer() {
+    constexpr int64_t kVadInterruptGuardUs = 1200 * 1000;   // wait for TTS/AEC to settle
+    constexpr int64_t kVadInterruptSustainUs = 450 * 1000;  // require sustained speech
+
+    if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
+        return;
+    }
+    // Never barge-in before TTS audio is actually playing (avoids aborting silent waits).
+    if (audio_service_.IsPlaybackIdle()) {
+        return;
+    }
+    const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
+    if (elapsed < kVadInterruptGuardUs) {
+        return;
+    }
+    if (vad_interrupt_timer_ == nullptr) {
+        return;
+    }
+    // Already armed a confirm timer for this speech bout.
+    if (esp_timer_is_active(vad_interrupt_timer_)) {
+        return;
+    }
+    ESP_LOGD(TAG, "VAD barge-in candidate, confirming in %lld ms",
+             (long long)(kVadInterruptSustainUs / 1000));
+    esp_timer_start_once(vad_interrupt_timer_, kVadInterruptSustainUs);
+}
+
+void Application::HandleVadInterruptConfirm() {
+    if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
+        return;
+    }
+    if (!audio_service_.IsVoiceDetected() || audio_service_.IsPlaybackIdle()) {
+        return;
+    }
+    ESP_LOGI(TAG, "VAD barge-in confirmed");
+    AbortSpeaking(kAbortReasonVadInterrupt);
+    // Stop TTS immediately; keep send-queue pre-roll for ASR onset.
+    audio_service_.ResetDecoder();
+    SetListeningMode(GetDefaultListeningMode());
+}
+#endif
 
 void Application::StartListeningAudio() {
     // Runs in the main loop, either directly from HandleStateChangedEvent or

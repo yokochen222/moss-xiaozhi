@@ -8,6 +8,10 @@
 
 #define AUDIO_INPUT_REFERENCE true
 
+// ES7210 MIC1 模拟增益（dB）。唤醒偏钝就加大，误唤醒/破音就减小。
+// 硬件 PGA 大约到 ~37.5；再高由驱动钳位。常用范围 28~37.5。
+#define AUDIO_CODEC_INPUT_GAIN 37.5f
+
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_38
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_13
 #define AUDIO_I2S_GPIO_BCLK GPIO_NUM_14

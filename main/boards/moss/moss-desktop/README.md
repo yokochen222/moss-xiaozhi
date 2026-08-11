@@ -16,8 +16,25 @@ MOSS 桌面助手是独立固件身份（`type`/`name` = `moss-desktop`），用
 - **摄像头**：OV2640 类（可选）；若板载 PCA9557 则可用其控制电源
 - **按键**：BOOT（GPIO0）——单击切换唤醒/休眠，长按切换单击/长按说话模式，
   双击切换 AEC
+- **实时打断**：默认开启设备端 AEC + VAD barge-in（TTS 播放中直接开口即可打断，
+  从打断点开始采音并上传；待机唤醒仍用唤醒词）
 - **支持表情动画**：通过 `EmoteDisplay` 渲染
 - **支持 Press-to-Talk MCP 工具**
+
+## 麦克风 / 唤醒灵敏度调整
+
+优先改板级增益（最常用）：
+
+```c
+// main/boards/moss/moss-desktop/config.h
+#define AUDIO_CODEC_INPUT_GAIN 37.5f   // 偏钝加大，误唤醒/破音减小（约 28~37.5）
+```
+
+进阶（影响所有 AFE 板型），在 `main/audio/engines/afe_audio_engine.cc`：
+
+- `afe_linear_gain`：数字增益（当前约 `3.0f`，范围约 `0.1~10`）
+- `wakenet_mode`：`DET_MODE_95` 更易唤醒（误唤醒也会更多）
+- 待机唤醒已关闭 AEC；仅在通话/打断时开启，避免小声被压掉
 
 ## 构建方法
 
