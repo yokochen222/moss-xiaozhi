@@ -12,15 +12,7 @@
 
 #define TAG "AudioCodec"
 
-AudioCodec::AudioCodec() {
-#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
-    // Keep NS4150B EN asserted; do not toggle it on every EnableOutput —
-    // PCA9685 shares the codec I2C bus and mid-stream writes can break ES7210.
-    if (Pca9685::GetInstance().IsReady()) {
-        Pca9685::GetInstance().SetDigital(1, true);
-    }
-#endif
-}
+AudioCodec::AudioCodec() {}
 
 AudioCodec::~AudioCodec() {}
 
@@ -42,6 +34,15 @@ void AudioCodec::Start() {
                  output_volume_);
         output_volume_ = 10;
     }
+
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+    // NS4150B EN（PCA9685 LED1）：等 ES8311/ES7210 构造成功后再拉高。
+    // 之后保持常开，勿在 EnableOutput 里反复写 PCA9685（与 codec 共 I2C，易打断 ES7210）。
+    if (Pca9685::GetInstance().IsReady()) {
+        Pca9685::GetInstance().SetDigital(1, true);
+        ESP_LOGI(TAG, "NS4150B EN asserted (PCA9685 LED1) after codec init");
+    }
+#endif
 
     ESP_LOGI(TAG, "Audio codec started");
 }

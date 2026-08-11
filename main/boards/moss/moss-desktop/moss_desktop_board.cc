@@ -36,6 +36,16 @@ public:
     explicit Pca9685Backlight(uint8_t channel, bool output_invert = false)
         : Backlight(), channel_(channel), output_invert_(output_invert) {}
 
+    // Splash 前需立刻点亮；跳过 Backlight 渐变（否则开机动画前半段仍看不见）
+    void ApplyImmediate(uint8_t brightness) {
+        if (brightness > 100) {
+            brightness = 100;
+        }
+        brightness_ = brightness;
+        target_brightness_ = brightness;
+        SetBrightnessImpl(brightness);
+    }
+
     void SetBrightnessImpl(uint8_t brightness) override {
         if (!Pca9685::GetInstance().IsReady()) {
             return;
@@ -119,10 +129,18 @@ private:
         }
 
         const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
         const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        ESP_LOGI(TAG, "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_psram=%u",
+        ESP_LOGI(TAG,
+                 "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_dma=%u "
+                 "largest_dma=%u free_psram=%u",
                  (int)config_.xclk_freq_hz, (int)config_.frame_size, (unsigned)free_internal,
-                 (unsigned)free_spiram);
+                 (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
+        if (largest_dma < 8192) {
+            ESP_LOGW(TAG, "Internal DMA heap fragmented (largest=%u); rely on PSRAM DMA / small DMA buf",
+                     (unsigned)largest_dma);
+        }
 
         camera_.reset(new Esp32Camera(config_));
         if (!camera_->IsInitialized()) {
@@ -195,11 +213,13 @@ private:
                      "PCA9685 init failed; LCD_BL / PA / lamps / eye motor / camera may not work");
             return;
         }
+        // LED0 背光先关；真正点亮在 panel on 之后、splash 之前
         pca.SetDuty(PCA9685_CH_LCD_BL, 0);
-        pca.SetDigital(PCA9685_CH_NS4150B_EN, true);
+        // LED1=NS4150B EN：上电保持低电平，等 ES8311/ES7210 初始化成功后再使能
+        pca.SetDigital(PCA9685_CH_NS4150B_EN, false);
         // PWDN 低 = OV2640 工作（与 moss-xiaozhi 一致，传感器保持上电）
         pca.SetDvpPowerDown(false);
-        ESP_LOGI(TAG, "PCA9685 ready: LCD_BL=LED0, PA_EN=HIGH, DVP_PWDN=LOW");
+        ESP_LOGI(TAG, "PCA9685 ready: LCD_BL=LED0, PA_EN=LOW (defer), DVP_PWDN=LOW");
     }
 
     void InitializeCamera() {
@@ -297,6 +317,9 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
+        // MossSpiLcdDisplay 构造里会阻塞播放 splash；必须先点亮背光才能看见动画。
+        static_cast<Pca9685Backlight*>(GetBacklight())->ApplyImmediate(75);
+
         // MossSpiLcdDisplay plays embedded emote-assets.bin splash then code-scroll loop.
         display_ = new MossSpiLcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                          DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
@@ -358,7 +381,6 @@ public:
         InitializeTools();
         // 上电清零 595，避免随机输出导致步进线圈常通发烫
         StepperGimbalDevice::GetInstance().Stop();
-        GetBacklight()->SetBrightness(75);
     }
 
     AudioCodec* GetAudioCodec() override {
