@@ -223,6 +223,12 @@ private:
     }
 
     void InitializeCamera() {
+#if MOSS_MCP_PERIPHERALS_ENABLE
+        // MCP lamp/IR/motor pins overlap the DVP camera bus on this layout.
+        ESP_LOGW(TAG, "Camera disabled: Moss MCP peripherals own conflicting GPIOs");
+        camera_ = nullptr;
+        return;
+#else
         pca9557_->SetOutputState(2, 0);
 
         camera_config_t config = {};
@@ -254,6 +260,7 @@ private:
         config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
         camera_ = new Esp32Camera(config);
+#endif
     }
 
     void InitializeTools() {
@@ -268,6 +275,12 @@ private:
 
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
+
+#if MOSS_MCP_PERIPHERALS_ENABLE
+        // Moss MCP tools (lamp_eye/bar/panel, eye_motor, infrared, api_server)
+        // self-register via DECLARE_MCP_TOOL_INSTANCE at static init.
+        ESP_LOGI(TAG, "Moss MCP peripheral tools registered via static constructors");
+#endif
     }
 
 public:

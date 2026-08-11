@@ -2,6 +2,7 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
+#include <driver/uart.h>
 
 #define AUDIO_INPUT_SAMPLE_RATE 24000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
@@ -42,7 +43,25 @@
 #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_42
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
 
-/* Camera pins */
+/*
+ * Moss MCP peripherals (migrated from moss-xiaozhi).
+ * These pins overlap the DVP camera bus on lichuang-derived layouts, so the
+ * camera is disabled when MOSS_MCP_PERIPHERALS_ENABLE is 1.
+ */
+#define MOSS_MCP_PERIPHERALS_ENABLE 1
+
+#define MOSS_LAMP_74HC595_SER_PIN GPIO_NUM_3
+#define MOSS_LAMP_74HC595_RCK_PIN GPIO_NUM_4
+#define MOSS_LAMP_74HC595_SCK_PIN GPIO_NUM_5
+#define MOSS_LAMP_EYE_PIN GPIO_NUM_15
+#define MOSS_EYE_MOTOR_IN1_PIN GPIO_NUM_10
+#define MOSS_EYE_MOTOR_IN2_PIN GPIO_NUM_11
+#define MOSS_EYE_MOTOR_PWM_PIN GPIO_NUM_9
+#define MOSS_IR_UART_TX_PIN GPIO_NUM_17
+#define MOSS_IR_UART_RX_PIN GPIO_NUM_18
+#define MOSS_IR_UART_PORT UART_NUM_2
+
+/* Camera pins (unused while MOSS_MCP_PERIPHERALS_ENABLE=1) */
 #define CAMERA_PIN_PWDN GPIO_NUM_NC
 #define CAMERA_PIN_RESET GPIO_NUM_NC
 #define CAMERA_PIN_XCLK GPIO_NUM_5

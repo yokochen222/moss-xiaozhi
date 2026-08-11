@@ -136,6 +136,7 @@ file(GLOB BOARD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.c
 )
 list(APPEND SOURCES ${BOARD_SOURCES})
+list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR})
 
 # Select one audio engine for each chip family
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
@@ -291,7 +292,32 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND SOURCES "boards/common/esp32_camera.cc")
 endif()
 
+# Moss MCP peripherals + HTTP API (moss-desktop only)
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
+    list(APPEND SOURCES
+        "device/infrared.cc"
+        "device/lamp_bar.cc"
+        "device/lamp_panel.cc"
+        "device/lamp_eye.cc"
+        "device/eye_motor.cc"
+        "api/api.cc"
+        "api/methods/ir/ir_handlers.cc"
+        "api/methods/ir/ir_data_manager.cc"
+    )
+    file(GLOB MOSS_MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
+    file(GLOB MOSS_MCP_UTILS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils/*.cc)
+    list(APPEND SOURCES ${MOSS_MCP_TOOL_SOURCES} ${MOSS_MCP_UTILS_SOURCES})
+    list(APPEND INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/device
+        ${CMAKE_CURRENT_SOURCE_DIR}/api
+        ${CMAKE_CURRENT_SOURCE_DIR}/api/methods
+        ${CMAKE_CURRENT_SOURCE_DIR}/mcp
+        ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
+    )
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server)
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}

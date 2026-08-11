@@ -13,7 +13,11 @@ MOSS 桌面助手是独立固件身份（`type`/`name` = `moss-desktop`），用
 - **触摸**：FT5x06 电容触摸（I2C，可选）
 - **音频 Codec**：ES8311（喇叭）+ ES7210（麦克风，支持 AEC 回采）
 - **功放**：NS4150B，`CTRL` ← **GPIO48 (`IO48_SPK_EN`)**，默认下拉关闭
-- **摄像头**：OV2640 类（可选）；若板载 PCA9557 则可用其控制电源
+- **摄像头**：默认关闭（与 Moss MCP 外设 GPIO 冲突）；将 `MOSS_MCP_PERIPHERALS_ENABLE` 设为 `0` 可恢复
+- **Moss MCP 外设**（自 moss-xiaozhi 迁移）：
+  - `self.lamp_eye.control` / `self.lamp_bar.control` / `self.lamp_panel.control`
+  - `self.eye_motor.control` / `self.infrared.control` / `self.api_server.control`
+  - 引脚见 `config.h` 中 `MOSS_*` 宏（74HC595=GPIO3/4/5，眼灯=15，电机=9/10/11，红外 UART=17/18）
 - **按键**：BOOT（GPIO0）——单击切换唤醒/休眠，长按切换单击/长按说话模式，
   双击切换 AEC
 - **实时打断**：默认开启设备端 AEC + VAD barge-in（TTS 播放中直接开口即可打断，
