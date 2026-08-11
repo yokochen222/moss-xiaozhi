@@ -16,5 +16,8 @@ main/mmap_generate_emoji.h
 .cache
 *.pyc
 *.bin
+# Moss desktop splash assets (embedded at link time)
+!main/assets/moss/
+!main/assets/moss/**/*.bin
 mmap_generate_*.h
 .clangd

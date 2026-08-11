@@ -968,10 +968,15 @@ void play_splash(esp_lcd_panel_handle_t panel,
     const int frame_h = first_hdr.height;
     const int frame_buf_size = frame_w * frame_h * sizeof(uint16_t) + 1024;
 
-    uint16_t* frame_buf = (uint16_t*)heap_caps_malloc(frame_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!frame_buf) frame_buf = (uint16_t*)malloc(frame_buf_size);
+    // JPEG hardware path needs 16-byte aligned output buffers on ESP32-S3.
+    uint16_t* frame_buf = (uint16_t*)heap_caps_aligned_alloc(
+        16, frame_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!frame_buf) {
-        ESP_LOGE(TAG, "Failed to allocate frame buffer");
+        frame_buf = (uint16_t*)heap_caps_aligned_alloc(
+            16, frame_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!frame_buf) {
+        ESP_LOGE(TAG, "Failed to allocate aligned frame buffer");
         eaf_deinit(parser);
         eaf_free_header(&first_hdr);
         return;
@@ -980,11 +985,15 @@ void play_splash(esp_lcd_panel_handle_t panel,
     const int panel_w = DISPLAY_WIDTH;
     const int panel_h = DISPLAY_HEIGHT;
     const int out_buf_size = panel_w * panel_h * sizeof(uint16_t);
-    uint16_t* out_buf = (uint16_t*)heap_caps_malloc(out_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!out_buf) out_buf = (uint16_t*)malloc(out_buf_size);
+    uint16_t* out_buf = (uint16_t*)heap_caps_aligned_alloc(
+        16, out_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!out_buf) {
-        ESP_LOGE(TAG, "Failed to allocate output buffer");
-        free(frame_buf);
+        out_buf = (uint16_t*)heap_caps_aligned_alloc(
+            16, out_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!out_buf) {
+        ESP_LOGE(TAG, "Failed to allocate aligned output buffer");
+        heap_caps_free(frame_buf);
         eaf_deinit(parser);
         eaf_free_header(&first_hdr);
         return;
@@ -1016,8 +1025,8 @@ void play_splash(esp_lcd_panel_handle_t panel,
     }
     printf("SplashPlayer: asset '%s' done\n", asset_name);
 
-    free(out_buf);
-    free(frame_buf);
+    heap_caps_free(out_buf);
+    heap_caps_free(frame_buf);
     eaf_free_header(&first_hdr);
     eaf_deinit(parser);
 }
