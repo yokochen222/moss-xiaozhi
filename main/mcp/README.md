@@ -71,13 +71,24 @@ DECLARE_MCP_TOOL(YourTool);
 
 ## 现有工具
 
-- **LED控制工具** (`self.led.set_status`) - 控制LED开关
-- **系统信息工具** (`self.system.get_info`) - 获取系统信息
-- **测试工具** (`self.test.echo`) - 回显测试消息
-- **网络工具** (`self.network.get_status`) - 获取网络状态
-- **眼部灯光工具** (`self.lamp_eye.control`) - 控制MOSS眼部灯光
-- **流水灯工具** (`self.lamp_bar.control`) - 控制MOSS流水灯（Q0-Q4）
-- **面板灯/底灯工具** (`self.lamp_panel.control`) - 控制MOSS前面板灯（Q5/Q6）和底灯（Q7）
+- **眼部灯光工具** (`self.lamp_eye.control`) - PCA9685 ch6 眼部灯光
+- **流水灯工具** (`self.lamp_bar.control`) - PCA9685 ch8–12 流水灯
+- **面板灯/底灯工具** (`self.lamp_panel.control`) - PCA9685 ch13–15 面板/底灯
+- **眼电机工具** (`self.eye_motor.control`) - PCA9685 ch3–5 + TB6612 眼电机
+- **云台控制工具** (`self.gimbal.control`) - 74HC595 + ULN2003 双轴步进云台
+- **红外工具** (`self.infrared.*`) - 红外收发
+
+## PCA9685 与 74HC595
+
+| 通道 / 总线 | 功能 |
+|-------------|------|
+| PCA LED0 | LCD 背光 |
+| PCA LED1 | NS4150B 功放使能 |
+| PCA LED3–5 | 眼电机 TB6612（AIN2/AIN1/PWMA） |
+| PCA LED6 | 眼部呼吸灯 |
+| PCA LED8–12 | 流水灯 |
+| PCA LED13–15 | 面板灯 / 底灯 |
+| 74HC595 SER/RCK/SCK = 21/47/48 | 双轴步进云台 |
 
 ## 优势对比
 

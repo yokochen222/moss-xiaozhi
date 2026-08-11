@@ -1,15 +1,18 @@
 {
-    "manufacturer": "moss",
-    "type": "moss-desktop",
-    "target": "esp32s3",
-    "builds": [
-        {
-            "name": "moss-desktop",
-            "sdkconfig_append": [
-                "CONFIG_USE_DEVICE_AEC=y",
-                "CONFIG_ENABLE_VAD_INTERRUPT=y",
-                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n"
-            ]
-        }
-    ]
+   "manufacturer": "moss",
+   "type": "moss-desktop",
+   "target": "esp32s3",
+   "builds": [
+       {
+           "name": "moss-desktop",
+           "sdkconfig_append": [
+               "CONFIG_USE_DEVICE_AEC=y",
+               "CONFIG_ENABLE_VAD_INTERRUPT=y",
+               "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n",
+               "CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384",
+               "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y",
+               "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=49152"
+           ]
+       }
+   ]
 }

@@ -35,6 +35,8 @@ public:
     Esp32Camera(const camera_config_t &config);
     ~Esp32Camera();
 
+    bool IsInitialized() const { return streaming_on_; }
+
     virtual void SetExplainUrl(const std::string &url, const std::string &token) override;
     virtual bool Capture() override;
     virtual bool SetHMirror(bool enabled) override;

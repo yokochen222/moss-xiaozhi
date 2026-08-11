@@ -2,8 +2,8 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
-#include <driver/uart.h>
 #include <driver/spi_master.h>
+#include <driver/uart.h>
 #include <esp_lcd_panel_vendor.h>
 
 #define AUDIO_INPUT_SAMPLE_RATE 24000
@@ -20,8 +20,8 @@
 #define AUDIO_I2S_GPIO_DIN GPIO_NUM_12
 #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_45
 
-// NS4150B CTRL is wired to GPIO48 (IO48_SPK_EN).
-#define AUDIO_CODEC_PA_PIN GPIO_NUM_48
+// NS4150B EN 改由 PCA9685 ch1 控制（GPIO48 留给 74HC595 SCK）。
+#define AUDIO_CODEC_PA_PIN GPIO_NUM_NC
 #define AUDIO_CODEC_I2C_SDA_PIN GPIO_NUM_1
 #define AUDIO_CODEC_I2C_SCL_PIN GPIO_NUM_2
 #define AUDIO_CODEC_ES8311_ADDR ES8311_CODEC_DEFAULT_ADDR
@@ -33,15 +33,15 @@
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 
 /*
- * 0.96" ST7735S LCD — from bread-compact-wifi-096lcd.
- * SPI: MOSI=41 SCK=42 CS=47 DC=39 RST=40 BL=21
+ * 0.96" ST7735S LCD — pins aligned with moss-xiaozhi bread-compact-wifi-096lcd.
+ * Backlight / PA moved to PCA9685; GPIO21/47/48 freed for dual-stepper 74HC595.
  */
 #define DISPLAY_SPI_HOST SPI2_HOST
-#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_41
-#define DISPLAY_SPI_SCK_PIN GPIO_NUM_42
-#define DISPLAY_SPI_CS_PIN GPIO_NUM_47
+#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_40
+#define DISPLAY_SPI_SCK_PIN GPIO_NUM_41
+#define DISPLAY_SPI_CS_PIN GPIO_NUM_42
 #define DISPLAY_DC_PIN GPIO_NUM_39
-#define DISPLAY_RST_PIN GPIO_NUM_40
+#define DISPLAY_RST_PIN GPIO_NUM_NC
 
 #define DISPLAY_WIDTH 160
 #define DISPLAY_HEIGHT 80
@@ -62,24 +62,58 @@
 #define DISPLAY_OFFSET_Y DISPLAY_OFFSET_Y_DEFAULT
 #endif
 
-#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_21
+#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_NC
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
 /*
- * Moss MCP peripherals (migrated from moss-xiaozhi).
- * Pins do not overlap the 0.96" LCD SPI bus above.
+ * Moss MCP peripherals (PCA9685 + 74HC595 dual stepper).
  */
 #define MOSS_MCP_PERIPHERALS_ENABLE 1
 
-#define MOSS_LAMP_74HC595_SER_PIN GPIO_NUM_3
-#define MOSS_LAMP_74HC595_RCK_PIN GPIO_NUM_4
-#define MOSS_LAMP_74HC595_SCK_PIN GPIO_NUM_5
-#define MOSS_LAMP_EYE_PIN GPIO_NUM_15
-#define MOSS_EYE_MOTOR_IN1_PIN GPIO_NUM_10
-#define MOSS_EYE_MOTOR_IN2_PIN GPIO_NUM_11
-#define MOSS_EYE_MOTOR_PWM_PIN GPIO_NUM_9
-#define MOSS_IR_UART_TX_PIN GPIO_NUM_17
-#define MOSS_IR_UART_RX_PIN GPIO_NUM_18
+/* PCA9685 on shared audio I2C */
+#define PCA9685_I2C_ADDR 0x40
+#define PCA9685_CH_LCD_BL 0
+#define PCA9685_CH_NS4150B_EN 1
+#define PCA9685_CH_DVP_DOWN 2 /* OV2640 PWDN：低电平工作 */
+#define PCA9685_CH_EYE_AIN2 3
+#define PCA9685_CH_EYE_AIN1 4
+#define PCA9685_CH_EYE_PWMA 5
+#define PCA9685_CH_LAMP_EYE 6
+#define PCA9685_CH_FLOW_LED0 8
+#define PCA9685_CH_PANEL_LED0 13
+
+/* 74HC595 for dual-axis stepper gimbal */
+#define HC595_SER_PIN GPIO_NUM_21
+#define HC595_RCK_PIN GPIO_NUM_47
+#define HC595_SCK_PIN GPIO_NUM_48
+
+/*
+ * OV2640 DVP（对齐 moss-xiaozhi bread-compact-wifi-096lcd 已验证布线）
+ * SCCB 与音频/PCA9685 共用 IO1/IO2；RESET 接芯片 RESET；PWDN=PCA9685 LED2。
+ * 传感器 D0/D1 绑 3V3，MCU 接 D2..D9 作为 8bit 数据。
+ * XCLK=IO5、D6=IO4。
+ */
+#define CAMERA_PIN_PWDN GPIO_NUM_NC
+#define CAMERA_PIN_RESET GPIO_NUM_NC
+#define CAMERA_PIN_XCLK GPIO_NUM_5
+#define CAMERA_PIN_SIOD GPIO_NUM_1
+#define CAMERA_PIN_SIOC GPIO_NUM_2
+#define CAMERA_PIN_D7 GPIO_NUM_9
+#define CAMERA_PIN_D6 GPIO_NUM_4
+#define CAMERA_PIN_D5 GPIO_NUM_6
+#define CAMERA_PIN_D4 GPIO_NUM_15
+#define CAMERA_PIN_D3 GPIO_NUM_17
+#define CAMERA_PIN_D2 GPIO_NUM_8
+#define CAMERA_PIN_D1 GPIO_NUM_18
+#define CAMERA_PIN_D0 GPIO_NUM_16
+#define CAMERA_PIN_VSYNC GPIO_NUM_3
+#define CAMERA_PIN_HREF GPIO_NUM_46
+#define CAMERA_PIN_PCLK GPIO_NUM_7
+#define XCLK_FREQ_HZ 10000000
+
+/* GPIO17/18 已给 DVP D3/D1，红外 UART 暂不可用 */
+#define MOSS_IR_UART_TX_PIN GPIO_NUM_NC
+#define MOSS_IR_UART_RX_PIN GPIO_NUM_NC
 #define MOSS_IR_UART_PORT UART_NUM_2
 
 #endif  // _BOARD_CONFIG_H_

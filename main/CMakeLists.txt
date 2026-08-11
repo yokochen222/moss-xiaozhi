@@ -302,6 +302,7 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "device/lamp_panel.cc"
         "device/lamp_eye.cc"
         "device/eye_motor.cc"
+        "device/stepper_gimbal.cc"
         "api/api.cc"
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"

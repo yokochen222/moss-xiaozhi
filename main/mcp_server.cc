@@ -97,10 +97,14 @@ void McpServer::AddCommonTools() {
             });
     }
 
+#endif
+
+    // Camera is independent of LVGL; keep it outside HAVE_LVGL.
     auto camera = board.GetCamera();
     if (camera) {
         AddTool("self.camera.take_photo",
-            "Always remember you have a camera. If the user asks you to see something, use this tool to take a photo and then explain it.\n"
+            "Take a photo with the device camera and explain what you see. "
+            "Always use this tool (not any other camera/vision tool) when the user asks you to look, see, or describe the surroundings.\n"
             "Args:\n"
             "  `question`: The question that you want to ask about the photo.\n"
             "Return:\n"
@@ -112,14 +116,15 @@ void McpServer::AddCommonTools() {
                 // Lower the priority to do the camera capture
                 TaskPriorityReset priority_reset(1);
 
+                ESP_LOGI(TAG, "self.camera.take_photo: capturing...");
                 if (!camera->Capture()) {
                     throw std::runtime_error("Failed to capture photo");
                 }
                 auto question = properties["question"].value<std::string>();
+                ESP_LOGI(TAG, "self.camera.take_photo: explain question=%s", question.c_str());
                 return camera->Explain(question);
             });
     }
-#endif
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());

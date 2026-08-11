@@ -1,6 +1,6 @@
-#include "mcp_tools.h"
 #include "device/lamp_eye.h"
 #include <esp_log.h>
+#include "mcp_tools.h"
 
 #define TAG "LampEyeTool"
 
@@ -15,9 +15,9 @@ public:
         static LampEyeTool instance;
         return instance;
     }
-    LampEyeTool() : McpTool("self.lamp_eye.control", "控制MOSS的眼部灯光"), 
-                    lamp_eye_device_(LampEyeDevice::GetInstance()) {
-    }
+    LampEyeTool()
+        : McpTool("self.lamp_eye.control", "控制MOSS的眼部灯光"),
+          lamp_eye_device_(LampEyeDevice::GetInstance()) {}
     void Register() override;
 };
 
@@ -26,6 +26,7 @@ void LampEyeTool::Register() {
     McpServer::GetInstance().AddTool(
         name(),
         "MOSS设备眼部灯光控制工具\n"
+        "硬件说明：PCA9685 通道 ch6（PWM 呼吸/常亮）\n"
         "使用说明：\n"
         "- action='turn_on'：开启眼部灯光常亮模式\n"
         "- action='turn_off'：关闭眼部灯光常亮模式\n"
@@ -34,10 +35,8 @@ void LampEyeTool::Register() {
         "- action='resume_breathing'：恢复呼吸灯光效果\n"
         "- action='stop_breathing'：关闭呼吸灯光效果\n"
         "- action='get_status'：获取呼吸灯当前状态信息\n",
-        PropertyList({
-            Property("action", kPropertyTypeString),
-            Property("power", kPropertyTypeBoolean, false)
-        }),
+        PropertyList({Property("action", kPropertyTypeString),
+                      Property("power", kPropertyTypeBoolean, false)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();
             if (action == "turn_on") {
@@ -78,20 +77,27 @@ void LampEyeTool::Register() {
                 }
             } else if (action == "get_status") {
                 std::string status = "眼部灯光状态:\n";
-                status += "电源: " + std::string(lamp_eye_device_.IsPowered() ? "开启" : "关闭") + "\n";
-                status += "呼吸效果: " + std::string(lamp_eye_device_.IsBreathing() ? "运行中" : "停止") + "\n";
+                status += "硬件: PCA9685 ch6 (PWM)\n";
+                status +=
+                    "电源: " + std::string(lamp_eye_device_.IsPowered() ? "开启" : "关闭") + "\n";
+                status +=
+                    "呼吸效果: " + std::string(lamp_eye_device_.IsBreathing() ? "运行中" : "停止") +
+                    "\n";
                 if (lamp_eye_device_.IsBreathing()) {
-                    status += "呼吸状态: " + std::string(lamp_eye_device_.IsPaused() ? "暂停" : "运行") + "\n";
+                    status +=
+                        "呼吸状态: " + std::string(lamp_eye_device_.IsPaused() ? "暂停" : "运行") +
+                        "\n";
                 }
                 return status;
             } else {
-                return "未知动作: " + action + "\n支持的动作: turn_on, turn_off, start_breathing, pause_breathing, resume_breathing, stop_breathing, get_status";
+                return "未知动作: " + action +
+                       "\n支持的动作: turn_on, turn_off, start_breathing, pause_breathing, "
+                       "resume_breathing, stop_breathing, get_status";
             }
-        }
-    );
+        });
 }
 
-} // namespace mcp_tools
+}  // namespace mcp_tools
 
 static auto& g_lamp_eye_tool_instance = mcp_tools::LampEyeTool::GetInstance();
 DECLARE_MCP_TOOL_INSTANCE(g_lamp_eye_tool_instance);

@@ -22,6 +22,11 @@ InfraredDevice::~InfraredDevice() {
 }
 
 void InfraredDevice::InitializeUart() {
+    if (kTxPin == GPIO_NUM_NC || kRxPin == GPIO_NUM_NC) {
+        ESP_LOGW(TAG, "IR UART pins are NC (camera owns GPIO17/18); infrared disabled");
+        return;
+    }
+
     const uart_config_t uart_config = {
         .baud_rate = 9600,
         .data_bits = UART_DATA_8_BITS,

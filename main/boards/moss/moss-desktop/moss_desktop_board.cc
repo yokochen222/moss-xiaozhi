@@ -1,25 +1,161 @@
-#include "wifi_board.h"
-#include "codecs/box_audio_codec.h"
-#include "display/display.h"
 #include "application.h"
-#include "button.h"
-#include "config.h"
 #include "assets/lang_config.h"
 #include "backlight.h"
+#include "button.h"
+#include "codecs/box_audio_codec.h"
+#include "config.h"
+#include "device/stepper_gimbal.h"
+#include "display/display.h"
+#include "esp32_camera.h"
 #include "mcp_server.h"
-#include "press_to_talk_mcp_tool.h"
 #include "moss_spi_lcd_display.h"
+#include "pca9685_driver.h"
+#include "press_to_talk_mcp_tool.h"
+#include "wifi_board.h"
 
-#include <esp_log.h>
-#include <esp_lcd_panel_vendor.h>
-#include <esp_lcd_panel_ops.h>
-#include <esp_lcd_io_spi.h>
-#include <esp_lcd_st7735.h>
-#include <driver/spi_common.h>
 #include <driver/i2c_master.h>
+#include <driver/ledc.h>
+#include <driver/spi_common.h>
+#include <esp_heap_caps.h>
+#include <esp_lcd_io_spi.h>
+#include <esp_lcd_panel_ops.h>
+#include <esp_lcd_panel_vendor.h>
+#include <esp_lcd_st7735.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <wifi_manager.h>
+#include <memory>
+#include <stdexcept>
 
 #define TAG "MossDesktopBoard"
+
+// LCD_BL → PCA9685 LED0（高有效 / PWM 调光）
+class Pca9685Backlight : public Backlight {
+public:
+    explicit Pca9685Backlight(uint8_t channel, bool output_invert = false)
+        : Backlight(), channel_(channel), output_invert_(output_invert) {}
+
+    void SetBrightnessImpl(uint8_t brightness) override {
+        if (!Pca9685::GetInstance().IsReady()) {
+            return;
+        }
+        uint8_t percent = brightness;
+        if (output_invert_) {
+            percent = static_cast<uint8_t>(100 - brightness);
+        }
+        uint16_t duty = static_cast<uint16_t>((static_cast<uint32_t>(percent) * 4095 + 50) / 100);
+        Pca9685::GetInstance().SetDuty(channel_, duty);
+    }
+
+private:
+    uint8_t channel_;
+    bool output_invert_;
+};
+
+// 按需启停摄像头：平时释放 DVP DMA，避免与 LCD SPI / WiFi 争抢内部 DMA。
+class OnDemandEsp32Camera : public Camera {
+public:
+    explicit OnDemandEsp32Camera(const camera_config_t& config) : config_(config) {}
+
+    void SetExplainUrl(const std::string& url, const std::string& token) override {
+        explain_url_ = url;
+        explain_token_ = token;
+        if (camera_) {
+            camera_->SetExplainUrl(url, token);
+        }
+    }
+
+    bool Capture() override {
+        if (!EnsureStarted()) {
+            return false;
+        }
+        if (!camera_->Capture()) {
+            Release();
+            return false;
+        }
+        return true;
+    }
+
+    bool SetHMirror(bool enabled) override {
+        if (!EnsureStarted()) {
+            return false;
+        }
+        return camera_->SetHMirror(enabled);
+    }
+
+    bool SetVFlip(bool enabled) override {
+        if (!EnsureStarted()) {
+            return false;
+        }
+        return camera_->SetVFlip(enabled);
+    }
+
+    std::string Explain(const std::string& question) override {
+        struct ReleaseGuard {
+            OnDemandEsp32Camera* self;
+            ~ReleaseGuard() { self->Release(); }
+        } guard{this};
+
+        if (!camera_) {
+            throw std::runtime_error("Camera not started");
+        }
+        return camera_->Explain(question);
+    }
+
+private:
+    bool EnsureStarted() {
+        if (camera_ && camera_->IsInitialized()) {
+            return true;
+        }
+        // Drop a previously failed instance so we can retry init.
+        camera_.reset();
+
+        auto& pca = Pca9685::GetInstance();
+        if (pca.IsReady()) {
+            // PWDN 低 = OV2640 工作；传感器上电后需留足稳定时间再 SCCB/DVP
+            pca.SetDvpPowerDown(false);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+
+        const size_t free_internal =
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        ESP_LOGI(TAG,
+                 "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_psram=%u",
+                 (int)config_.xclk_freq_hz, (int)config_.frame_size, (unsigned)free_internal,
+                 (unsigned)free_spiram);
+
+        camera_.reset(new Esp32Camera(config_));
+        if (!camera_->IsInitialized()) {
+            ESP_LOGE(TAG, "OV2640 esp_camera_init failed (see Esp32Camera logs)");
+            camera_.reset();
+            return false;
+        }
+        if (!explain_url_.empty()) {
+            camera_->SetExplainUrl(explain_url_, explain_token_);
+        } else {
+            ESP_LOGW(TAG, "Vision explain URL not set yet; Capture ok but Explain may fail");
+        }
+        // Warm up sensor AE/AWB before first get
+        vTaskDelay(pdMS_TO_TICKS(500));
+        return true;
+    }
+
+    void Release() {
+        if (!camera_) {
+            return;
+        }
+        ESP_LOGI(TAG, "On-demand OV2640 stop (free DVP DMA)");
+        camera_.reset();
+        // Keep PWDN low (sensor powered) like moss-xiaozhi; only free DVP DMA.
+    }
+
+    camera_config_t config_{};
+    std::unique_ptr<Esp32Camera> camera_;
+    std::string explain_url_;
+    std::string explain_token_;
+};
 
 // waveshare esp_lcd_st7735 default init lacks INVON for most 0.96" ST7735S modules.
 static void SendSt7735VendorInit(esp_lcd_panel_io_handle_t io) {
@@ -32,6 +168,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     Button boot_button_;
     Display* display_ = nullptr;
+    OnDemandEsp32Camera* camera_ = nullptr;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     PressToTalkMcpTool* press_to_talk_tool_ = nullptr;
@@ -53,6 +190,57 @@ private:
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
 
+    void InitializePca9685() {
+        auto& pca = Pca9685::GetInstance();
+        if (!pca.Init(i2c_bus_, PCA9685_I2C_ADDR)) {
+            ESP_LOGE(TAG,
+                     "PCA9685 init failed; LCD_BL / PA / lamps / eye motor / camera may not work");
+            return;
+        }
+        pca.SetDuty(PCA9685_CH_LCD_BL, 0);
+        pca.SetDigital(PCA9685_CH_NS4150B_EN, true);
+        // PWDN 低 = OV2640 工作（与 moss-xiaozhi 一致，传感器保持上电）
+        pca.SetDvpPowerDown(false);
+        ESP_LOGI(TAG, "PCA9685 ready: LCD_BL=LED0, PA_EN=HIGH, DVP_PWDN=LOW");
+    }
+
+    void InitializeCamera() {
+        camera_config_t config = {};
+        // 背光已走 PCA9685，LEDC0 留给 XCLK
+        config.ledc_channel = LEDC_CHANNEL_0;
+        config.ledc_timer = LEDC_TIMER_0;
+        config.pin_d0 = CAMERA_PIN_D0;
+        config.pin_d1 = CAMERA_PIN_D1;
+        config.pin_d2 = CAMERA_PIN_D2;
+        config.pin_d3 = CAMERA_PIN_D3;
+        config.pin_d4 = CAMERA_PIN_D4;
+        config.pin_d5 = CAMERA_PIN_D5;
+        config.pin_d6 = CAMERA_PIN_D6;
+        config.pin_d7 = CAMERA_PIN_D7;
+        config.pin_xclk = CAMERA_PIN_XCLK;
+        config.pin_pclk = CAMERA_PIN_PCLK;
+        config.pin_vsync = CAMERA_PIN_VSYNC;
+        config.pin_href = CAMERA_PIN_HREF;
+        // 复用板级 I2C port1（IO1/IO2）
+        config.pin_sccb_sda = -1;
+        config.pin_sccb_scl = CAMERA_PIN_SIOC;
+        config.sccb_i2c_port = 1;
+        config.pin_pwdn = CAMERA_PIN_PWDN;
+        config.pin_reset = CAMERA_PIN_RESET;
+        config.xclk_freq_hz = XCLK_FREQ_HZ;
+        config.pixel_format = PIXFORMAT_JPEG;
+        config.frame_size = FRAMESIZE_QVGA;
+        config.jpeg_quality = 12;
+        // 对话态内部 SRAM 紧张；单帧 + PSRAM fb 降低 DMA 描述符压力
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+        config.grab_mode = CAMERA_GRAB_LATEST;
+
+        camera_ = new OnDemandEsp32Camera(config);
+        ESP_LOGI(TAG, "OV2640 registered (on-demand JPEG XCLK=%d XCLK=IO%d D6=IO%d)", XCLK_FREQ_HZ,
+                 (int)CAMERA_PIN_XCLK, (int)CAMERA_PIN_D6);
+    }
+
     void InitializeSpi() {
         ESP_LOGI(TAG, "Initialize SPI bus for 0.96\" ST7735");
         spi_bus_config_t buscfg = {};
@@ -66,7 +254,8 @@ private:
     }
 
     void InitializeSt7735Display() {
-        ESP_LOGI(TAG, "Install ST7735 LCD panel IO");
+        ESP_LOGI(TAG, "Install ST7735 LCD panel IO (MOSI=%d SCK=%d CS=%d BL=PCA LED%d)",
+                 DISPLAY_SPI_MOSI_PIN, DISPLAY_SPI_SCK_PIN, DISPLAY_SPI_CS_PIN, PCA9685_CH_LCD_BL);
 
         esp_lcd_panel_io_spi_config_t io_config = {};
         io_config.cs_gpio_num = DISPLAY_SPI_CS_PIN;
@@ -80,7 +269,7 @@ private:
 
         ESP_LOGI(TAG, "Install ST7735 LCD panel driver");
         esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = DISPLAY_RST_PIN;
+        panel_config.reset_gpio_num = (DISPLAY_RST_PIN == GPIO_NUM_NC) ? -1 : DISPLAY_RST_PIN;
         panel_config.rgb_ele_order = DISPLAY_RGB_ORDER;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7735(panel_io_, &panel_config, &panel_));
@@ -158,10 +347,14 @@ private:
 public:
     MossDesktopBoard() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
+        InitializePca9685();
         InitializeSpi();
         InitializeSt7735Display();
+        InitializeCamera();
         InitializeButtons();
         InitializeTools();
+        // 上电清零 595，避免随机输出导致步进线圈常通发烫
+        StepperGimbalDevice::GetInstance().Stop();
         GetBacklight()->SetBrightness(75);
     }
 
@@ -170,17 +363,16 @@ public:
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE,
-            AUDIO_CODEC_INPUT_GAIN,
-            2,
-            0.0f);
+            AUDIO_INPUT_REFERENCE, AUDIO_CODEC_INPUT_GAIN, 2, 0.0f);
         return &audio_codec;
     }
 
     Display* GetDisplay() override { return display_; }
 
+    Camera* GetCamera() override { return camera_; }
+
     Backlight* GetBacklight() override {
-        static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
+        static Pca9685Backlight backlight(PCA9685_CH_LCD_BL, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
     }
 };
