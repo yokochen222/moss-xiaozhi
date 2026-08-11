@@ -561,7 +561,12 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (protocol_->IsPendingAudioDropped()) {
+            return;
+        }
+        // Allow listening as well: text-trigger may receive TTS before state flips to speaking.
+        auto state = GetDeviceState();
+        if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -573,6 +578,14 @@ void Application::InitializeProtocol() {
                      "Server sample rate %d does not match device output sample rate %d, "
                      "resampling may cause distortion",
                      protocol_->server_sample_rate(), codec->output_sample_rate());
+        }
+        if (!pending_text_to_send_.empty()) {
+            std::string text = pending_text_to_send_;
+            pending_text_to_send_.clear();
+            ESP_LOGI(TAG, "OnAudioChannelOpened: sending pending text: %s", text.c_str());
+            SetListeningMode(kListeningModeAutoStop);
+            protocol_->SetPendingAudioDropped(true);
+            protocol_->SendTextChat(text);
         }
     });
 
@@ -600,6 +613,9 @@ void Application::InitializeProtocol() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
+                    if (protocol_) {
+                        protocol_->SetPendingAudioDropped(false);
+                    }
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -695,6 +711,12 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->Start();
+
+    external_mqtt_client_ = std::make_unique<ExternalMqttClient>();
+    if (!external_mqtt_client_->Start()) {
+        ESP_LOGE(TAG, "Failed to start external MQTT client");
+        external_mqtt_client_.reset();
+    }
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -739,6 +761,7 @@ void Application::DismissAlert() {
         display->SetStatus(Lang::Strings::STANDBY);
         display->SetEmotion("neutral");
         display->SetChatMessage("system", "");
+        display->DismissDialog();
     }
 }
 
@@ -1110,6 +1133,16 @@ void Application::StartListeningAudio() {
         play_popup_on_listening_ = false;
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
     }
+
+    if (!pending_text_to_send_.empty()) {
+        std::string text = pending_text_to_send_;
+        pending_text_to_send_.clear();
+        ESP_LOGI(TAG, "StartListeningAudio: sending pending text: %s", text.c_str());
+        if (protocol_) {
+            protocol_->SetPendingAudioDropped(true);
+            protocol_->SendTextChat(text);
+        }
+    }
 }
 
 void Application::ConfigureWakeWordForListening() {
@@ -1239,6 +1272,42 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             }
         });
     }
+}
+
+void Application::HandleExternalTextMessage(const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+
+    Schedule([this, text]() {
+        auto state = GetDeviceState();
+
+        if (state == kDeviceStateIdle) {
+            if (!protocol_) {
+                ESP_LOGE(TAG, "Protocol not initialized");
+                return;
+            }
+            // Set pending text before opening channel — OnAudioChannelOpened may run sync.
+            pending_text_to_send_ = text;
+            listening_mode_ = kListeningModeAutoStop;
+            if (!protocol_->IsAudioChannelOpened()) {
+                SetDeviceState(kDeviceStateConnecting);
+                if (!protocol_->OpenAudioChannel()) {
+                    SetDeviceState(kDeviceStateIdle);
+                    pending_text_to_send_.clear();
+                    last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
+                    xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+                    return;
+                }
+            }
+        } else if (state == kDeviceStateSpeaking) {
+            pending_text_to_send_ = text;
+            AbortSpeaking(kAbortReasonNone);
+        } else {
+            ESP_LOGW(TAG, "HandleExternalTextMessage: device busy (state=%d), ignored",
+                     static_cast<int>(state));
+        }
+    });
 }
 
 bool Application::CanEnterSleepMode() {

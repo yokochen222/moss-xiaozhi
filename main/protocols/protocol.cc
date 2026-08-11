@@ -99,6 +99,46 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendTextChat(const std::string& text) {
+    constexpr size_t kMaxTextBytes = 2048;
+    std::string safe_text = text;
+
+    if (text.size() > kMaxTextBytes) {
+        size_t limit = kMaxTextBytes;
+        while (limit > 0 && (text[limit] & 0xC0) == 0x80) {
+            limit--;
+        }
+        if (limit > 0) {
+            safe_text = text.substr(0, limit);
+        } else {
+            limit = kMaxTextBytes;
+            while (limit > 0 && (text[limit] & 0xC0) == 0x80) {
+                limit--;
+            }
+            safe_text = text.substr(0, limit);
+        }
+        ESP_LOGW(TAG, "Text truncated from %zu to %zu bytes", text.size(), safe_text.size());
+    }
+
+    // listen+detect is what the server uses to trigger LLM from text input.
+    std::string json = "{\"session_id\":\"" + session_id_ +
+                       "\",\"type\":\"listen\",\"state\":\"detect\",\"text\":\"" + safe_text +
+                       "\"}";
+    SendText(json);
+    ESP_LOGI(TAG, "SendTextChat: sent listen+detect with text: %s", safe_text.c_str());
+}
+
+void Protocol::SetPendingAudioDropped(bool dropped) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_audio_dropped_ = dropped;
+    ESP_LOGI(TAG, "Pending audio dropped: %s", dropped ? "yes" : "no");
+}
+
+bool Protocol::IsPendingAudioDropped() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pending_audio_dropped_;
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

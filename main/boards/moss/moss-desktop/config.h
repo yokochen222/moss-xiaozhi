@@ -3,6 +3,8 @@
 
 #include <driver/gpio.h>
 #include <driver/uart.h>
+#include <driver/spi_master.h>
+#include <esp_lcd_panel_vendor.h>
 
 #define AUDIO_INPUT_SAMPLE_RATE 24000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
@@ -10,7 +12,6 @@
 #define AUDIO_INPUT_REFERENCE true
 
 // ES7210 MIC1 模拟增益（dB）。唤醒偏钝就加大，误唤醒/破音就减小。
-// 硬件 PGA 大约到 ~37.5；再高由驱动钳位。常用范围 28~37.5。
 #define AUDIO_CODEC_INPUT_GAIN 37.5f
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_38
@@ -19,7 +20,7 @@
 #define AUDIO_I2S_GPIO_DIN GPIO_NUM_12
 #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_45
 
-// NS4150B CTRL is wired to GPIO48 (IO48_SPK_EN), not PCA9557.
+// NS4150B CTRL is wired to GPIO48 (IO48_SPK_EN).
 #define AUDIO_CODEC_PA_PIN GPIO_NUM_48
 #define AUDIO_CODEC_I2C_SDA_PIN GPIO_NUM_1
 #define AUDIO_CODEC_I2C_SCL_PIN GPIO_NUM_2
@@ -31,22 +32,42 @@
 #define VOLUME_UP_BUTTON_GPIO GPIO_NUM_NC
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 
-#define DISPLAY_WIDTH 320
-#define DISPLAY_HEIGHT 240
+/*
+ * 0.96" ST7735S LCD — from bread-compact-wifi-096lcd.
+ * SPI: MOSI=41 SCK=42 CS=47 DC=39 RST=40 BL=21
+ */
+#define DISPLAY_SPI_HOST SPI2_HOST
+#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_41
+#define DISPLAY_SPI_SCK_PIN GPIO_NUM_42
+#define DISPLAY_SPI_CS_PIN GPIO_NUM_47
+#define DISPLAY_DC_PIN GPIO_NUM_39
+#define DISPLAY_RST_PIN GPIO_NUM_40
+
+#define DISPLAY_WIDTH 160
+#define DISPLAY_HEIGHT 80
+#define DISPLAY_SWAP_XY true
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y false
-#define DISPLAY_SWAP_XY true
 
-#define DISPLAY_OFFSET_X 0
-#define DISPLAY_OFFSET_Y 0
+#ifndef DISPLAY_RGB_ORDER
+#define DISPLAY_RGB_ORDER LCD_RGB_ELEMENT_ORDER_BGR
+#endif
 
-#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_42
-#define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
+#define DISPLAY_OFFSET_X_DEFAULT 1
+#define DISPLAY_OFFSET_Y_DEFAULT 26
+#ifndef DISPLAY_OFFSET_X
+#define DISPLAY_OFFSET_X DISPLAY_OFFSET_X_DEFAULT
+#endif
+#ifndef DISPLAY_OFFSET_Y
+#define DISPLAY_OFFSET_Y DISPLAY_OFFSET_Y_DEFAULT
+#endif
+
+#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_21
+#define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
 /*
  * Moss MCP peripherals (migrated from moss-xiaozhi).
- * These pins overlap the DVP camera bus on lichuang-derived layouts, so the
- * camera is disabled when MOSS_MCP_PERIPHERALS_ENABLE is 1.
+ * Pins do not overlap the 0.96" LCD SPI bus above.
  */
 #define MOSS_MCP_PERIPHERALS_ENABLE 1
 
@@ -60,26 +81,5 @@
 #define MOSS_IR_UART_TX_PIN GPIO_NUM_17
 #define MOSS_IR_UART_RX_PIN GPIO_NUM_18
 #define MOSS_IR_UART_PORT UART_NUM_2
-
-/* Camera pins (unused while MOSS_MCP_PERIPHERALS_ENABLE=1) */
-#define CAMERA_PIN_PWDN GPIO_NUM_NC
-#define CAMERA_PIN_RESET GPIO_NUM_NC
-#define CAMERA_PIN_XCLK GPIO_NUM_5
-#define CAMERA_PIN_SIOD GPIO_NUM_1
-#define CAMERA_PIN_SIOC GPIO_NUM_2
-
-#define CAMERA_PIN_D7 GPIO_NUM_9
-#define CAMERA_PIN_D6 GPIO_NUM_4
-#define CAMERA_PIN_D5 GPIO_NUM_6
-#define CAMERA_PIN_D4 GPIO_NUM_15
-#define CAMERA_PIN_D3 GPIO_NUM_17
-#define CAMERA_PIN_D2 GPIO_NUM_8
-#define CAMERA_PIN_D1 GPIO_NUM_18
-#define CAMERA_PIN_D0 GPIO_NUM_16
-#define CAMERA_PIN_VSYNC GPIO_NUM_3
-#define CAMERA_PIN_HREF GPIO_NUM_46
-#define CAMERA_PIN_PCLK GPIO_NUM_7
-
-#define XCLK_FREQ_HZ 20000000
 
 #endif  // _BOARD_CONFIG_H_

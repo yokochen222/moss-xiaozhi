@@ -2,76 +2,29 @@
 
 ## 简介
 
-MOSS 桌面助手是独立固件身份（`type`/`name` = `moss-desktop`），用于独立 OTA 通道。
-音频部分（ES8311 / ES7210 / NS4150B）按板级原理图 `V5_BUTTON_MITE_SPK` 配置：
-**功放使能脚为 GPIO48（`IO48_SPK_EN`）**，不是立创实战派的 PCA9557 bit1。
+MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开机动画对齐
+`bread-compact-wifi-096lcd`：0.96 寸 ST7735S（160×80）+ 嵌入 `emote-assets.bin` 开机 splash，
+随后代码滚动背景替代原 LVGL UI。
 
 ## 硬件资源
 
 - **主控**：ESP32-S3
-- **屏幕**：ST7789 SPI LCD（320×240）；若板载 PCA9557 则可用其控制 LCD CS
-- **触摸**：FT5x06 电容触摸（I2C，可选）
-- **音频 Codec**：ES8311（喇叭）+ ES7210（麦克风，支持 AEC 回采）
-- **功放**：NS4150B，`CTRL` ← **GPIO48 (`IO48_SPK_EN`)**，默认下拉关闭
-- **摄像头**：默认关闭（与 Moss MCP 外设 GPIO 冲突）；将 `MOSS_MCP_PERIPHERALS_ENABLE` 设为 `0` 可恢复
-- **Moss MCP 外设**（自 moss-xiaozhi 迁移）：
-  - `self.lamp_eye.control` / `self.lamp_bar.control` / `self.lamp_panel.control`
-  - `self.eye_motor.control` / `self.infrared.control` / `self.api_server.control`
-  - 引脚见 `config.h` 中 `MOSS_*` 宏（74HC595=GPIO3/4/5，眼灯=15，电机=9/10/11，红外 UART=17/18）
-- **按键**：BOOT（GPIO0）——单击切换唤醒/休眠，长按切换单击/长按说话模式，
-  双击切换 AEC
-- **实时打断**：默认开启设备端 AEC + VAD barge-in（TTS 播放中直接开口即可打断，
-  从打断点开始采音并上传；待机唤醒仍用唤醒词）
-- **支持表情动画**：通过 `EmoteDisplay` 渲染
-- **支持 Press-to-Talk MCP 工具**
-
-## 麦克风 / 唤醒灵敏度调整
-
-优先改板级增益（最常用）：
-
-```c
-// main/boards/moss/moss-desktop/config.h
-#define AUDIO_CODEC_INPUT_GAIN 37.5f   // 偏钝加大，误唤醒/破音减小（约 28~37.5）
-```
-
-进阶（影响所有 AFE 板型），在 `main/audio/engines/afe_audio_engine.cc`：
-
-- `afe_linear_gain`：数字增益（当前约 `3.0f`，范围约 `0.1~10`）
-- `wakenet_mode`：`DET_MODE_95` 更易唤醒（误唤醒也会更多）
-- 待机唤醒已关闭 AEC；仅在通话/打断时开启，避免小声被压掉
+- **屏幕**：ST7735S SPI 0.96"（160×80）
+  - MOSI=GPIO41, SCK=GPIO42, CS=GPIO47, DC=GPIO39, RST=GPIO40, BL=GPIO21
+  - 偏移默认 `(1,26)`，颜色反相 `INVON`
+- **开机画面**：固件嵌入 `main/assets/moss/emote-assets.bin`，播放 `start.eaf` 后进入代码滚动
+- **音频 Codec**：ES8311 + ES7210；功放 NS4150B，`CTRL` ← **GPIO48**
+- **按键**：BOOT（GPIO0）
+- **Moss MCP 外设**：灯条/面板灯/眼灯/电机/红外/API（引脚见 `config.h` 的 `MOSS_*`）
+- **外部 MQTT 文本唤醒**：`ExternalMqttClient` 订阅 `codesuccess` → 打开音频通道并 `SendTextChat`
 
 ## 构建方法
 
 ```bash
-# 推荐：使用 build.py 自动配置
 python3 scripts/build.py moss/moss-desktop --name moss-desktop
 ```
 
-手动使用 `idf.py`：
+## 参考
 
-```bash
-source /path/to/esp-idf/export.sh
-idf.py set-target esp32s3
-idf.py menuconfig  # 选择 "Board Type -> MOSS Desktop Assistant (MOSS 桌面助手)"
-idf.py build
-idf.py flash monitor
-```
-
-## 与原 `lichuang-dev` 的区别
-
-| 项 | lichuang-dev | moss-desktop |
-|---|---|---|
-| 硬件原理图 | 立创·实战派 ESP32-S3 | 完全相同 |
-| 板级 `type` | `lichuang-dev` | `moss-desktop` |
-| 固件 OTA 通道 | 立创官方 | MOSS 桌面助手独立通道 |
-| 标识 LOG TAG | `LichuangDevBoard` | `MossDesktopBoard` |
-| 类名 | `LichuangDevBoard` | `MossDesktopBoard` |
-
-保持板级 `config.h` 与原 `lichuang_dev_board.cc` 一致的目的，
-是为了在原硬件上直接烧录 MOSS 固件即可工作；
-如需更换硬件，请在保留 `moss-desktop` 身份的前提下修改 `config.h` 与源码。
-
-## 参考资料
-
-- 立创·实战派 ESP32-S3 资料：https://wiki.lckfb.com/zh-hans/szpi-esp32s3
+- 屏幕/splash 源：`moss-xiaozhi` 的 `boards/bread-compact-wifi-096lcd`
 - 板子添加指南：`docs/custom-board.md`

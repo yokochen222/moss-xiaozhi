@@ -4,6 +4,7 @@
 #include <cJSON.h>
 #include <chrono>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -64,6 +65,10 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
+    // External MQTT / text wake: send listen+detect with text to trigger LLM.
+    virtual void SendTextChat(const std::string& text);
+    void SetPendingAudioDropped(bool dropped);
+    bool IsPendingAudioDropped() const;
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;
@@ -79,6 +84,8 @@ protected:
     bool error_occurred_ = false;
     std::string session_id_;
     std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;
+    bool pending_audio_dropped_ = false;
+    mutable std::mutex mutex_;
 
     virtual bool SendText(const std::string& text) = 0;
     virtual void SetError(const std::string& message);

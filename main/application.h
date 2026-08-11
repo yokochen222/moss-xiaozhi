@@ -15,6 +15,7 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "external_mqtt_client.h"
 #include "ota.h"
 #include "protocol.h"
 
@@ -116,6 +117,8 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
+    // External MQTT codesuccess / text wake trigger.
+    void HandleExternalTextMessage(const std::string& text);
 
     /**
      * Reset protocol resources (thread-safe)
@@ -141,6 +144,8 @@ private:
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
+    std::unique_ptr<ExternalMqttClient> external_mqtt_client_;
+    std::string pending_text_to_send_;
 
     bool has_server_time_ = false;
     bool aborted_ = false;

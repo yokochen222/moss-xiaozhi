@@ -292,8 +292,9 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND SOURCES "boards/common/esp32_camera.cc")
 endif()
 
-# Moss MCP peripherals + HTTP API (moss-desktop only)
+# Moss MCP peripherals + HTTP API + splash assets (moss-desktop only)
 set(MAIN_PRIV_REQUIRES_EXTRA "")
+set(MOSS_EMOTE_ASSETS "")
 if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
     list(APPEND SOURCES
         "device/infrared.cc"
@@ -304,6 +305,7 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "api/api.cc"
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"
+        "external_mqtt_client.cc"
     )
     file(GLOB MOSS_MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
     file(GLOB MOSS_MCP_UTILS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils/*.cc)
@@ -315,11 +317,12 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
     )
-    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server espressif2022__esp_emote_gfx)
+    file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
 endif()
 
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${MOSS_EMOTE_ASSETS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES
@@ -347,6 +350,14 @@ idf_component_register(SRCS ${SOURCES}
                         xiaozhi-fonts
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
+
+# Moss splash uses private eaf_dec headers from esp_emote_gfx.
+if(CONFIG_BOARD_TYPE_MOSS_DESKTOP AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    idf_component_get_property(EMOTE_GFX_DIR espressif2022__esp_emote_gfx COMPONENT_DIR)
+    if(EMOTE_GFX_DIR)
+        target_include_directories(${COMPONENT_LIB} PRIVATE "${EMOTE_GFX_DIR}/src")
+    endif()
+endif()
 
 # Use target_compile_definitions to define the reported board identity
 # If BOARD_NAME is empty, use BOARD_TYPE
