@@ -26,5 +26,5 @@ python3 scripts/build.py moss/moss-desktop --name moss-desktop
 
 ## 参考
 
-- 屏幕/splash 源：`moss-xiaozhi` 的 `boards/bread-compact-wifi-096lcd`
-- 板子添加指南：`docs/custom-board.md`
+
+
