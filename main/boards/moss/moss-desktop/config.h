@@ -33,15 +33,19 @@
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 
 /*
- * 0.96" ST7735S LCD — pins aligned with moss-xiaozhi bread-compact-wifi-096lcd.
- * Backlight / PA moved to PCA9685; GPIO21/47/48 freed for dual-stepper 74HC595.
+ * 0.96" ST7735S LCD。背光 / PA 走 PCA9685；GPIO21/47/48 留给 74HC595。
+ *
+ * 插座原理图标 Pin3=IO40_MOSI、Pin4=IO41_SCK，但实物 0.96" 模组丝印为
+ * Pin3=SCL、Pin4=SDA，故软件对调：MOSI=41、SCK=40（已实机验证出图）。
+ * CS=42 DC=39 RST=芯片 EN（软件 SWRESET）。
  */
 #define DISPLAY_SPI_HOST SPI2_HOST
-#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_40
-#define DISPLAY_SPI_SCK_PIN GPIO_NUM_41
+#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_41
+#define DISPLAY_SPI_SCK_PIN GPIO_NUM_40
 #define DISPLAY_SPI_CS_PIN GPIO_NUM_42
 #define DISPLAY_DC_PIN GPIO_NUM_39
 #define DISPLAY_RST_PIN GPIO_NUM_NC
+#define DISPLAY_SPI_CLOCK_HZ (26 * 1000 * 1000)
 
 #define DISPLAY_WIDTH 160
 #define DISPLAY_HEIGHT 80

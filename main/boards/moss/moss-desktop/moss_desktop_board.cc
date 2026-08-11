@@ -118,11 +118,9 @@ private:
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-        const size_t free_internal =
-            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        ESP_LOGI(TAG,
-                 "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_psram=%u",
+        ESP_LOGI(TAG, "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_psram=%u",
                  (int)config_.xclk_freq_hz, (int)config_.frame_size, (unsigned)free_internal,
                  (unsigned)free_spiram);
 
@@ -254,14 +252,16 @@ private:
     }
 
     void InitializeSt7735Display() {
-        ESP_LOGI(TAG, "Install ST7735 LCD panel IO (MOSI=%d SCK=%d CS=%d BL=PCA LED%d)",
-                 DISPLAY_SPI_MOSI_PIN, DISPLAY_SPI_SCK_PIN, DISPLAY_SPI_CS_PIN, PCA9685_CH_LCD_BL);
+        ESP_LOGI(TAG,
+                 "Install ST7735 LCD panel IO (MOSI=%d SCK=%d CS=%d DC=%d clk=%dHz BL=PCA LED%d)",
+                 DISPLAY_SPI_MOSI_PIN, DISPLAY_SPI_SCK_PIN, DISPLAY_SPI_CS_PIN, DISPLAY_DC_PIN,
+                 DISPLAY_SPI_CLOCK_HZ, PCA9685_CH_LCD_BL);
 
         esp_lcd_panel_io_spi_config_t io_config = {};
         io_config.cs_gpio_num = DISPLAY_SPI_CS_PIN;
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
         io_config.spi_mode = 0;
-        io_config.pclk_hz = 40 * 1000 * 1000;
+        io_config.pclk_hz = DISPLAY_SPI_CLOCK_HZ;
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
@@ -274,7 +274,10 @@ private:
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7735(panel_io_, &panel_config, &panel_));
 
+        // RST 绑 EN：上电后稍等再 SWRESET / init
+        vTaskDelay(pdMS_TO_TICKS(50));
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
+        vTaskDelay(pdMS_TO_TICKS(120));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize LCD panel");
             display_ = new NoDisplay();

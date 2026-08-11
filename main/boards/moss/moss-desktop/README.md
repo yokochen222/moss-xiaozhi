@@ -10,7 +10,8 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
 
 - **主控**：ESP32-S3
 - **屏幕**：ST7735S SPI 0.96"（160×80）
-  - MOSI=GPIO40, SCK=GPIO41, CS=GPIO42, DC=GPIO39, RST=NC（绑芯片 RESET）
+  - MOSI=GPIO41, SCK=GPIO40, CS=GPIO42, DC=GPIO39, RST=NC（绑芯片 EN）
+    （原理图 Pin3/4 标 MOSI/SCK，实物模组为 SCL/SDA，软件已对调）
   - 背光：PCA9685 LED0（I2C @ 0x40，与音频共用 SDA/SCL）
   - 偏移默认 `(1,26)`，颜色反相 `INVON`
 - **开机画面**：固件嵌入 `main/assets/moss/emote-assets.bin`，播放 `start.eaf` 后进入代码滚动
