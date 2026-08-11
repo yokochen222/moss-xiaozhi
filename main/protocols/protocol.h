@@ -30,7 +30,7 @@ struct BinaryProtocol3 {
     uint8_t payload[];
 } __attribute__((packed));
 
-enum AbortReason { kAbortReasonNone, kAbortReasonWakeWordDetected };
+enum AbortReason { kAbortReasonNone, kAbortReasonWakeWordDetected, kAbortReasonVadInterrupt };
 
 enum ListeningMode {
     kListeningModeAutoStop,

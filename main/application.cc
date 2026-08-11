@@ -246,6 +246,17 @@ void Application::Run() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            // VAD interrupt: user speaks while device is talking -> abort and listen
+            if (GetDeviceState() == kDeviceStateSpeaking && protocol_) {
+                AbortSpeaking(kAbortReasonVadInterrupt);
+                while (audio_service_.PopPacketFromSendQueue())
+                    ;
+                // Stay in speaking state briefly, then transition to listening once playback drains
+                play_popup_on_listening_ = true;
+                SetListeningMode(GetDefaultListeningMode());
+            }
+#endif
         }
 
         if (bits & MAIN_EVENT_SCHEDULE) {
@@ -952,9 +963,13 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::SPEAKING);
 
             if (listening_mode_ != kListeningModeRealtime) {
+#if CONFIG_ENABLE_VAD_INTERRUPT
+                audio_service_.EnableVoiceProcessing(true);
+                audio_service_.EnableWakeWordDetection(false);
+#else
                 audio_service_.EnableVoiceProcessing(false);
-                // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+#endif
             }
             audio_service_.ResetDecoder();
             break;

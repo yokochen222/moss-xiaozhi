@@ -1,0 +1,15 @@
+{
+    "manufacturer": "moss",
+    "type": "moss-desktop",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "moss-desktop",
+            "sdkconfig_append": [
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=y",
+                "CONFIG_ENABLE_VAD_INTERRUPT=y"
+            ]
+        }
+    ]
+}

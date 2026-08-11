@@ -358,6 +358,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_MIXGO_NOVA
         bool "MixGo Nova (元控·青春)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_MOSS_DESKTOP
+        bool "MOSS Desktop Assistant (MOSS 桌面助手)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_MOVECALL_CUICAN_ESP32S3
         bool "Movecall CuiCan (璀璨 AI 吊坠)"
         depends on IDF_TARGET_ESP32S3
@@ -929,6 +932,18 @@ config WAKE_WORD_DETECTION_IN_LISTENING
         When enabled, the device can detect wake word during listening,
         which allows interrupting the current conversation.
         When disabled (default), wake word detection is turned off during listening.
+
+config ENABLE_VAD_INTERRUPT
+    bool "Enable VAD Voice Interrupt (Barge-in)"
+    default n
+    depends on (USE_AFE_WAKE_WORD || USE_CUSTOM_WAKE_WORD) && USE_DEVICE_AEC
+    help
+        Enable voice activity detection (VAD) based interrupt while the device is speaking.
+        When enabled, the device continuously monitors microphone input during playback.
+        If the user speaks (VAD detects speech), the device aborts playback and starts
+        listening immediately — no wake word is required to interrupt.
+        Requires Device-Side AEC (USE_DEVICE_AEC) to cancel the speaker output from
+        the microphone signal so VAD can accurately detect the user's voice.
 
 config USE_AUDIO_PROCESSOR
     bool "Enable AFE Audio Processing"
