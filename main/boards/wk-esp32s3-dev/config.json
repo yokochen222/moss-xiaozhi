@@ -1,9 +1,0 @@
-{
-    "type": "wk-esp32s3-dev",
-    "target": "esp32s3",
-    "builds": [
-        {
-            "name": "wk-esp32s3-dev"
-        }
-    ]
-}

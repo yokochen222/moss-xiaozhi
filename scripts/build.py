@@ -497,7 +497,11 @@ def _build_option_definitions(
     definitions: list[dict[str, Any]] = []
 
     for choice_name in ("DISPLAY_OLED_TYPE", "DISPLAY_LCD_TYPE"):
-        choice = _kconfig_choice(choice_name)
+        try:
+            choice = _kconfig_choice(choice_name)
+        except ValueError:
+            # Optional display-model choices may be omitted in board-trimmed forks.
+            continue
         if board_config not in choice["board_configs"]:
             continue
         entries = [entry for entry in choice["entries"] if entry["value"] != "LCD_CUSTOM"]

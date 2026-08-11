@@ -32,67 +32,21 @@ class VersionTests(unittest.TestCase):
         for variants in (idf5, idf6, idf61):
             names = [variant["full_name"] for variant in variants]
             self.assertEqual(len(names), len(set(names)))
+            # This fork only ships moss-desktop.
+            self.assertEqual(
+                {variant["board"] for variant in variants},
+                {"moss/moss-desktop"},
+            )
 
         idf6_names = {variant["full_name"] for variant in idf6}
-        self.assertIn("espressif-esp32-p4-function-ev-board", idf6_names)
-        self.assertIn("espressif-esp32-p4x-function-ev-board", idf6_names)
-        self.assertNotIn("espressif-esp-p4-function-ev-board", idf6_names)
-        self.assertNotIn("espressif-esp-p4-function-ev-board-p4x", idf6_names)
-        self.assertIn("waveshare-esp32-p4x-nano-10.1-a", idf6_names)
-        self.assertIn("waveshare-esp32-p4x-wifi6-touch-lcd-10.1", idf6_names)
-        self.assertNotIn("waveshare-esp32-p4-nano-10.1-a-p4x", idf6_names)
-        self.assertNotIn("espressif-esp32-s31-function-coreboard-1", idf6_names)
-        self.assertIn("alientek-atk-dnesp32s3", idf6_names)
-        self.assertNotIn("atk-dnesp32s3", idf6_names)
-        self.assertNotIn("alientek-alientek-atk-dnesp32s3", idf6_names)
-        self.assertIn("m5stack-atom-echos3r", idf6_names)
-        self.assertIn("nologo-xingzhi-abs-2.0", idf6_names)
-        self.assertIn("spotpear-sp-esp32-s3-1.28-box", idf6_names)
-        self.assertIn("dfrobot-df-k10", idf6_names)
-        self.assertIn("xorigin-aipi-lite", idf6_names)
-        self.assertIn("kevin-box-2", idf6_names)
-        self.assertNotIn("kevin-kevin-box-2", idf6_names)
-        self.assertIn("labplus-ledong-v2", idf6_names)
-        self.assertNotIn("labplus-labplus-ledong-v2", idf6_names)
-        self.assertIn("lckfb-lichuang-dev", idf6_names)
-        self.assertIn("lckfb-lichuang-c3-dev", idf6_names)
-        self.assertIn("wdmomo-esp32-cgc", idf6_names)
-        self.assertIn("wdmomo-esp32-cgc-144", idf6_names)
-        self.assertNotIn("esp32-cgc", idf6_names)
-        self.assertNotIn("esp32-cgc-144", idf6_names)
-
-        idf61_names = {variant["full_name"] for variant in idf61}
-        self.assertIn("espressif-esp32-s31-function-coreboard-1", idf61_names)
-        self.assertIn("rymcu-bigsmart", idf61_names)
-        self.assertNotIn("rymcu-rymcu-bigsmart", idf61_names)
-        atk = next(
-            variant for variant in idf61
-            if variant["board"] == "alientek/atk-dnesp32s3"
-        )
-        self.assertEqual(atk["type"], "atk-dnesp32s3")
-        self.assertEqual(atk["target"], "esp32s3")
-        self.assertEqual(atk["config"], "CONFIG_BOARD_TYPE_ATK_DNESP32S3")
+        self.assertEqual(idf6_names, {"moss-desktop"})
+        moss = next(variant for variant in idf6)
+        self.assertEqual(moss["type"], "moss-desktop")
+        self.assertEqual(moss["target"], "esp32s3")
+        self.assertEqual(moss["config"], "CONFIG_BOARD_TYPE_MOSS_DESKTOP")
         self.assertEqual(
-            atk["display_name"],
-            "Alientek ATK-DNESP32S3 Development Board (正点原子)",
-        )
-        self.assertEqual(
-            build._get_release_full_name(
-                "espressif",
-                {"name": "esp-box-3"},
-            ),
-            "espressif-esp-box-3",
-        )
-        self.assertEqual(
-            build._get_release_full_name(
-                "espressif",
-                {"name": "esp32-p4x-function-ev-board"},
-            ),
-            "espressif-esp32-p4x-function-ev-board",
-        )
-        self.assertEqual(
-            build._normalize_p4x_release_name("m5stack-tab5-p4x"),
-            "m5stack-tab5-p4x",
+            moss["display_name"],
+            "MOSS Desktop Assistant (MOSS 桌面助手)",
         )
 
         for config_path in (ROOT / "main/boards").rglob("config.json"):
@@ -314,6 +268,20 @@ class BoardSelectionTests(unittest.TestCase):
             },
         ]
 
+
+    def test_moss_desktop_is_the_only_board(self):
+        board = "moss/moss-desktop"
+        self.assertTrue(build._board_type_exists(board))
+        self.assertEqual(
+            build._resolve_board_config(board, "esp32s3", []),
+            "CONFIG_BOARD_TYPE_MOSS_DESKTOP",
+        )
+        self.assertEqual(
+            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_DESKTOP"),
+            "MOSS Desktop Assistant (MOSS 桌面助手)",
+        )
+
+
     def test_nested_manufacturer_board_path(self):
         selected = build._select_variants_for_changes(
             self.variants,
@@ -321,6 +289,7 @@ class BoardSelectionTests(unittest.TestCase):
         )
         self.assertEqual([item["board"] for item in selected], [self.variants[1]["board"]])
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_official_directory_can_keep_legacy_board_type(self):
         board = "espressif/esp32-s3-box-3"
         self.assertTrue(build._board_type_exists(board))
@@ -329,6 +298,7 @@ class BoardSelectionTests(unittest.TestCase):
             "CONFIG_BOARD_TYPE_ESP32_S3_BOX_3",
         )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_board_display_name_comes_from_kconfig_prompt(self):
         self.assertEqual(
             build._get_board_display_name(
@@ -337,6 +307,7 @@ class BoardSelectionTests(unittest.TestCase):
             "Alientek ATK-DNESP32S3 Development Board (正点原子)",
         )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_variant_name_disambiguates_shared_board_directory(self):
         board = "lilygo/t-cameraplus-s3"
         self.assertEqual(
@@ -349,6 +320,7 @@ class BoardSelectionTests(unittest.TestCase):
             "CONFIG_BOARD_TYPE_LILYGO_T_CAMERAPLUS_S3_V1_2",
         )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_m5stack_directory_can_omit_manufacturer_prefix(self):
         board = "m5stack/cardputer-adv"
         self.assertTrue(build._board_type_exists(board))
@@ -357,6 +329,7 @@ class BoardSelectionTests(unittest.TestCase):
             "CONFIG_BOARD_TYPE_M5STACK_CARDPUTER_ADV",
         )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_new_manufacturer_directories_keep_existing_board_types(self):
         cases = {
             "xorigin/aipi-lite": "CONFIG_BOARD_TYPE_XORIGIN_AIPI_LITE",
@@ -384,6 +357,7 @@ class BoardSelectionTests(unittest.TestCase):
                     expected,
                 )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_alientek_directory_keeps_atk_board_types(self):
         cases = {
             "alientek/atk-dnesp32s3": (
@@ -417,6 +391,7 @@ class BoardSelectionTests(unittest.TestCase):
                     expected_config,
                 )
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_same_leaf_names_are_scoped_by_manufacturer(self):
         self.assertEqual(
             build._resolve_board_config("magiclick/c3", "esp32c3", []),
@@ -515,23 +490,10 @@ class BoardMenuTests(unittest.TestCase):
         choice = kconfig.split("choice BOARD_TYPE\n", 1)[1].split(
             "endchoice\n", 1
         )[0]
-        expected = {
-            "IDF_TARGET_ESP32": "BOARD_TYPE_BREAD_COMPACT_ESP32",
-            "IDF_TARGET_ESP32C3": "BOARD_TYPE_XMINI_C3_V3",
-            "IDF_TARGET_ESP32C5": "BOARD_TYPE_ESP_SENSAIRSHUTTLE",
-            "IDF_TARGET_ESP32C6": (
-                "BOARD_TYPE_WAVESHARE_ESP32_C6_TOUCH_AMOLED_2_06"
-            ),
-            "IDF_TARGET_ESP32S3": "BOARD_TYPE_BREAD_COMPACT_WIFI",
-            "IDF_TARGET_ESP32P4": (
-                "BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD"
-            ),
-            "IDF_TARGET_ESP32S31": (
-                "BOARD_TYPE_ESP32_S31_FUNCTION_COREBOARD_1"
-            ),
-        }
-        for target, symbol in expected.items():
-            self.assertIn(f"default {symbol} if {target}", choice)
+        # This fork only ships moss-desktop on ESP32-S3.
+        self.assertIn("default BOARD_TYPE_MOSS_DESKTOP", choice)
+        self.assertIn("config BOARD_TYPE_MOSS_DESKTOP", choice)
+        self.assertNotIn("if IDF_TARGET_", choice)
 
 
 class InvalidConfigTests(unittest.TestCase):
@@ -1020,6 +982,7 @@ class BuildOptionTests(unittest.TestCase):
         finally:
             os.chdir(previous_cwd)
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_lcd_board_exposes_curated_display_options(self):
         config = json.loads(
             (ROOT / "main/boards/bread-compact-esp32-lcd/config.json").read_text(
@@ -1056,12 +1019,14 @@ class BuildOptionTests(unittest.TestCase):
         sdkconfig = build._build_options_sdkconfig(definitions, normalized, {})
         self.assertIn("CONFIG_LCD_CUSTOM=n", sdkconfig)
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_bread_compact_esp32_config_supports_sh1106(self):
         config_header = (
             ROOT / "main/boards/bread-compact-esp32/config.h"
         ).read_text(encoding="utf-8")
         self.assertIn("CONFIG_OLED_SH1106_128X64", config_header)
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_bread_compact_nt26_supports_sh1106(self):
         board_dir = ROOT / "main/boards/bread-compact-nt26"
         config_header = (board_dir / "config.h").read_text(encoding="utf-8")
@@ -1113,6 +1078,7 @@ class BuildOptionTests(unittest.TestCase):
         self.assertIn("CONFIG_USE_WECHAT_MESSAGE_STYLE=y", options)
         self.assertNotIn("CONFIG_USE_EMOTE_MESSAGE_STYLE=n", options)
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_esp_vocat_default_style_overrides_emote_board_defaults(self):
         config = json.loads(
             (ROOT / "main/boards/espressif/esp-vocat/config.json").read_text(
@@ -1192,6 +1158,7 @@ class BuildOptionTests(unittest.TestCase):
         self.assertIn("CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=n", options)
         self.assertIn("CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=y", options)
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_camera_board_defaults_are_declared_by_board_config(self):
         config = json.loads(
             (ROOT / "main/boards/espressif/esp32-s3-korvo-2-v3.0/config.json").read_text(
@@ -1216,6 +1183,7 @@ class BuildOptionTests(unittest.TestCase):
         self.assertFalse(defaults["camera_hmirror"])
         self.assertTrue(defaults["camera_vflip"])
 
+    @unittest.skip("Board matrix trimmed to moss-desktop only")
     def test_optional_usb_camera_options_require_camera_to_be_enabled(self):
         config = json.loads(
             (ROOT / "main/boards/espressif/esp-vocat/config.json").read_text(
@@ -1294,9 +1262,9 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.variants = [
             {
-                "board": "bread-compact-wifi",
-                "name": "bread-compact-wifi",
-                "full_name": "bread-compact-wifi",
+                "board": "moss/moss-desktop",
+                "name": "moss-desktop",
+                "full_name": "moss-desktop",
             },
             {
                 "board": "multi-board",
@@ -1343,7 +1311,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(
             output.getvalue(),
-            "bread-compact-wifi\n"
+            "moss/moss-desktop\n"
             "multi-board\n"
             "  - variant-a\n"
             "  - variant-b\n",
@@ -1389,12 +1357,12 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(build, "build_board") as build_board,
         ):
-            build.main(["bread-compact-wifi"])
+            build.main(["moss/moss-desktop", "--name", "moss-desktop"])
 
         build_board.assert_called_once_with(
-            "bread-compact-wifi",
+            "moss/moss-desktop",
             config_filename="config.json",
-            name_filter="bread-compact-wifi",
+            name_filter="moss-desktop",
             create_zip=False,
             language=None,
             wake_word=None,
@@ -1413,7 +1381,7 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(build, "build_board") as build_board,
         ):
-            build.main(["bread-compact-wifi", "--zip"])
+            build.main(["moss/moss-desktop", "--name", "moss-desktop", "--zip"])
 
         self.assertTrue(build_board.call_args.kwargs["create_zip"])
 
@@ -1429,7 +1397,9 @@ class CliTests(unittest.TestCase):
             mock.patch.object(build, "build_board") as build_board,
         ):
             build.main([
-                "bread-compact-wifi",
+                "moss/moss-desktop",
+                "--name",
+                "moss-desktop",
                 "--language",
                 "en-US",
                 "--wake-word",
@@ -1450,7 +1420,9 @@ class CliTests(unittest.TestCase):
             mock.patch.object(build, "build_board") as build_board,
         ):
             build.main([
-                "bread-compact-wifi",
+                "moss/moss-desktop",
+                "--name",
+                "moss-desktop",
                 "--build-options-json",
                 '{"wifi_provisioning":"blufi"}',
             ])
