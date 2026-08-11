@@ -1038,8 +1038,8 @@ void Application::CancelVadInterruptTimer() {
 }
 
 void Application::MaybeStartVadInterruptTimer() {
-    constexpr int64_t kVadInterruptGuardUs = 1200 * 1000;   // wait for TTS/AEC to settle
-    constexpr int64_t kVadInterruptSustainUs = 450 * 1000;  // require sustained speech
+    // Wait for TTS/AEC settle; loud playback needs a longer window.
+    constexpr int64_t kVadInterruptGuardUs = 1500 * 1000;
 
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
@@ -1059,9 +1059,22 @@ void Application::MaybeStartVadInterruptTimer() {
     if (esp_timer_is_active(vad_interrupt_timer_)) {
         return;
     }
-    ESP_LOGD(TAG, "VAD barge-in candidate, confirming in %lld ms",
-             (long long)(kVadInterruptSustainUs / 1000));
-    esp_timer_start_once(vad_interrupt_timer_, kVadInterruptSustainUs);
+
+    // Louder speaker → more echo into the mic → demand longer sustained speech.
+    int volume = 70;
+    if (auto* codec = Board::GetInstance().GetAudioCodec()) {
+        volume = codec->output_volume();
+    }
+    int64_t sustain_ms = 550;
+    if (volume >= 80) {
+        sustain_ms = 950;
+    } else if (volume >= 60) {
+        sustain_ms = 750;
+    }
+
+    ESP_LOGD(TAG, "VAD barge-in candidate (vol=%d), confirming in %lld ms", volume,
+             (long long)sustain_ms);
+    esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000);
 }
 
 void Application::HandleVadInterruptConfirm() {

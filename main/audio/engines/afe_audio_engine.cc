@@ -133,12 +133,16 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
-    // VERYAGGR heavily attenuates quiet near-end speech and makes wake hard.
-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_NORMAL;
+    // AEC is disabled during idle wake; when enabled (duplex/barge-in) use strong
+    // NLP so loud TTS echo does not look like near-end speech to VAD.
+    afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
-    afe_config->vad_mode = VAD_MODE_2;
+    // Less sensitive than MODE_0/1 — loud speaker leakage is less likely to trip VAD.
+    afe_config->vad_mode = VAD_MODE_3;
     afe_config->vad_min_noise_ms = 100;
+    // Require a longer contiguous speech run before VAD reports speech.
+    afe_config->vad_min_speech_ms = 250;
     // Cache more pre-speech audio so barge-in / ASR doesn't lose the first syllables.
     afe_config->vad_delay_ms = 256;
     if (vad_model_name != nullptr) {
