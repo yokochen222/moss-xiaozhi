@@ -6,6 +6,7 @@
        {
            "name": "moss-desktop",
            "sdkconfig_append": [
+               "CONFIG_FREERTOS_HZ=1000",
                "CONFIG_USE_DEVICE_AEC=y",
                "CONFIG_ENABLE_VAD_INTERRUPT=y",
                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n",

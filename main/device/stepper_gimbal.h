@@ -20,13 +20,13 @@ public:
     StepperGimbalDevice(const StepperGimbalDevice&) = delete;
     StepperGimbalDevice& operator=(const StepperGimbalDevice&) = delete;
 
-    // 24BYJ-48 / ULN2003：半步默认；约 5ms/步（需 CONFIG_FREERTOS_HZ>=1000 才准确）。
+    // 24BYJ-48 / ULN2003：半步默认；约 2ms/步（需 CONFIG_FREERTOS_HZ>=1000，否则 vTaskDelay 粒度约 10ms）。
     // 步进间隔只用 vTaskDelay，避免 busy-wait 饿死 IDLE/AFE。
     // 半步约 4096 步/转（输出轴）。
-    bool Move(GimbalDir dir, uint16_t steps, StepMode mode = StepMode::Half, uint16_t delay_ms = 5);
+    bool Move(GimbalDir dir, uint16_t steps, StepMode mode = StepMode::Half, uint16_t delay_ms = 2);
     // 双轴同时：+H=右 -H=左，+V=上 -V=下；两轴非零时同拍推进，短轴结束后长轴继续。
     bool MoveAxes(int16_t h_steps, int16_t v_steps, StepMode mode = StepMode::Half,
-                  uint16_t delay_ms = 5);
+                  uint16_t delay_ms = 2);
     // Hold a raw 595 byte for hold_ms (for DMM probing). Coils off afterwards; Stop() cancels
     // early.
     bool HoldPattern(uint8_t pattern, uint16_t hold_ms = 2000);
@@ -41,9 +41,9 @@ private:
     static constexpr gpio_num_t SCK_PIN = HC595_SCK_PIN;
     static constexpr uint16_t MIN_STEPS = 1;
     static constexpr uint16_t MAX_STEPS = 4096;  // ~1 rev half-step on geared BYJ48
-    static constexpr uint16_t MIN_DELAY_MS = 2;
+    static constexpr uint16_t MIN_DELAY_MS = 1;
     static constexpr uint16_t MAX_DELAY_MS = 50;
-    static constexpr uint16_t DEFAULT_DELAY_MS = 5;
+    static constexpr uint16_t DEFAULT_DELAY_MS = 2;
 
     // Created + Initialize()'d on first Move/Stop（板级构造也会尽早 Stop 清零）。
     std::unique_ptr<ShiftRegister74HC595> shift_register_;

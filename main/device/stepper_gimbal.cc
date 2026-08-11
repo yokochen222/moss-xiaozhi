@@ -2,6 +2,7 @@
 #include "stepper_phase.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <cstdlib>
@@ -157,9 +158,17 @@ bool StepperGimbalDevice::StartMoveTask(int16_t h_steps, int16_t v_steps, StepMo
         return false;
     }
 
-    ESP_LOGI(TAG, "Move start: h=%d v=%d mode=%s delay=%ums", static_cast<int>(h_steps),
-             static_cast<int>(v_steps), mode == StepMode::Full ? "full" : "half",
-             static_cast<unsigned>(delay_ms));
+    ESP_LOGI(TAG, "Move start: h=%d v=%d mode=%s delay=%ums (tick_hz=%u)",
+             static_cast<int>(h_steps), static_cast<int>(v_steps),
+             mode == StepMode::Full ? "full" : "half", static_cast<unsigned>(delay_ms),
+             static_cast<unsigned>(configTICK_RATE_HZ));
+    if (configTICK_RATE_HZ < 1000) {
+        ESP_LOGW(TAG,
+                 "FREERTOS_HZ=%u < 1000：本步用 esp_timer 精确定时（避免被抬到 ~%ums/tick）；"
+                 "建议 scripts/build.py 应用 CONFIG_FREERTOS_HZ=1000 后改回纯 vTaskDelay",
+                 static_cast<unsigned>(configTICK_RATE_HZ),
+                 static_cast<unsigned>(1000 / configTICK_RATE_HZ));
+    }
     return true;
 }
 
@@ -281,30 +290,54 @@ bool StepperGimbalDevice::Stop() {
     return true;
 }
 
-// 步进间隔必须用 vTaskDelay 真正阻塞，否则 IDLE 喂不了 task WDT（GimbalStep 优先级高于 IDLE，
-// taskYIELD 无效）。FREERTOS_HZ=1000 时 5ms → 5 ticks；若仍为 100Hz 则至少 1 tick≈10ms。
-// 分段等待以便尽快响应 stop，避免停转后仍长时间保持励磁。
+// HZ>=1000：纯 vTaskDelay（干净、IDLE 可喂狗）。
+// HZ=100：vTaskDelay 最少约 10ms，改用 esp_timer 精确定时；不足 1 tick 的部分 busy-wait，
+// 并在 MoveTask 中周期性 vTaskDelay(1) 让 CPU1 IDLE 喂狗。
 static bool StepDelayMsInterruptible(uint16_t delay_ms, volatile bool* stop_requested) {
-    TickType_t remaining = pdMS_TO_TICKS(delay_ms);
-    if (remaining < 1) {
-        remaining = 1;
+    if (configTICK_RATE_HZ >= 1000) {
+        TickType_t remaining = pdMS_TO_TICKS(delay_ms);
+        if (remaining < 1) {
+            remaining = 1;
+        }
+        while (remaining > 0) {
+            if (stop_requested && *stop_requested) {
+                return true;
+            }
+            TickType_t slice = remaining > pdMS_TO_TICKS(1) ? pdMS_TO_TICKS(1) : remaining;
+            if (slice < 1) {
+                slice = 1;
+            }
+            vTaskDelay(slice);
+            if (remaining > slice) {
+                remaining = static_cast<TickType_t>(remaining - slice);
+            } else {
+                remaining = 0;
+            }
+        }
+        return stop_requested && *stop_requested;
     }
-    while (remaining > 0) {
+
+    const int64_t deadline = esp_timer_get_time() + static_cast<int64_t>(delay_ms) * 1000;
+    const int64_t tick_us = 1000000LL / static_cast<int64_t>(configTICK_RATE_HZ);
+    while (true) {
         if (stop_requested && *stop_requested) {
             return true;
         }
-        TickType_t slice = remaining > pdMS_TO_TICKS(1) ? pdMS_TO_TICKS(1) : remaining;
-        if (slice < 1) {
-            slice = 1;
+        const int64_t remaining = deadline - esp_timer_get_time();
+        if (remaining <= 0) {
+            return false;
         }
-        vTaskDelay(slice);
-        if (remaining > slice) {
-            remaining = static_cast<TickType_t>(remaining - slice);
-        } else {
-            remaining = 0;
+        if (remaining >= tick_us) {
+            vTaskDelay(1);
+            continue;
         }
+        while (esp_timer_get_time() < deadline) {
+            if (stop_requested && *stop_requested) {
+                return true;
+            }
+        }
+        return false;
     }
-    return stop_requested && *stop_requested;
 }
 
 void StepperGimbalDevice::MoveTask(void* arg) {
