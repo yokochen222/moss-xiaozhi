@@ -189,12 +189,12 @@ bool Esp32Camera::Capture() {
         }
     } else if (current_fb_->format == PIXFORMAT_JPEG) {
         // JPEG format preview usually requires decoding, skip preview display for now, just log
-        ESP_LOGW(TAG, "JPEG capture success, len=%zu, but not supported for preview",
-                 current_fb_->len);
+        ESP_LOGW(TAG, "JPEG capture success, len=%u, preview skipped",
+                 (unsigned)current_fb_->len);
     }
 
-    ESP_LOGI(TAG, "Captured frame: %dx%d, len=%zu, format=%d", current_fb_->width,
-             current_fb_->height, current_fb_->len, current_fb_->format);
+    ESP_LOGI(TAG, "Captured frame: %dx%d, len=%u, format=%d", current_fb_->width,
+             current_fb_->height, (unsigned)current_fb_->len, current_fb_->format);
 
     return true;
 }
@@ -238,73 +238,92 @@ std::string Esp32Camera::Explain(const std::string& question) {
         throw std::runtime_error("Failed to create JPEG queue");
     }
 
-    // Start encoding thread
-    encoder_thread_ = std::thread([this, jpeg_queue]() {
-        int64_t start_time = esp_timer_get_time();
-        uint16_t w = current_fb_->width;
-        uint16_t h = current_fb_->height;
-        v4l2_pix_fmt_t enc_fmt;
-        switch (current_fb_->format) {
-            case PIXFORMAT_RGB565:
-                enc_fmt = V4L2_PIX_FMT_RGB565;
-                break;
-            case PIXFORMAT_YUV422:
-                enc_fmt = V4L2_PIX_FMT_YUYV;  // YUV422 is actually YUYV format
-                break;
-            case PIXFORMAT_YUV420:
-                enc_fmt = V4L2_PIX_FMT_YUV420;
-                break;
-            case PIXFORMAT_GRAYSCALE:
-                enc_fmt = V4L2_PIX_FMT_GREY;
-                break;
-            case PIXFORMAT_JPEG:
-                enc_fmt = V4L2_PIX_FMT_JPEG;
-                break;
-            case PIXFORMAT_RGB888:
-                enc_fmt = V4L2_PIX_FMT_RGB24;
-                break;
-            default:
-                ESP_LOGE(TAG, "Unsupported pixel format: %d", current_fb_->format);
-                return;
+    auto queue_jpeg_chunk = [jpeg_queue](const uint8_t* data, size_t len) -> bool {
+        JpegChunk chunk = {.data = nullptr, .len = len};
+        chunk.data = (uint8_t*)heap_caps_aligned_alloc(16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (chunk.data == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate %u bytes for JPEG chunk", (unsigned)len);
+            return false;
         }
+        memcpy(chunk.data, data, len);
+        xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
+        return true;
+    };
 
-        // Use encode buffer for RGB565, otherwise use original frame buffer
-        uint8_t* jpeg_src_buf = current_fb_->buf;
-        size_t jpeg_src_len = current_fb_->len;
-        if (current_fb_->format == PIXFORMAT_RGB565 && encode_buf_ != nullptr) {
-            jpeg_src_buf = encode_buf_;
-            jpeg_src_len = encode_buf_size_;
+    if (current_fb_->format == PIXFORMAT_JPEG) {
+        // OV2640 等传感器已输出 JPEG，直接透传，勿再经 image_to_jpeg 重编码
+        ESP_LOGI(TAG, "JPEG passthrough upload, len=%u", (unsigned)current_fb_->len);
+        if (!queue_jpeg_chunk(current_fb_->buf, current_fb_->len)) {
+            vQueueDelete(jpeg_queue);
+            throw std::runtime_error("Failed to copy JPEG frame");
         }
+        JpegChunk end_chunk = {.data = nullptr, .len = 0};
+        xQueueSend(jpeg_queue, &end_chunk, portMAX_DELAY);
+    } else {
+        encoder_thread_ = std::thread([this, jpeg_queue]() {
+            int64_t start_time = esp_timer_get_time();
+            uint16_t w = current_fb_->width;
+            uint16_t h = current_fb_->height;
+            v4l2_pix_fmt_t enc_fmt;
+            switch (current_fb_->format) {
+                case PIXFORMAT_RGB565:
+                    enc_fmt = V4L2_PIX_FMT_RGB565;
+                    break;
+                case PIXFORMAT_YUV422:
+                    enc_fmt = V4L2_PIX_FMT_YUYV;
+                    break;
+                case PIXFORMAT_YUV420:
+                    enc_fmt = V4L2_PIX_FMT_YUV420;
+                    break;
+                case PIXFORMAT_GRAYSCALE:
+                    enc_fmt = V4L2_PIX_FMT_GREY;
+                    break;
+                case PIXFORMAT_RGB888:
+                    enc_fmt = V4L2_PIX_FMT_RGB24;
+                    break;
+                default:
+                    ESP_LOGE(TAG, "Unsupported pixel format: %d", current_fb_->format);
+                    return;
+            }
 
-        bool ok = image_to_jpeg_cb(
-            jpeg_src_buf, jpeg_src_len, w, h, enc_fmt, 80,
-            [](void* arg, size_t index, const void* data, size_t len) -> size_t {
-                auto jpeg_queue = static_cast<QueueHandle_t>(arg);
-                JpegChunk chunk = {.data = nullptr, .len = len};
-                if (index == 0 && data != nullptr && len > 0) {
-                    chunk.data = (uint8_t*)heap_caps_aligned_alloc(
-                        16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                    if (chunk.data == nullptr) {
-                        ESP_LOGE(TAG, "Failed to allocate %zu bytes for JPEG chunk", len);
-                        chunk.len = 0;
+            uint8_t* jpeg_src_buf = current_fb_->buf;
+            size_t jpeg_src_len = current_fb_->len;
+            if (current_fb_->format == PIXFORMAT_RGB565 && encode_buf_ != nullptr) {
+                jpeg_src_buf = encode_buf_;
+                jpeg_src_len = encode_buf_size_;
+            }
+
+            bool ok = image_to_jpeg_cb(
+                jpeg_src_buf, jpeg_src_len, w, h, enc_fmt, 80,
+                [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+                    auto q = static_cast<QueueHandle_t>(arg);
+                    JpegChunk chunk = {.data = nullptr, .len = len};
+                    if (index == 0 && data != nullptr && len > 0) {
+                        chunk.data = (uint8_t*)heap_caps_aligned_alloc(
+                            16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                        if (chunk.data == nullptr) {
+                            ESP_LOGE(TAG, "Failed to allocate %u bytes for JPEG chunk",
+                                     (unsigned)len);
+                            chunk.len = 0;
+                        } else {
+                            memcpy(chunk.data, data, len);
+                        }
                     } else {
-                        memcpy(chunk.data, data, len);
+                        chunk.len = 0;
                     }
-                } else {
-                    chunk.len = 0;  // Sentinel or error
-                }
-                xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
-                return len;
-            },
-            jpeg_queue);
+                    xQueueSend(q, &chunk, portMAX_DELAY);
+                    return len;
+                },
+                jpeg_queue);
 
-        if (!ok) {
-            JpegChunk chunk = {.data = nullptr, .len = 0};
-            xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
-        }
-        int64_t end_time = esp_timer_get_time();
-        ESP_LOGI(TAG, "JPEG encoding time: %ld ms", int((end_time - start_time) / 1000));
-    });
+            if (!ok) {
+                JpegChunk err_chunk = {.data = nullptr, .len = 0};
+                xQueueSend(jpeg_queue, &err_chunk, portMAX_DELAY);
+            }
+            int64_t end_time = esp_timer_get_time();
+            ESP_LOGI(TAG, "JPEG encoding time: %ld ms", (long)((end_time - start_time) / 1000));
+        });
+    }
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);
@@ -319,7 +338,9 @@ std::string Esp32Camera::Explain(const std::string& question) {
     http->SetHeader("Transfer-Encoding", "chunked");
     if (!http->Open("POST", explain_url_)) {
         ESP_LOGE(TAG, "Failed to connect to explain URL");
-        encoder_thread_.join();
+        if (encoder_thread_.joinable()) {
+            encoder_thread_.join();
+        }
         JpegChunk chunk;
         while (xQueueReceive(jpeg_queue, &chunk, portMAX_DELAY) == pdPASS) {
             if (chunk.data != nullptr) {
@@ -365,7 +386,9 @@ std::string Esp32Camera::Explain(const std::string& question) {
         total_sent += chunk.len;
         heap_caps_free(chunk.data);
     }
-    encoder_thread_.join();
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
     vQueueDelete(jpeg_queue);
 
     if (!saw_terminator || total_sent == 0) {
