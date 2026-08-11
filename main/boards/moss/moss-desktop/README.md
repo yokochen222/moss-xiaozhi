@@ -15,6 +15,7 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
 - **开机画面**：固件嵌入 `main/assets/moss/emote-assets.bin`，播放 `start.eaf` 后进入代码滚动
 - **音频 Codec**：ES8311 + ES7210；功放 NS4150B，`CTRL` ← **GPIO48**
 - **按键**：BOOT（GPIO0）
+- **熄屏**：空闲（无唤醒/对话）30 秒后关背光+面板；唤醒词或按键对话时自动亮屏
 - **Moss MCP 外设**：灯条/面板灯/眼灯/电机/红外/API（引脚见 `config.h` 的 `MOSS_*`）
 - **外部 MQTT 文本唤醒**：`ExternalMqttClient` 订阅 `codesuccess` → 打开音频通道并 `SendTextChat`
 

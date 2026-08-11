@@ -9,6 +9,7 @@
 #include "mcp_server.h"
 #include "press_to_talk_mcp_tool.h"
 #include "moss_spi_lcd_display.h"
+#include "power_save_timer.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -20,6 +21,9 @@
 #include <wifi_manager.h>
 
 #define TAG "MossDesktopBoard"
+
+// Idle backlight/panel blank timeout (seconds). Wake word stays on (cpu_max_freq=-1).
+static constexpr int kScreenOffIdleSeconds = 30;
 
 // waveshare esp_lcd_st7735 default init lacks INVON for most 0.96" ST7735S modules.
 static void SendSt7735VendorInit(esp_lcd_panel_io_handle_t io) {
@@ -35,6 +39,31 @@ private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     PressToTalkMcpTool* press_to_talk_tool_ = nullptr;
+    PowerSaveTimer* power_save_timer_ = nullptr;
+
+    void InitializePowerSaveTimer() {
+        // cpu_max_freq=-1: only blank the screen, keep wake-word / audio running.
+        power_save_timer_ = new PowerSaveTimer(-1, kScreenOffIdleSeconds, -1);
+        power_save_timer_->OnEnterSleepMode([this]() {
+            ESP_LOGI(TAG, "Idle %ds -> screen off", kScreenOffIdleSeconds);
+            if (auto* moss = dynamic_cast<MossSpiLcdDisplay*>(GetDisplay())) {
+                moss->SetScreenOn(false);
+            } else {
+                GetDisplay()->SetPowerSaveMode(true);
+            }
+            GetBacklight()->SetBrightness(0);
+        });
+        power_save_timer_->OnExitSleepMode([this]() {
+            ESP_LOGI(TAG, "Wake -> screen on");
+            if (auto* moss = dynamic_cast<MossSpiLcdDisplay*>(GetDisplay())) {
+                moss->SetScreenOn(true);
+            } else {
+                GetDisplay()->SetPowerSaveMode(false);
+            }
+            GetBacklight()->RestoreBrightness();
+        });
+        power_save_timer_->SetEnabled(true);
+    }
 
     void InitializeI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -114,6 +143,9 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            if (power_save_timer_) {
+                power_save_timer_->WakeUp();
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiManager::GetInstance().IsConnected()) {
@@ -126,6 +158,9 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnPressDown([this]() {
+            if (power_save_timer_) {
+                power_save_timer_->WakeUp();
+            }
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
                 Application::GetInstance().StartListening();
             }
@@ -162,7 +197,8 @@ public:
         InitializeSt7735Display();
         InitializeButtons();
         InitializeTools();
-        GetBacklight()->SetBrightness(75);
+        InitializePowerSaveTimer();
+        GetBacklight()->RestoreBrightness();
     }
 
     AudioCodec* GetAudioCodec() override {
@@ -182,6 +218,14 @@ public:
     Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
+    }
+
+    // Application switches WiFi PS to PERFORMANCE when waking for dialogue.
+    void SetPowerSaveLevel(PowerSaveLevel level) override {
+        if (power_save_timer_ && level != PowerSaveLevel::LOW_POWER) {
+            power_save_timer_->WakeUp();
+        }
+        WifiBoard::SetPowerSaveLevel(level);
     }
 };
 

@@ -249,7 +249,7 @@ void MossSpiLcdDisplay::SetTheme(Theme* theme) {
 }
 
 void MossSpiLcdDisplay::SetPowerSaveMode(bool on) {
-    (void)on;
+    SetScreenOn(!on);
 }
 
 void MossSpiLcdDisplay::SetupUI() {
