@@ -96,9 +96,9 @@ bool FaceTracker::EnsureDetector() {
         ESP_LOGE(TAG, "Failed to allocate HumanFaceDetect");
         return false;
     }
-    // Slightly looser than default 0.5 to help indoor / side faces.
-    det->set_score_thr(0.35f, 0);
-    det->set_score_thr(0.35f, 1);
+    // Looser than default 0.5: distant / partial faces on OV2640 were often missed.
+    det->set_score_thr(0.25f, 0);
+    det->set_score_thr(0.25f, 1);
     detector_ = det;
     return true;
 }
@@ -157,18 +157,24 @@ void FaceTracker::FillPreviewFromFrame(const camera_fb_t* fb) {
     }
 }
 
-void FaceTracker::ApplyControl(int err_x, int err_y) {
+void FaceTracker::ApplyControl(int err_x, int err_y, int frame_w) {
+    // Normalize to QVGA-equivalent pixels so gain/deadzone stay stable across resolutions.
+    const float scale =
+        static_cast<float>(kRefFrameW) / static_cast<float>(std::max(frame_w, 1));
+    const float nerr_x = static_cast<float>(err_x) * scale;
+    const float nerr_y = static_cast<float>(err_y) * scale;
+
     int h = 0;
     int v = 0;
-    if (std::abs(err_x) >= kDeadzonePx) {
-        h = static_cast<int>(std::lround(static_cast<float>(err_x) * kGain));
+    if (std::fabs(nerr_x) >= static_cast<float>(kDeadzonePx)) {
+        h = static_cast<int>(std::lround(nerr_x * kGain));
         if (std::abs(h) < kMinStepsWhenMoving) {
             h = (h >= 0) ? kMinStepsWhenMoving : -kMinStepsWhenMoving;
         }
     }
-    if (std::abs(err_y) >= kDeadzonePx) {
+    if (std::fabs(nerr_y) >= static_cast<float>(kDeadzonePx)) {
         // Face below center → tilt down (−V). Invert here if hardware is opposite.
-        v = static_cast<int>(std::lround(static_cast<float>(-err_y) * kGain));
+        v = static_cast<int>(std::lround(-nerr_y * kGain));
         if (std::abs(v) < kMinStepsWhenMoving) {
             v = (v >= 0) ? kMinStepsWhenMoving : -kMinStepsWhenMoving;
         }
@@ -335,7 +341,7 @@ void FaceTracker::TaskLoop() {
         }
 
         if (has_face) {
-            ApplyControl(err_x, err_y);
+            ApplyControl(err_x, err_y, frame_w);
         }
 
         const int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;

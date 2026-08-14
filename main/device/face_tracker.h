@@ -15,7 +15,7 @@ class FaceTrackCamera {
 public:
     virtual ~FaceTrackCamera() = default;
 
-    // Switch sensor to RGB565 QVGA in PSRAM and keep streaming.
+    // Switch sensor to RGB565 (board chooses size, e.g. HVGA) in PSRAM and keep streaming.
     virtual bool AcquireTracking() = 0;
     // Deinit DVP; return to idle (JPEG on-demand path remains available).
     virtual void ReleaseTracking() = 0;
@@ -81,7 +81,7 @@ private:
     void TaskLoop();
     bool EnsureDetector();
     void ReleaseDetector();
-    void ApplyControl(int err_x, int err_y);
+    void ApplyControl(int err_x, int err_y, int frame_w);
     bool EnsurePreviewBuffer(int w, int h);
     void ReleasePreviewBuffer();
     void FillPreviewFromFrame(const camera_fb_t* fb);
@@ -103,13 +103,16 @@ private:
     int preview_w_ = 0;
     int preview_h_ = 0;
 
-    // ~60° HFOV / 320px → ~0.19°/px; half-step 4096/360 ≈ 11.4 steps/° → ~2.1 steps/px.
-    static constexpr int kDeadzonePx = 12;
-    static constexpr int kMaxStepsPerCmd = 256;
-    static constexpr int kMinStepsWhenMoving = 24;
-    static constexpr float kGain = 2.4f;
+    // Control tuned for 320-wide reference; ApplyControl scales err by frame_w/320.
+    // ~60° HFOV / 320px → ~0.19°/px; half-step ≈ 11.4 steps/° → ~2.1 steps/px theoretical.
+    // Use gain well below 2.1: detect+move latency (~350ms loop) otherwise overshoots hard.
+    static constexpr int kRefFrameW = 320;
+    static constexpr int kDeadzonePx = 18;
+    static constexpr int kMaxStepsPerCmd = 48;   // ~4.2°; keep move time << loop period
+    static constexpr int kMinStepsWhenMoving = 6;
+    static constexpr float kGain = 0.85f;
     static constexpr int kLoopPeriodMs = 350;  // ~2.8 FPS
-    static constexpr uint16_t kStepDelayMs = 2;
+    static constexpr uint16_t kStepDelayMs = 3;
     static constexpr int kPreviewW = 160;
     static constexpr int kPreviewH = 80;
 };

@@ -170,7 +170,8 @@ public:
 
         camera_config_t cfg = config_;
         cfg.pixel_format = PIXFORMAT_RGB565;
-        cfg.frame_size = FRAMESIZE_QVGA;
+        // HVGA (480x320): ~2.25x pixels vs QVGA — distant faces were ~24px on 320-wide.
+        cfg.frame_size = FRAMESIZE_HVGA;
         cfg.jpeg_quality = 12;
         cfg.fb_count = 1;
         cfg.fb_location = CAMERA_FB_IN_PSRAM;
@@ -181,7 +182,7 @@ public:
         const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
         const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         ESP_LOGI(TAG,
-                 "Tracking OV2640 start (RGB565 QVGA) free_int=%u free_dma=%u largest_dma=%u "
+                 "Tracking OV2640 start (RGB565 HVGA) free_int=%u free_dma=%u largest_dma=%u "
                  "free_psram=%u",
                  (unsigned)free_internal, (unsigned)free_dma, (unsigned)largest_dma,
                  (unsigned)free_spiram);
