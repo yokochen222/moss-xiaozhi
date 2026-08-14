@@ -82,6 +82,7 @@ private:
     bool EnsureDetector();
     void ReleaseDetector();
     void ApplyControl(int err_x, int err_y, int frame_w);
+    void ApplyIdleFollow();
     bool EnsurePreviewBuffer(int w, int h);
     void ReleasePreviewBuffer();
     void FillPreviewFromFrame(const camera_fb_t* fb);
@@ -103,16 +104,22 @@ private:
     int preview_w_ = 0;
     int preview_h_ = 0;
 
-    // Control tuned for 320-wide reference; ApplyControl scales err by frame_w/320.
-    // ~60° HFOV / 320px → ~0.19°/px; half-step ≈ 11.4 steps/° → ~2.1 steps/px theoretical.
-    // Use gain well below 2.1: detect+move latency (~350ms loop) otherwise overshoots hard.
+    // Smoothed error for continuous velocity follow (QVGA-normalized px).
+    float filt_err_x_ = 0.f;
+    float filt_err_y_ = 0.f;
+    int8_t last_h_dir_ = 0;
+    int8_t last_v_dir_ = 0;
+    uint16_t last_follow_delay_ms_ = 0;
+
+    // Control: continuous rate follow (not burst MoveAxes).
+    // Error normalized to 320-wide; EMA + deadzone → dir + step period (PTZ-like).
     static constexpr int kRefFrameW = 320;
-    static constexpr int kDeadzonePx = 18;
-    static constexpr int kMaxStepsPerCmd = 48;   // ~4.2°; keep move time << loop period
-    static constexpr int kMinStepsWhenMoving = 6;
-    static constexpr float kGain = 0.85f;
-    static constexpr int kLoopPeriodMs = 350;  // ~2.8 FPS
-    static constexpr uint16_t kStepDelayMs = 3;
+    static constexpr float kFiltAlpha = 0.30f;
+    static constexpr int kDeadzonePx = 14;
+    static constexpr float kErrForMaxSpeed = 70.f;  // normalized px → fastest crawl
+    static constexpr uint16_t kMinStepDelayMs = 4;  // max angular speed
+    static constexpr uint16_t kMaxStepDelayMs = 14; // near-center crawl
+    static constexpr int kLoopPeriodMs = 50;        // detect dominates; keep yield small
     static constexpr int kPreviewW = 160;
     static constexpr int kPreviewH = 80;
 };

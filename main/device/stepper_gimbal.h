@@ -27,6 +27,12 @@ public:
     // 双轴同时：+H=右 -H=左，+V=上 -V=下；两轴非零时同拍推进，短轴结束后长轴继续。
     bool MoveAxes(int16_t h_steps, int16_t v_steps, StepMode mode = StepMode::Half,
                   uint16_t delay_ms = 2);
+
+    // Continuous velocity follow (face track / PTZ): dirs are -1/0/+1; delay_ms is step period.
+    // Updates are live — no stop/restart between frames. Both dirs 0 → coils off, task stays warm.
+    bool SetFollowRates(int8_t h_dir, int8_t v_dir, uint16_t delay_ms = 4,
+                        StepMode mode = StepMode::Half);
+
     // Hold a raw 595 byte for hold_ms (for DMM probing). Coils off afterwards; Stop() cancels
     // early.
     bool HoldPattern(uint8_t pattern, uint16_t hold_ms = 2000);
@@ -52,6 +58,10 @@ private:
     volatile bool moving_;
     volatile bool holding_;
     volatile bool stop_requested_;
+    volatile bool follow_mode_;
+    volatile int8_t follow_h_dir_;
+    volatile int8_t follow_v_dir_;
+    volatile uint16_t follow_delay_ms_;
 
     StepMode mode_;
     uint16_t delay_ms_;
@@ -66,8 +76,10 @@ private:
     void AllCoilsOffLocked();
     uint16_t ClampDelay(uint16_t delay_ms) const;
     bool StartMoveTask(int16_t h_steps, int16_t v_steps, StepMode mode, uint16_t delay_ms);
+    bool EnsureFollowTask(StepMode mode);
     bool WaitMoveTaskExit(int max_wait_slices = 100);
 
     static void DirDeltas(GimbalDir dir, int& h_delta, int& v_delta);
     static void MoveTask(void* arg);
+    static void FollowTask(void* arg);
 };

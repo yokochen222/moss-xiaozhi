@@ -44,7 +44,13 @@ bool FaceTracker::PauseForExternalCameraUse() {
         paused_ = true;
         resume_after_photo_ = true;
         status_.paused = true;
+        filt_err_x_ = 0.f;
+        filt_err_y_ = 0.f;
+        last_h_dir_ = 0;
+        last_v_dir_ = 0;
+        last_follow_delay_ms_ = 0;
     }
+    StepperGimbalDevice::GetInstance().SetFollowRates(0, 0, kMaxStepDelayMs);
     for (int i = 0; i < 40; ++i) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -158,41 +164,79 @@ void FaceTracker::FillPreviewFromFrame(const camera_fb_t* fb) {
 }
 
 void FaceTracker::ApplyControl(int err_x, int err_y, int frame_w) {
-    // Normalize to QVGA-equivalent pixels so gain/deadzone stay stable across resolutions.
+    // Normalize to QVGA-equivalent pixels so thresholds stay stable across resolutions.
     const float scale =
         static_cast<float>(kRefFrameW) / static_cast<float>(std::max(frame_w, 1));
     const float nerr_x = static_cast<float>(err_x) * scale;
     const float nerr_y = static_cast<float>(err_y) * scale;
 
-    int h = 0;
-    int v = 0;
-    if (std::fabs(nerr_x) >= static_cast<float>(kDeadzonePx)) {
-        h = static_cast<int>(std::lround(nerr_x * kGain));
-        if (std::abs(h) < kMinStepsWhenMoving) {
-            h = (h >= 0) ? kMinStepsWhenMoving : -kMinStepsWhenMoving;
-        }
+    filt_err_x_ = kFiltAlpha * nerr_x + (1.f - kFiltAlpha) * filt_err_x_;
+    filt_err_y_ = kFiltAlpha * nerr_y + (1.f - kFiltAlpha) * filt_err_y_;
+
+    int8_t h_dir = 0;
+    int8_t v_dir = 0;
+    if (std::fabs(filt_err_x_) >= static_cast<float>(kDeadzonePx)) {
+        h_dir = (filt_err_x_ > 0.f) ? 1 : -1;
     }
-    if (std::fabs(nerr_y) >= static_cast<float>(kDeadzonePx)) {
-        // Face below center → tilt down (−V). Invert here if hardware is opposite.
-        v = static_cast<int>(std::lround(-nerr_y * kGain));
-        if (std::abs(v) < kMinStepsWhenMoving) {
-            v = (v >= 0) ? kMinStepsWhenMoving : -kMinStepsWhenMoving;
-        }
+    if (std::fabs(filt_err_y_) >= static_cast<float>(kDeadzonePx)) {
+        // Face below center → tilt down (−V).
+        v_dir = (filt_err_y_ > 0.f) ? -1 : 1;
     }
-    h = std::clamp(h, -kMaxStepsPerCmd, kMaxStepsPerCmd);
-    v = std::clamp(v, -kMaxStepsPerCmd, kMaxStepsPerCmd);
-    if (h == 0 && v == 0) {
-        return;
+
+    const float mag = std::max(std::fabs(filt_err_x_), std::fabs(filt_err_y_));
+    uint16_t delay_ms = kMaxStepDelayMs;
+    if (h_dir != 0 || v_dir != 0) {
+        float t = (mag - static_cast<float>(kDeadzonePx)) /
+                  (kErrForMaxSpeed - static_cast<float>(kDeadzonePx));
+        t = std::clamp(t, 0.f, 1.f);
+        delay_ms = static_cast<uint16_t>(std::lround(
+            static_cast<float>(kMaxStepDelayMs) -
+            t * static_cast<float>(kMaxStepDelayMs - kMinStepDelayMs)));
+        delay_ms = std::clamp(delay_ms, kMinStepDelayMs, kMaxStepDelayMs);
     }
+
+    const bool changed =
+        (h_dir != last_h_dir_) || (v_dir != last_v_dir_) || (delay_ms != last_follow_delay_ms_);
+    last_h_dir_ = h_dir;
+    last_v_dir_ = v_dir;
+    last_follow_delay_ms_ = delay_ms;
+
     auto& gimbal = StepperGimbalDevice::GetInstance();
-    if (gimbal.IsMoving()) {
+    if (!changed) {
+        // Keep follow task alive if it was stopped externally.
+        if (h_dir != 0 || v_dir != 0) {
+            gimbal.SetFollowRates(h_dir, v_dir, delay_ms, StepMode::Half);
+        }
         return;
     }
-    const float deg_h = static_cast<float>(h) * 360.0f / 4096.0f;
-    const float deg_v = static_cast<float>(v) * 360.0f / 4096.0f;
-    ESP_LOGI(TAG, "Gimbal cmd h=%d(%.1fdeg) v=%d(%.1fdeg) err=(%d,%d)", h, deg_h, v, deg_v, err_x,
-             err_y);
-    gimbal.MoveAxes(static_cast<int16_t>(h), static_cast<int16_t>(v), StepMode::Half, kStepDelayMs);
+
+    if (h_dir == 0 && v_dir == 0) {
+        ESP_LOGI(TAG, "Follow idle filt=(%.0f,%.0f)", filt_err_x_, filt_err_y_);
+        gimbal.SetFollowRates(0, 0, kMaxStepDelayMs);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Follow h=%d v=%d delay=%ums filt=(%.0f,%.0f) err=(%d,%d)", (int)h_dir,
+             (int)v_dir, (unsigned)delay_ms, filt_err_x_, filt_err_y_, err_x, err_y);
+    gimbal.SetFollowRates(h_dir, v_dir, delay_ms, StepMode::Half);
+}
+
+void FaceTracker::ApplyIdleFollow() {
+    filt_err_x_ *= (1.f - kFiltAlpha);
+    filt_err_y_ *= (1.f - kFiltAlpha);
+    if (std::fabs(filt_err_x_) < 1.f) {
+        filt_err_x_ = 0.f;
+    }
+    if (std::fabs(filt_err_y_) < 1.f) {
+        filt_err_y_ = 0.f;
+    }
+    if (last_h_dir_ == 0 && last_v_dir_ == 0) {
+        return;
+    }
+    last_h_dir_ = 0;
+    last_v_dir_ = 0;
+    last_follow_delay_ms_ = 0;
+    StepperGimbalDevice::GetInstance().SetFollowRates(0, 0, kMaxStepDelayMs);
 }
 
 void FaceTracker::TaskEntry(void* arg) { static_cast<FaceTracker*>(arg)->TaskLoop(); }
@@ -342,6 +386,8 @@ void FaceTracker::TaskLoop() {
 
         if (has_face) {
             ApplyControl(err_x, err_y, frame_w);
+        } else {
+            ApplyIdleFollow();
         }
 
         const int64_t elapsed_ms = (esp_timer_get_time() - t0) / 1000;
@@ -363,11 +409,17 @@ void FaceTracker::TaskLoop() {
         running_ = false;
         paused_ = false;
         frame_in_flight_ = false;
+        filt_err_x_ = 0.f;
+        filt_err_y_ = 0.f;
+        last_h_dir_ = 0;
+        last_v_dir_ = 0;
+        last_follow_delay_ms_ = 0;
         status_.running = false;
         status_.paused = false;
         status_.has_face = false;
         task_ = nullptr;
     }
+    StepperGimbalDevice::GetInstance().Stop();
     ESP_LOGI(TAG, "Track task exit");
     vTaskDelete(nullptr);
 }
@@ -395,6 +447,11 @@ bool FaceTracker::Start() {
         stop_requested_ = false;
         paused_ = false;
         resume_after_photo_ = false;
+        filt_err_x_ = 0.f;
+        filt_err_y_ = 0.f;
+        last_h_dir_ = 0;
+        last_v_dir_ = 0;
+        last_follow_delay_ms_ = 0;
         status_ = FaceTrackerStatus{};
         status_.running = true;
         running_ = true;

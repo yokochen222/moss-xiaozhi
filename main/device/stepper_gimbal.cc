@@ -51,6 +51,10 @@ StepperGimbalDevice::StepperGimbalDevice()
       moving_(false),
       holding_(false),
       stop_requested_(false),
+      follow_mode_(false),
+      follow_h_dir_(0),
+      follow_v_dir_(0),
+      follow_delay_ms_(DEFAULT_DELAY_MS),
       mode_(StepMode::Half),
       delay_ms_(DEFAULT_DELAY_MS),
       h_steps_(0),
@@ -120,13 +124,16 @@ bool StepperGimbalDevice::StartMoveTask(int16_t h_steps, int16_t v_steps, StepMo
                                         uint16_t delay_ms) {
     delay_ms = ClampDelay(delay_ms);
 
-    // Stop any in-flight move / hold without holding the mutex across the wait.
+    // Stop any in-flight move / follow / hold without holding the mutex across the wait.
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!EnsureInitialized()) {
             return false;
         }
         holding_ = false;
+        follow_mode_ = false;
+        follow_h_dir_ = 0;
+        follow_v_dir_ = 0;
         if (moving_ || task_handle_ != nullptr) {
             stop_requested_ = true;
         }
@@ -139,6 +146,7 @@ bool StepperGimbalDevice::StartMoveTask(int16_t h_steps, int16_t v_steps, StepMo
     AllCoilsOffLocked();
     moving_ = false;
     holding_ = false;
+    follow_mode_ = false;
     stop_requested_ = false;
 
     mode_ = mode;
@@ -169,6 +177,73 @@ bool StepperGimbalDevice::StartMoveTask(int16_t h_steps, int16_t v_steps, StepMo
                  static_cast<unsigned>(configTICK_RATE_HZ),
                  static_cast<unsigned>(1000 / configTICK_RATE_HZ));
     }
+    return true;
+}
+
+bool StepperGimbalDevice::EnsureFollowTask(StepMode mode) {
+    if (follow_mode_ && task_handle_ != nullptr && moving_) {
+        mode_ = mode;
+        return true;
+    }
+
+    // Tear down burst MoveTask / hold if any.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!EnsureInitialized()) {
+            return false;
+        }
+        holding_ = false;
+        if (moving_ || task_handle_ != nullptr) {
+            stop_requested_ = true;
+            follow_mode_ = false;
+        }
+    }
+    WaitMoveTaskExit();
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    AllCoilsOffLocked();
+    stop_requested_ = false;
+    holding_ = false;
+    mode_ = mode;
+    follow_mode_ = true;
+    moving_ = true;
+
+    BaseType_t result =
+        xTaskCreatePinnedToCore(FollowTask, "GimbalFollow", 3072, this, 2, &task_handle_, 1);
+    if (result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create follow task");
+        moving_ = false;
+        follow_mode_ = false;
+        task_handle_ = nullptr;
+        AllCoilsOffLocked();
+        return false;
+    }
+    ESP_LOGI(TAG, "Follow task started (mode=%s)", mode == StepMode::Full ? "full" : "half");
+    return true;
+}
+
+bool StepperGimbalDevice::SetFollowRates(int8_t h_dir, int8_t v_dir, uint16_t delay_ms,
+                                         StepMode mode) {
+    auto clamp_dir = [](int8_t d) -> int8_t {
+        if (d > 0) {
+            return 1;
+        }
+        if (d < 0) {
+            return -1;
+        }
+        return 0;
+    };
+    h_dir = clamp_dir(h_dir);
+    v_dir = clamp_dir(v_dir);
+    delay_ms = ClampDelay(delay_ms);
+
+    if (!EnsureFollowTask(mode)) {
+        return false;
+    }
+
+    follow_h_dir_ = h_dir;
+    follow_v_dir_ = v_dir;
+    follow_delay_ms_ = delay_ms;
     return true;
 }
 
@@ -264,8 +339,11 @@ bool StepperGimbalDevice::Stop() {
         if (!EnsureInitialized()) {
             return false;
         }
-        // 始终置位：打断 MoveTask 延时，也打断 HoldPattern 等待。
+        // 始终置位：打断 MoveTask/FollowTask 延时，也打断 HoldPattern 等待。
         stop_requested_ = true;
+        follow_h_dir_ = 0;
+        follow_v_dir_ = 0;
+        follow_mode_ = false;
         // hold 期间立刻断电，不必等 HoldPattern 循环醒过来。
         if (holding_) {
             holding_ = false;
@@ -284,6 +362,7 @@ bool StepperGimbalDevice::Stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     moving_ = false;
     holding_ = false;
+    follow_mode_ = false;
     stop_requested_ = false;
     AllCoilsOffLocked();
     ESP_LOGI(TAG, "Stopped (coils off)");
@@ -417,10 +496,78 @@ void StepperGimbalDevice::MoveTask(void* arg) {
         std::lock_guard<std::mutex> lock(self->mutex_);
         self->AllCoilsOffLocked();
         self->moving_ = false;
+        self->follow_mode_ = false;
         self->stop_requested_ = false;
         self->task_handle_ = nullptr;
     }
     ESP_LOGI(TAG, "MoveTask done (coils off)");
+    vTaskDelete(nullptr);
+}
+
+void StepperGimbalDevice::FollowTask(void* arg) {
+    auto* self = static_cast<StepperGimbalDevice*>(arg);
+    ESP_LOGI(TAG, "FollowTask running on core %d", xPortGetCoreID());
+
+    bool coils_idle = true;
+    while (!self->stop_requested_ && self->follow_mode_) {
+        const int8_t h_dir = self->follow_h_dir_;
+        const int8_t v_dir = self->follow_v_dir_;
+        const uint16_t delay_ms = self->follow_delay_ms_;
+        const bool half = (self->mode_ == StepMode::Half);
+
+        if (h_dir == 0 && v_dir == 0) {
+            if (!coils_idle) {
+                std::lock_guard<std::mutex> lock(self->mutex_);
+                self->AllCoilsOffLocked();
+                coils_idle = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        if (h_dir != 0) {
+            self->h_idx_ += h_dir;
+        }
+        if (v_dir != 0) {
+            self->v_idx_ += v_dir;
+        }
+
+        uint8_t h_mask = 0;
+        uint8_t v_mask = 0;
+        if (h_dir != 0) {
+            h_mask = half ? stepper_phase::HalfStepH(self->h_idx_)
+                          : stepper_phase::FullStepH(self->h_idx_);
+        }
+        if (v_dir != 0) {
+            v_mask = half ? stepper_phase::HalfStepV(self->v_idx_)
+                          : stepper_phase::FullStepV(self->v_idx_);
+        }
+        const uint8_t out = static_cast<uint8_t>(h_mask | v_mask);
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            if (self->stop_requested_ || !self->follow_mode_) {
+                break;
+            }
+            self->shift_register_->SetOutputs(out);
+            coils_idle = false;
+        }
+
+        if (StepDelayMsInterruptible(delay_ms, &self->stop_requested_)) {
+            break;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        self->AllCoilsOffLocked();
+        self->moving_ = false;
+        self->follow_mode_ = false;
+        self->follow_h_dir_ = 0;
+        self->follow_v_dir_ = 0;
+        self->stop_requested_ = false;
+        self->task_handle_ = nullptr;
+    }
+    ESP_LOGI(TAG, "FollowTask exit (coils off)");
     vTaskDelete(nullptr);
 }
 
