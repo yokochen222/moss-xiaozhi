@@ -189,6 +189,8 @@ void FaceTracker::ApplyControl(int err_x, int err_y, int frame_w) {
         float t = (mag - static_cast<float>(kDeadzonePx)) /
                   (kErrForMaxSpeed - static_cast<float>(kDeadzonePx));
         t = std::clamp(t, 0.f, 1.f);
+        // Mild ease (t^1.5): faster mid-range than pure t^2, still brakes near center.
+        t = t * std::sqrt(t);
         delay_ms = static_cast<uint16_t>(std::lround(
             static_cast<float>(kMaxStepDelayMs) -
             t * static_cast<float>(kMaxStepDelayMs - kMinStepDelayMs)));

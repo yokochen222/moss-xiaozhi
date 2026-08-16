@@ -112,14 +112,14 @@ private:
     uint16_t last_follow_delay_ms_ = 0;
 
     // Control: continuous rate follow (not burst MoveAxes).
-    // Error normalized to 320-wide; EMA + deadzone → dir + step period (PTZ-like).
+    // Detect latency ~0.6s → ease near center; keep far-field snappy.
     static constexpr int kRefFrameW = 320;
     static constexpr float kFiltAlpha = 0.30f;
-    static constexpr int kDeadzonePx = 14;
-    static constexpr float kErrForMaxSpeed = 70.f;  // normalized px → fastest crawl
-    static constexpr uint16_t kMinStepDelayMs = 4;  // max angular speed
-    static constexpr uint16_t kMaxStepDelayMs = 14; // near-center crawl
-    static constexpr int kLoopPeriodMs = 50;        // detect dominates; keep yield small
+    static constexpr int kDeadzonePx = 15;
+    static constexpr float kErrForMaxSpeed = 60.f;
+    static constexpr uint16_t kMinStepDelayMs = 2;
+    static constexpr uint16_t kMaxStepDelayMs = 7;
+    static constexpr int kLoopPeriodMs = 50;
     static constexpr int kPreviewW = 160;
     static constexpr int kPreviewH = 80;
 };
