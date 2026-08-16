@@ -42,7 +42,8 @@ static bool should_show_dialog(uint8_t priority);
 static void calc_dialog_box(int dst_w, int dst_h, int* out_x, int* out_y, int* out_w, int* out_h);
 static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
                             int box_x, int box_y, int box_w, int box_h,
-                            uint16_t color, const char* title, const char* body);
+                            uint16_t color, const char* title, const char* body,
+                            uint8_t style, int64_t now_us);
 static void copy_dialog_snapshot(const struct DialogState* src, struct DialogState* dst);
 
 // 配色 (RGB565)
@@ -364,7 +365,8 @@ private:
                                                bx, by, bw, bh,
                                                dialog_snap.color,
                                                dialog_snap.title,
-                                               dialog_snap.body[0] ? dialog_snap.body : nullptr);
+                                               dialog_snap.body[0] ? dialog_snap.body : nullptr,
+                                               dialog_snap.style, now_us);
                             }
                         }
                     }
@@ -447,35 +449,127 @@ void stop_code_scroll_loop() {
 static int draw_text(uint16_t* dst, int dst_w, int dst_h,
                      int x_left, int y_baseline,
                      const char* s, uint16_t color);
+static int glyph_advance(uint32_t cp);
+static int draw_codepoint(uint16_t* dst, int dst_w, int dst_h,
+                          int x_left, int y_baseline,
+                          uint32_t cp, uint16_t color);
 
-static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
-                            int box_x, int box_y, int box_w, int box_h,
-                            uint16_t color,
-                            const char* title, const char* body) {
-    (void)title;
-    (void)body;
+static inline uint16_t swap_rgb565(uint16_t c) {
+    return (uint16_t)((c >> 8) | (c << 8));
+}
 
-    static constexpr uint16_t kBg     = 0x0000;
-    static constexpr uint16_t kFrame  = 0xFFFF;
-    static constexpr uint16_t kInner  = 0x632C;
-    static constexpr uint16_t kCorner = 0xFFFF;
+static inline void plot_rgb565(uint16_t* dst, int dst_w, int dst_h,
+                               int x, int y, uint16_t c) {
+    if (x < 0 || x >= dst_w || y < 0 || y >= dst_h) return;
+    dst[y * dst_w + x] = swap_rgb565(c);
+}
 
-    // 不透明黑色背景
+// 右半区音谱线: 沿中线上下对称的密刺波形 (不读麦克风, 时间驱动包络).
+static uint32_t uhash(uint32_t x) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h,
+                                 int x0, int y0, int w, int h, int mid_y,
+                                 uint16_t color, uint32_t t) {
+    if (w < 4 || h < 6) return;
+    int max_amp = mid_y - y0;
+    int down = (y0 + h - 1) - mid_y;
+    if (down < max_amp) max_amp = down;
+    if (max_amp < 2) max_amp = 2;
+
+    for (int i = 0; i < w; i++) {
+        int env = 0;
+        int period = w;
+        int offset = (int)((t / 2) % (uint32_t)period);
+        for (int k = 0; k < 6; k++) {
+            int cx = (k * period / 6 + offset) % period;
+            int dist = i - cx;
+            if (dist < 0) dist = -dist;
+            int wrap = period - dist;
+            if (wrap < dist) dist = wrap;
+            int radius = 4 + (k % 3) * 2;
+            if (dist >= radius) continue;
+            int bump = (max_amp * (radius - dist) * (72 + k * 7)) / (radius * 100);
+            if (bump > env) env = bump;
+        }
+
+        uint32_t n = uhash((uint32_t)i * 131u + t * 7u);
+        int jagged = 28 + (int)(n % 100);
+        int floor_n = 1 + (int)((n >> 8) % 3);
+        int amp = floor_n + env * jagged / 128;
+        if (amp > max_amp) amp = max_amp;
+        if (amp < 1) amp = 1;
+
+        int x = x0 + i;
+        int y1 = mid_y - amp;
+        int y2 = mid_y + amp;
+        if (y1 < y0) y1 = y0;
+        if (y2 > y0 + h - 1) y2 = y0 + h - 1;
+        for (int y = y1; y <= y2; y++) {
+            plot_rgb565(dst, dst_w, dst_h, x, y, color);
+        }
+    }
+}
+
+// rgba(0, 26, 47, 202/255) 叠在已画好的代码滚动上.
+static void fill_signal_bg(uint16_t* dst, int dst_w, int dst_h,
+                           int box_x, int box_y, int box_w, int box_h) {
+    static constexpr int kSrcR = 0;
+    static constexpr int kSrcG = 26;
+    static constexpr int kSrcB = 47;
+    static constexpr int kA = 202;
+    static constexpr int kIa = 255 - kA;
+
     for (int row = 0; row < box_h; row++) {
         int dy = box_y + row;
         if (dy < 0 || dy >= dst_h) continue;
         int x0 = box_x < 0 ? 0 : box_x;
         int x1 = box_x + box_w;
         if (x1 > dst_w) x1 = dst_w;
-        if (x1 <= x0) continue;
-        std::memset(dst + dy * dst_w + x0, 0, (size_t)(x1 - x0) * sizeof(uint16_t));
+        for (int x = x0; x < x1; x++) {
+            uint16_t packed = swap_rgb565(dst[dy * dst_w + x]);
+            int br = ((packed >> 11) & 0x1F) * 255 / 31;
+            int bg = ((packed >> 5) & 0x3F) * 255 / 63;
+            int bb = (packed & 0x1F) * 255 / 31;
+            int r = (kSrcR * kA + br * kIa) / 255;
+            int g = (kSrcG * kA + bg * kIa) / 255;
+            int b = (kSrcB * kA + bb * kIa) / 255;
+            uint16_t out = (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+            dst[dy * dst_w + x] = swap_rgb565(out);
+        }
     }
-    (void)kBg;
+}
+
+static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
+                            int box_x, int box_y, int box_w, int box_h,
+                            uint16_t color,
+                            const char* title, const char* body,
+                            uint8_t style, int64_t now_us) {
+    static constexpr uint16_t kFrame  = 0xFFFF;
+    static constexpr uint16_t kInner  = 0x632C;
+    static constexpr uint16_t kCorner = 0xFFFF;
+    const bool signal = (style == kDialogStyleSignal);
+
+    if (signal) {
+        fill_signal_bg(dst, dst_w, dst_h, box_x, box_y, box_w, box_h);
+    } else {
+        for (int row = 0; row < box_h; row++) {
+            int dy = box_y + row;
+            if (dy < 0 || dy >= dst_h) continue;
+            int x0 = box_x < 0 ? 0 : box_x;
+            int x1 = box_x + box_w;
+            if (x1 > dst_w) x1 = dst_w;
+            if (x1 <= x0) continue;
+            std::memset(dst + dy * dst_w + x0, 0, (size_t)(x1 - x0) * sizeof(uint16_t));
+        }
+    }
 
     auto plot = [&](int x, int y, uint16_t c) {
-        if (x < 0 || x >= dst_w || y < 0 || y >= dst_h) return;
-        // RGB565 LE -> panel 大端: swap bytes
-        dst[y * dst_w + x] = (uint16_t)((c >> 8) | (c << 8));
+        plot_rgb565(dst, dst_w, dst_h, x, y, c);
     };
 
     auto hline_real = [&](int x0, int x1, int y, uint16_t c) {
@@ -539,6 +633,59 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
         for (int dx = 0; dx < 3; dx++) {
             plot(dot_x + dx, dot_y + dy, color);
         }
+    }
+
+    if (signal) {
+        const char* label = (title != nullptr && title[0] != '\0') ? title : "检测信号";
+        int mid_y = box_y + box_h / 2;
+
+        uint32_t cps[8];
+        int ncp = 0;
+        int si = 0;
+        while (label[si] != '\0' && ncp < 8) {
+            uint32_t cp = utf8_next(label, &si);
+            if (cp == 0) break;
+            cps[ncp++] = cp;
+        }
+
+        static constexpr int kCharsPerLine = 2;
+        static constexpr int kLineStride = 14;
+        int nlines = (ncp + kCharsPerLine - 1) / kCharsPerLine;
+        if (nlines < 1) nlines = 1;
+
+        int text_col_w = 0;
+        for (int ln = 0; ln < nlines; ln++) {
+            int a = ln * kCharsPerLine;
+            int b = a + kCharsPerLine;
+            if (b > ncp) b = ncp;
+            int lw = 0;
+            for (int k = a; k < b; k++) lw += glyph_advance(cps[k]);
+            if (lw > text_col_w) text_col_w = lw;
+        }
+
+        // 两行字形绕弹窗水平中线对称: 行距 14, 第一行 baseline = mid_y - 11
+        int text_x = box_x + 5;
+        int b1 = mid_y - (nlines * kLineStride) / 2 + 3;
+        for (int ln = 0; ln < nlines; ln++) {
+            int a = ln * kCharsPerLine;
+            int b = a + kCharsPerLine;
+            if (b > ncp) b = ncp;
+            int x = text_x;
+            int baseline = b1 + ln * kLineStride;
+            for (int k = a; k < b; k++) {
+                x += draw_codepoint(dst, dst_w, dst_h, x, baseline, cps[k], color);
+            }
+        }
+
+        int wx = text_x + text_col_w + 4;
+        int wy = box_y + 4;
+        int ww = box_x + box_w - 8 - wx;
+        int wh = box_h - 8;
+        if (ww > 4 && wh > 4) {
+            uint32_t t = (uint32_t)(now_us / 8000);
+            draw_signal_waveform(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y, color, t);
+        }
+        return;
     }
 
     // 标题
@@ -775,32 +922,81 @@ static int draw_text(uint16_t* dst, int dst_w, int dst_h,
     while (s[i] != '\0') {
         uint32_t cp = utf8_next(s, &i);
         if (cp == 0) break;
-        if (cp < 128) {
-            // ASCII: 用 5x7 表, 字符顶部 = y_baseline - 6
-            int y_top = y_baseline - 6;
-            draw_ascii_char(dst, dst_w, dst_h, x, y_top, (unsigned char)cp, color);
-            x += kAsciiCharW;
-        } else {
-            // CJK / 非 ASCII: 通过 lvgl font 查 packed bitmap
-            lv_font_glyph_dsc_t g_dsc;
-            if (lv_font_get_glyph_dsc(s_font, &g_dsc, cp, 0)) {
-                draw_cjk_glyph(dst, dst_w, dst_h, x, y_baseline, &g_dsc, color);
-                // dsc.adv_w 是像素 (lvgl 已从 fixed-point >>8)
-                int adv = (int)g_dsc.adv_w;
-                if (adv <= 0) adv = 14;  // fallback
-                x += adv;
-            } else {
-                // 字形缺失: 用 '?' 占位
-                int y_top = y_baseline - 6;
-                draw_ascii_char(dst, dst_w, dst_h, x, y_top, '?', color);
-                x += kAsciiCharW;
-                if (cp == 0xFFFD) {
-                    // skip remaining continuation bytes (already consumed)
-                }
-            }
-        }
+        x += draw_codepoint(dst, dst_w, dst_h, x, y_baseline, cp, color);
     }
     return x - x_left;
+}
+
+// font_puhui_basic_14_1 子集缺 U+53F7「号」, 补 12x13 点阵 (与 14px CJK 度量对齐).
+static constexpr int kHaoBoxW = 12;
+static constexpr int kHaoBoxH = 13;
+static constexpr int kHaoAdv = 13;
+static constexpr int kHaoOfsX = 1;
+static constexpr int kHaoOfsY = -2;
+static const uint8_t kHaoBitmap[] = {
+    0x3f, 0xc2, 0x04, 0x20, 0x43, 0xfc, 0x00, 0x0f, 0xff, 0x10,
+    0x01, 0x00, 0x10, 0x40, 0x04, 0x00, 0x40, 0x04, 0x07, 0x80,
+};
+
+static void draw_packed_1bpp(uint16_t* dst, int dst_w, int dst_h,
+                             int x_left, int y_baseline,
+                             const uint8_t* packed, int box_w, int box_h,
+                             int ofs_x, int ofs_y, uint16_t color) {
+    if (packed == nullptr || box_w <= 0 || box_h <= 0) return;
+    uint16_t be = (uint16_t)((color >> 8) | (color << 8));
+    int y_top = y_baseline + ofs_y;
+    int x_off = x_left + ofs_x;
+    int total_bits = box_w * box_h;
+    for (int row = 0; row < box_h; row++) {
+        int dy = y_top + row;
+        if (dy < 0 || dy >= dst_h) continue;
+        for (int col = 0; col < box_w; col++) {
+            int dx = x_off + col;
+            if (dx < 0 || dx >= dst_w) continue;
+            int bit_offset = row * box_w + col;
+            if (bit_offset >= total_bits) continue;
+            uint8_t bit = (packed[bit_offset >> 3] >> (7 - (bit_offset & 7))) & 1;
+            if (bit == 0) continue;
+            dst[dy * dst_w + dx] = be;
+        }
+    }
+}
+
+static int glyph_advance(uint32_t cp) {
+    if (cp == 0x53F7) return kHaoAdv;
+    if (cp < 128) return kAsciiCharW;
+    lv_font_glyph_dsc_t g_dsc;
+    if (lv_font_get_glyph_dsc(s_font, &g_dsc, cp, 0)) {
+        int adv = (int)g_dsc.adv_w;
+        if (adv <= 0) adv = 14;
+        return adv;
+    }
+    return kAsciiCharW;
+}
+
+static int draw_codepoint(uint16_t* dst, int dst_w, int dst_h,
+                          int x_left, int y_baseline,
+                          uint32_t cp, uint16_t color) {
+    if (cp == 0x53F7) {
+        draw_packed_1bpp(dst, dst_w, dst_h, x_left, y_baseline,
+                         kHaoBitmap, kHaoBoxW, kHaoBoxH, kHaoOfsX, kHaoOfsY, color);
+        return kHaoAdv;
+    }
+    if (cp < 128) {
+        int y_top = y_baseline - 6;
+        draw_ascii_char(dst, dst_w, dst_h, x_left, y_top, (unsigned char)cp, color);
+        return kAsciiCharW;
+    }
+    lv_font_glyph_dsc_t g_dsc;
+    if (lv_font_get_glyph_dsc(s_font, &g_dsc, cp, 0)) {
+        draw_cjk_glyph(dst, dst_w, dst_h, x_left, y_baseline, &g_dsc, color);
+        int adv = (int)g_dsc.adv_w;
+        if (adv <= 0) adv = 14;
+        return adv;
+    }
+    int y_top = y_baseline - 6;
+    draw_ascii_char(dst, dst_w, dst_h, x_left, y_top, '?', color);
+    return kAsciiCharW;
 }
 
 // 根据 priority 确定是否弹窗 (kPriorityState=1 以下的静默状态不弹)
@@ -857,6 +1053,7 @@ static void copy_dialog_snapshot(const DialogState* src, DialogState* dst) {
     if (src == nullptr) {
         dst->active = false;
         dst->priority = 0;
+        dst->style = kDialogStyleDefault;
         dst->title[0] = '\0';
         dst->body[0]  = '\0';
         dst->color = 0xFFFF;
@@ -866,6 +1063,7 @@ static void copy_dialog_snapshot(const DialogState* src, DialogState* dst) {
     portENTER_CRITICAL(&s_dialog_spinlock);
     dst->active = src->active;
     dst->priority = src->priority;
+    dst->style = src->style;
     dst->color  = src->color;
     dst->show_until_tick = src->show_until_tick;
     std::memcpy(dst->title, src->title, sizeof(dst->title));
@@ -896,6 +1094,10 @@ void set_dialog_state(DialogState* state, bool active, const char* title, uint16
 
 // 7 参数版本: priority + body + timeout (ms, 0=无超时, 默认 DIALOG_DEFAULT_TIMEOUT_MS).
 void set_dialog_state(DialogState* state, bool active, const char* title, uint16_t color, uint8_t priority, const char* body, int timeout_ms) {
+    set_dialog_state(state, active, title, color, priority, body, timeout_ms, kDialogStyleDefault);
+}
+
+void set_dialog_state(DialogState* state, bool active, const char* title, uint16_t color, uint8_t priority, const char* body, int timeout_ms, uint8_t style) {
     if (state == nullptr) return;
     portENTER_CRITICAL(&s_dialog_spinlock);
     if (state->active && priority < state->priority) {
@@ -905,6 +1107,7 @@ void set_dialog_state(DialogState* state, bool active, const char* title, uint16
     state->active = active;
     state->color  = color;
     state->priority = priority;
+    state->style = active ? style : kDialogStyleDefault;
     state->show_until_tick = 0;
     if (active && timeout_ms > 0) {
         state->show_until_tick = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
@@ -1038,6 +1241,7 @@ void dismiss_dialog(DialogState* state) {
     state->title[0] = '\0';
     state->body[0] = '\0';
     state->priority = 0;
+    state->style = kDialogStyleDefault;
     state->show_until_tick = 0;
     portEXIT_CRITICAL(&s_dialog_spinlock);
 }
