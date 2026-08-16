@@ -17,7 +17,9 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
 - **按键**：BOOT（GPIO0）
 - **熄屏**：空闲（无唤醒/对话）30 秒后关背光+面板；唤醒词或按键对话时自动亮屏
 - **Moss MCP 外设**：灯条/面板灯/眼灯/电机/红外/API（引脚见 `config.h` 的 `MOSS_*`）
-- **外部 MQTT 文本唤醒**：`ExternalMqttClient` 订阅 `codesuccess` → 打开音频通道并 `SendTextChat`
+- **配置绑定**：未绑定外部云通道时，Wi-Fi 连上后自动打开局域网 HTTP `:5500` 并广播 mDNS（`moss-AABB.local`，服务 `_moss-http._tcp`）。桌面配置客户端写入 MQTT 后，板子改走 MQTT；收到 `bind.hello` 后关闭 HTTP。MQTT 连续失败 3 次会重新打开绑定页。
+- **红外码表**：存在专用 `storage` SPIFFS 分区（256KB）。当前工程 `sdkconfig` 必须指向 `partitions/moss-desktop-16m.csv`。旧固件用的是 `partitions/v2/16m.csv`（没有 storage），**不能 OTA**，需要整片烧录分区表+固件。
+- **外部 MQTT 文本唤醒**：绑定后 `ExternalMqttClient` 仍识别 `codesuccess` → 打开音频通道并 `SendTextChat`
 
 ## 构建方法
 
@@ -25,7 +27,13 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
 python3 scripts/build.py moss/moss-desktop --name moss-desktop
 ```
 
-## 参考
+首次刷机或从旧 16m 分区表切换过来时，请擦除后整片烧录：
+
+```bash
+idf.py -p PORT erase-flash flash
+```
+
+烧录成功后启动日志应出现 `Found storage partition` 和 `SPIFFS mounted at /storage`。若只有 `No SPIFFS partition named 'storage'`，说明分区表仍是旧的。
 
 
 

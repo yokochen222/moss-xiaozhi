@@ -8,7 +8,9 @@
             "sdkconfig_append": [
                 "CONFIG_USE_DEVICE_AEC=y",
                 "CONFIG_ENABLE_VAD_INTERRUPT=y",
-                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n"
+                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n",
+                "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/moss-desktop-16m.csv\""
             ]
         }
     ]

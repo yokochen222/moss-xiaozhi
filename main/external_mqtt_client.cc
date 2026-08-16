@@ -1,112 +1,356 @@
 #include "external_mqtt_client.h"
+#include "api/api.h"
+#include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
 #include "board.h"
+#include "config/moss_config_service.h"
+#include "device/infrared.h"
+#include "device/ir_catalog.h"
+
 #include <esp_log.h>
+#include <cstring>
 
 #define TAG "ExternalMqtt"
 
-static const char* EXTERNAL_MQTT_BROKER = "v8aaa396.ala.cn-hangzhou.emqxsl.cn";
-static const int EXTERNAL_MQTT_PORT = 8883;
-static const char* EXTERNAL_MQTT_CLIENT_ID = "esp32-external-audio";
-static const char* EXTERNAL_MQTT_SUBSCRIBE_TOPIC = "moss/client/esp32-dev-02/#";
+namespace {
+constexpr int kMaxFails = 3;
+constexpr uint64_t kReconnectUs = 5ULL * 1000ULL * 1000ULL;
 
-ExternalMqttClient::ExternalMqttClient() {}
+std::string JsonString(cJSON* obj, const char* key) {
+    cJSON* item = cJSON_GetObjectItem(obj, key);
+    if (cJSON_IsString(item) && item->valuestring) {
+        return item->valuestring;
+    }
+    return "";
+}
+}  // namespace
+
+ExternalMqttClient::ExternalMqttClient() {
+    esp_timer_create_args_t args = {
+        .callback = ReconnectTimerCallback,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ext_mqtt_re",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_create(&args, &reconnect_timer_);
+}
 
 ExternalMqttClient::~ExternalMqttClient() {
     Stop();
+    if (reconnect_timer_) {
+        esp_timer_stop(reconnect_timer_);
+        esp_timer_delete(reconnect_timer_);
+        reconnect_timer_ = nullptr;
+    }
 }
 
+bool ExternalMqttClient::IsConnected() const { return mqtt_ && mqtt_->IsConnected(); }
+
 bool ExternalMqttClient::Start() {
-    if (running_) {
-        ESP_LOGW(TAG, "External MQTT client already running");
-        return true;
-    }
-
-    auto network = Board::GetInstance().GetNetwork();
-    mqtt_ = network->CreateMqtt(1);
-    if (!mqtt_) {
-        ESP_LOGE(TAG, "Failed to create MQTT client");
+    config_ = ExtMqttSettings::Load();
+    if (!config_.bound || config_.broker.empty()) {
+        ESP_LOGI(TAG, "Not bound, skip MQTT connect");
         return false;
     }
 
-    mqtt_->SetKeepAlive(240);
-
-    mqtt_->OnConnected([this]() {
-        ESP_LOGI(TAG, "External MQTT connected, subscribing to %s", EXTERNAL_MQTT_SUBSCRIBE_TOPIC);
-        mqtt_->Subscribe(EXTERNAL_MQTT_SUBSCRIBE_TOPIC, 1);
-    });
-
-    mqtt_->OnDisconnected([]() {
-        ESP_LOGI(TAG, "External MQTT disconnected");
-    });
-
-    mqtt_->OnMessage([this](const std::string& topic, const std::string& payload) {
-        HandleMessage(topic, payload);
-    });
-
-    running_ = true;
-
-    ESP_LOGI(TAG, "Connecting to external MQTT broker %s:%d", EXTERNAL_MQTT_BROKER, EXTERNAL_MQTT_PORT);
-    if (!mqtt_->Connect(EXTERNAL_MQTT_BROKER, EXTERNAL_MQTT_PORT, EXTERNAL_MQTT_CLIENT_ID, "code", "123456")) {
-        ESP_LOGE(TAG, "Failed to connect to external MQTT broker");
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (mqtt_ && mqtt_->IsConnected()) {
+            return true;
+        }
         mqtt_.reset();
-        running_ = false;
-        return false;
+        auto network = Board::GetInstance().GetNetwork();
+        mqtt_ = network->CreateMqtt(1);
+        if (!mqtt_) {
+            ESP_LOGE(TAG, "Failed to create MQTT client");
+            return false;
+        }
+        mqtt_->SetKeepAlive(240);
+        mqtt_->OnConnected([this]() {
+            ESP_LOGI(TAG, "External MQTT connected, subscribe %s", config_.subscribe_topic.c_str());
+            mqtt_->Subscribe(config_.subscribe_topic, 1);
+            MossConfigService::GetInstance().OnMqttConnected();
+        });
+        mqtt_->OnDisconnected([this]() {
+            ESP_LOGI(TAG, "External MQTT disconnected");
+            MossConfigService::GetInstance().OnMqttDisconnected();
+            if (running_) {
+                ScheduleReconnect();
+            }
+        });
+        mqtt_->OnMessage([this](const std::string& topic, const std::string& payload) {
+            HandleMessage(topic, payload);
+        });
+        running_ = true;
     }
 
+    ESP_LOGI(TAG, "Connecting to %s:%d id=%s", config_.broker.c_str(), config_.port,
+             config_.client_id.c_str());
+    if (!mqtt_->Connect(config_.broker, config_.port, config_.client_id, config_.username,
+                        config_.password)) {
+        ESP_LOGE(TAG, "Connect failed, code=%d", mqtt_->GetLastError());
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            mqtt_.reset();
+            running_ = false;
+        }
+        fail_count_++;
+        if (fail_count_ >= kMaxFails) {
+            ESP_LOGW(TAG, "MQTT failed %d times, enter bind mode", fail_count_);
+            Application::GetInstance().Schedule(
+                []() { MossConfigService::GetInstance().EnterBindMode(); });
+        } else {
+            running_ = true;
+            ScheduleReconnect();
+        }
+        return false;
+    }
+    fail_count_ = 0;
     return true;
 }
 
 void ExternalMqttClient::Stop() {
-    if (!running_) {
-        return;
-    }
     running_ = false;
-
+    if (reconnect_timer_) {
+        esp_timer_stop(reconnect_timer_);
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
     if (mqtt_) {
         mqtt_->Disconnect();
         mqtt_.reset();
     }
 }
 
-void ExternalMqttClient::HandleMessage(const std::string& topic, const std::string& payload) {
-    ESP_LOGI(TAG, "HandleMessage: topic='%s' payload_len=%d", topic.c_str(), (int)payload.size());
-    ParseTextEvent(payload);
+void ExternalMqttClient::Reload() {
+    Stop();
+    Start();
 }
 
-bool ExternalMqttClient::ParseTextEvent(const std::string& payload) {
-    cJSON* root = cJSON_Parse(payload.c_str());
-    if (root == nullptr) {
-        ESP_LOGE(TAG, "Failed to parse JSON: %s", payload.c_str());
+void ExternalMqttClient::ScheduleReconnect() {
+    if (!running_ || !reconnect_timer_) {
+        return;
+    }
+    esp_timer_stop(reconnect_timer_);
+    esp_timer_start_once(reconnect_timer_, kReconnectUs);
+}
+
+void ExternalMqttClient::ReconnectTimerCallback(void* arg) {
+    auto* self = static_cast<ExternalMqttClient*>(arg);
+    Application::GetInstance().Schedule([self]() {
+        if (!self->running_) {
+            return;
+        }
+        if (self->fail_count_ >= kMaxFails) {
+            MossConfigService::GetInstance().EnterBindMode();
+            return;
+        }
+        ESP_LOGI(TAG, "MQTT reconnect attempt %d", self->fail_count_ + 1);
+        self->Start();
+    });
+}
+
+bool ExternalMqttClient::PublishUp(const std::string& type, const std::string& request_id,
+                                   cJSON* payload) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mqtt_ || !mqtt_->IsConnected() || config_.publish_topic.empty()) {
         return false;
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "id", request_id.c_str());
+    cJSON_AddStringToObject(root, "type", type.c_str());
+    if (payload) {
+        cJSON_AddItemToObject(root, "payload", cJSON_Duplicate(payload, 1));
+    } else {
+        cJSON_AddItemToObject(root, "payload", cJSON_CreateObject());
+    }
+    char* printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
+        return false;
+    }
+    bool ok = mqtt_->Publish(config_.publish_topic, printed, 1);
+    cJSON_free(printed);
+    return ok;
+}
+
+void ExternalMqttClient::PublishAck(const std::string& type, const std::string& request_id, bool ok,
+                                    const std::string& message) {
+    cJSON* payload = cJSON_CreateObject();
+    cJSON_AddBoolToObject(payload, "ok", ok);
+    cJSON_AddStringToObject(payload, "message", message.c_str());
+    PublishUp(ok ? type : "ir.error", request_id, payload);
+    cJSON_Delete(payload);
+}
+
+void ExternalMqttClient::HandleMessage(const std::string& topic, const std::string& payload) {
+    ESP_LOGI(TAG, "MQTT in topic=%s len=%d", topic.c_str(), (int)payload.size());
+    cJSON* root = cJSON_Parse(payload.c_str());
+    if (!root) {
+        ESP_LOGE(TAG, "Invalid JSON");
+        return;
     }
 
     cJSON* event = cJSON_GetObjectItem(root, "event");
-    if (!cJSON_IsString(event)) {
-        ESP_LOGD(TAG, "Message has no 'event' field, skipping");
-        cJSON_Delete(root);
-        return false;
-    }
-
-    const char* event_str = event->valuestring;
-    ESP_LOGI(TAG, "Received event: %s", event_str);
-
-    if (strcmp(event_str, "codesuccess") == 0) {
-        cJSON* prompt_preview = cJSON_GetObjectItem(root, "promptPreview");
-        if (cJSON_IsString(prompt_preview) && prompt_preview->valuestring != nullptr) {
-            std::string text(prompt_preview->valuestring);
-            ESP_LOGI(TAG, "codesuccess event: promptPreview=%s", text.c_str());
-
-            Application::GetInstance().Schedule([text]() {
-                Application::GetInstance().HandleExternalTextMessage(text);
-            });
-        } else {
-            ESP_LOGW(TAG, "end event missing promptPreview field");
+    if (cJSON_IsString(event) && strcmp(event->valuestring, "codesuccess") == 0) {
+        cJSON* preview = cJSON_GetObjectItem(root, "promptPreview");
+        if (cJSON_IsString(preview) && preview->valuestring) {
+            std::string text(preview->valuestring);
+            Application::GetInstance().Schedule(
+                [text]() { Application::GetInstance().HandleExternalTextMessage(text); });
         }
-    } else {
-        ESP_LOGD(TAG, "Ignoring event type: %s", event_str);
+        cJSON_Delete(root);
+        return;
     }
 
+    if (!config_.cmd_topic.empty() && !topic.empty() && topic != config_.cmd_topic) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    HandleTypedMessage(root);
     cJSON_Delete(root);
-    return true;
+}
+
+void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
+    std::string type = JsonString(root, "type");
+    std::string id = JsonString(root, "id");
+    cJSON* payload = cJSON_GetObjectItem(root, "payload");
+    if (type.empty()) {
+        return;
+    }
+    ESP_LOGI(TAG, "cmd type=%s", type.c_str());
+
+    if (type == "bind.hello") {
+        PublishAck("bind.ack", id, true, "ok");
+        Application::GetInstance().Schedule(
+            []() { MossConfigService::GetInstance().OnBindHello(); });
+        return;
+    }
+    if (type == "bind.clear") {
+        Application::GetInstance().Schedule(
+            []() { MossConfigService::GetInstance().OnBindClear(); });
+        PublishAck("bind.ack", id, true, "cleared");
+        return;
+    }
+    if (type == "ir.learn") {
+        HandleIrLearn(id);
+        return;
+    }
+    if (type == "ir.test") {
+        HandleIrTest(id, payload);
+        return;
+    }
+    if (type == "ir.devices.get") {
+        HandleDevicesGet(id);
+        return;
+    }
+    if (type == "ir.device.put") {
+        HandleDevicePut(id, payload);
+        return;
+    }
+    if (type == "ir.device.delete") {
+        HandleDeviceDelete(id, payload);
+        return;
+    }
+    if (type == "ir.command.put") {
+        HandleCommandPut(id, payload);
+        return;
+    }
+    if (type == "ir.command.delete") {
+        HandleCommandDelete(id, payload);
+        return;
+    }
+}
+
+void ExternalMqttClient::HandleIrLearn(const std::string& request_id) {
+    ApiServer::GetInstance().ClearIrReceivedData();
+    bool ok = InfraredDevice::GetInstance().StartLearn();
+    PublishAck("ir.ack", request_id, ok, ok ? "learning" : "learn failed");
+}
+
+void ExternalMqttClient::HandleIrTest(const std::string& request_id, cJSON* payload) {
+    std::string code = payload ? JsonString(payload, "code") : "";
+    const std::string device_id = payload ? JsonString(payload, "device_id") : "";
+    const std::string command_id = payload ? JsonString(payload, "id") : "";
+    if (code.empty() && (!device_id.empty() || !command_id.empty())) {
+        code = IrCatalog::GetInstance().FindCode(device_id, command_id);
+        ESP_LOGI(TAG, "ir.test lookup device=%s cmd=%s found=%d", device_id.c_str(),
+                 command_id.c_str(), !code.empty());
+    }
+    if (code.empty()) {
+        ESP_LOGW(TAG, "ir.test missing code device=%s cmd=%s", device_id.c_str(),
+                 command_id.c_str());
+        PublishAck("ir.error", request_id, false, "missing code");
+        return;
+    }
+    ESP_LOGI(TAG, "ir.test send code_len=%u", (unsigned)code.size());
+    bool ok = InfraredDevice::GetInstance().SendIrCommand(IrCatalog::UartPayload(code));
+    PublishAck("ir.ack", request_id, ok, ok ? "sent" : "send failed");
+}
+
+void ExternalMqttClient::HandleDevicesGet(const std::string& request_id) {
+    std::string json = IrCatalog::GetInstance().MetadataJson();
+    cJSON* parsed = cJSON_Parse(json.c_str());
+    PublishUp("ir.devices", request_id, parsed);
+    cJSON_Delete(parsed);
+}
+
+void ExternalMqttClient::HandleDevicePut(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    IrAppliance appliance;
+    appliance.id = JsonString(payload, "id");
+    appliance.name = JsonString(payload, "name");
+    appliance.type = JsonString(payload, "type");
+    if (appliance.type.empty()) {
+        appliance.type = "custom";
+    }
+    auto status = IrCatalog::GetInstance().UpsertAppliance(appliance, true);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "saved");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleDeviceDelete(const std::string& request_id, cJSON* payload) {
+    std::string id = payload ? JsonString(payload, "id") : "";
+    auto status = IrCatalog::GetInstance().DeleteAppliance(id);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "deleted");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleCommandPut(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    std::string appliance_id = JsonString(payload, "device_id");
+    IrCommand command;
+    command.id = JsonString(payload, "id");
+    command.name = JsonString(payload, "name");
+    command.code = JsonString(payload, "code");
+    auto status = IrCatalog::GetInstance().UpsertCommand(appliance_id, command);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "saved");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleCommandDelete(const std::string& request_id, cJSON* payload) {
+    std::string appliance_id = payload ? JsonString(payload, "device_id") : "";
+    std::string id = payload ? JsonString(payload, "id") : "";
+    auto status = IrCatalog::GetInstance().DeleteCommand(appliance_id, id);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "deleted");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
 }

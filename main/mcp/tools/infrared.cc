@@ -1,6 +1,7 @@
 #include "mcp_tools.h"
 #include "board.h"
 #include "device/infrared.h"
+#include "device/ir_catalog.h"
 #include <esp_log.h>
 #include <map>
 #include <algorithm>
@@ -37,6 +38,34 @@ static std::map<std::string, std::string> AirBtnMap = {
     {"hot", "5964,-7505,410,-692,434,-694,406,-700,426,-693,432,-690,436,-691,406,-699,427,-691,436,-691,434,-692,406,-698,428,-691,435,-691,408,-718,405,-698,430,-689,436,-690,408,-699,426,-693,434,-691,435,-692,405,-698,429,-692,435,-690,434,-692,406,-698,429,-691,435,-691,434,-693,408,-694,430,-691,436,-688,410,-699,427,-714,411,-690,437,-692,405,-699,426,-690,436,-690,436,-689,408,-1799,387,-699,428,-691,435,-692,435,-690,406,-717,409,-692,435,-690,434,-676,425,-715,411,-690,436,-711,415,-691,406,-717,411,-709,416,-710,388,-700,425,-1781,404,-717,410,-1777,408,-711,415,-711,416,-692,404,-717,410,-710,416,-710,388,-719,406,-716,410,-710,416,-711,413,-695,406,-1779,404,-1782,403,-717,429,-690,436,-1752,433,-691,436,-689,408,-697,429,-1757,428,-1758,428,-693,431,-1754,430,-689,437,-688,438,-1747,438,-686,412,-1774,411,-1774,412,-696,430,-692,434,-1752,434,-1752,433,-1755,430,-687,439,-1747,438,-7520,442,-60612,len=198"}
 };
 
+void SeedIrCatalogFromBuiltin() {
+    auto appliances = IrCatalog::GetInstance().GetAppliances();
+    if (!appliances.empty()) {
+        return;
+    }
+    IrAppliance light;
+    light.id = "room_light";
+    light.name = "房间灯";
+    light.type = "light";
+    for (const auto& item : RoomLightMap) {
+        light.commands.push_back({item.first, item.first == "turnOn" ? "开" : "关", item.second});
+    }
+    IrAppliance ac;
+    ac.id = "air_condition";
+    ac.name = "空调";
+    ac.type = "ac";
+    for (const auto& item : AirBtnMap) {
+        std::string label = item.first;
+        if (item.first == "powerOn") label = "开机";
+        else if (item.first == "powerOff") label = "关机";
+        else if (item.first == "cool") label = "制冷";
+        else if (item.first == "hot") label = "制热";
+        else if (item.first == "dry") label = "除湿";
+        ac.commands.push_back({item.first, label, item.second});
+    }
+    IrCatalog::GetInstance().SeedIfEmpty({light, ac});
+}
+
 namespace mcp_tools {
 
 class InfraredTool : public McpTool {
@@ -56,65 +85,70 @@ public:
         ESP_LOGI(TAG, "注册红外遥控工具");
         McpServer::GetInstance().AddTool(
             name(),
-            "MOSS红外遥控控制能力，支持以下操作（action）及参数（command）：\n"
-            "1. 发送自定义红外指令：action=\"send_ir\"，command=\"xx01\"（自定义指令，字母需小写）；如需进入学习模式，command=\"xx00\"，学习到的值会通过终端输出。\n"
-            "2. 房间灯光控制：action=\"room_light\"，command=\"turnOn\"（开灯）或 command=\"turnOff\"（关灯）。\n"
-            "3. 空调控制：action=\"air_condition\"，command 可选：\"powerOn\"（开机）、\"powerOff\"（关机）、\"cool\"（制冷）、\"hot\"（制热）、\"dry\"（除湿）、\"16\"~\"32\"（温度，字符串数字）。\n"
-            "4. 获取红外遥控器状态：action=\"get_status\"，无需 command 参数。\n"
-            "注意：所有参数区分大小写，command 必须为字符串类型。\n"
-            ,
+            "MOSS红外遥控。参数 action：\n"
+            "- list：列出已配置的电器和按键（不含波形）\n"
+            "- control：按电器控制，需 device（电器id或名称）与 command（按键id或名称）\n"
+            "- room_light / air_condition：兼容旧技能，command 为 turnOn/turnOff 或 powerOn 等\n"
+            "- send_ir：command=xx00 学习，其它为原始 UART 指令\n"
+            "- get_status：红外模块状态\n",
             PropertyList({
                 Property("action", kPropertyTypeString),
-                Property("command", kPropertyTypeString, "")
+                Property("command", kPropertyTypeString, ""),
+                Property("device", kPropertyTypeString, "")
             }),
             [this](const PropertyList& properties) -> ReturnValue {
                 auto action = properties["action"].value<std::string>();
                 auto command = properties["command"].value<std::string>();
+                auto device = properties["device"].value<std::string>();
+                auto& catalog = IrCatalog::GetInstance();
 
-                ESP_LOGI(TAG, "红外控制参数: command=%s, action=%s", command.c_str(), action.c_str());
+                ESP_LOGI(TAG, "红外控制参数: command=%s, action=%s device=%s", command.c_str(),
+                         action.c_str(), device.c_str());
 
-                if (action == "send_ir") {
-                    std::transform(command.begin(), command.end(), command.begin(), [](unsigned char c){ return std::tolower(c); });
-                    if (!command.empty()) {
-                        if (infrared_device_.SendIrCommand(command)) {
-                            return "已发送自定义红外指令";
-                        } else {
-                            return "发送红外指令失败";
-                        }
-                    } else {
+                auto send_code = [this](const std::string& code) -> ReturnValue {
+                    if (code.empty()) {
+                        return "未找到对应红外码，请先在配置客户端学习并保存";
+                    }
+                    if (infrared_device_.SendIrCommand(IrCatalog::UartPayload(code))) {
+                        return "已发送红外指令";
+                    }
+                    return "发送红外指令失败";
+                };
+
+                if (action == "list") {
+                    return catalog.MetadataJson();
+                } else if (action == "control") {
+                    if (device.empty() || command.empty()) {
+                        return "control 需要 device 和 command";
+                    }
+                    return send_code(catalog.FindCode(device, command));
+                } else if (action == "send_ir") {
+                    std::transform(command.begin(), command.end(), command.begin(),
+                                   [](unsigned char c) { return std::tolower(c); });
+                    if (command.empty()) {
                         return "缺少command参数";
                     }
+                    if (infrared_device_.SendIrCommand(command)) {
+                        return "已发送自定义红外指令";
+                    }
+                    return "发送红外指令失败";
                 } else if (action == "room_light") {
-                    ESP_LOGI(TAG, "room_light 查表前: command=%s", command.c_str());
-                    auto ir_command = RoomLightMap[command];
-                    ESP_LOGI(TAG, "room_light 查表后: ir_command=%s", ir_command.c_str());
-                    if (!command.empty() && !ir_command.empty()) {
-                        if (infrared_device_.SendIrCommand("zf=" + ir_command)) {
-                            return "已发送房间灯光指令";
-                        } else {
-                            return "发送房间灯光指令失败";
-                        }
-                    } else {
-                        ESP_LOGI(TAG, "无效的房间灯光指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
-                        return "无效的房间灯光指令";
+                    auto code = catalog.FindCode("room_light", command);
+                    if (code.empty()) {
+                        code = RoomLightMap[command];
                     }
+                    return send_code(code);
                 } else if (action == "air_condition") {
-                    auto ir_command = AirBtnMap[command];
-                    if (!command.empty() && !ir_command.empty()) {
-                        if (infrared_device_.SendIrCommand("zf=" + ir_command)) {
-                            return "已发送空调指令";
-                        } else {
-                            return "发送空调指令失败";
-                        }
-                    } else {
-                        ESP_LOGI(TAG, "无效的空调指令: command=%s, ir_command=%s", command.c_str(), ir_command.c_str());
-                        return "无效的空调指令";
+                    auto code = catalog.FindCode("air_condition", command);
+                    if (code.empty()) {
+                        code = AirBtnMap[command];
                     }
+                    return send_code(code);
                 } else if (action == "get_status") {
                     return infrared_device_.IsReady() ? "红外遥控器正常" : "红外设备初始化失败";
-                } else {
-                    return "未知动作: " + action + "\n支持的动作: send_ir, room_light, air_condition, get_status";
                 }
+                return "未知动作: " + action +
+                       "\n支持: list, control, send_ir, room_light, air_condition, get_status";
             }
         );
     }

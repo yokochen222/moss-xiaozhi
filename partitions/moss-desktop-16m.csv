@@ -1,0 +1,11 @@
+# Moss-desktop 16MB table: 256KB SPIFFS for IR catalog.
+# App partitions must be 64KB-aligned. ota size 0x3d8000 made ota_1 end at 0x808000
+# and overlap assets at 0x800000; 0x3d0000 fits. Flash this table once (not OTA-safe).
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,    0x4000,
+otadata,  data, ota,     0xd000,    0x2000,
+phy_init, data, phy,     0xf000,    0x1000,
+storage,  data, spiffs,  0x10000,   0x40000,
+ota_0,    app,  ota_0,   0x50000,   0x3d0000,
+ota_1,    app,  ota_1,   0x420000,  0x3d0000,
+assets,   data, spiffs,  0x800000,  8M

@@ -305,6 +305,10 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "api/api.cc"
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"
+        "api/methods/config/config_handlers.cc"
+        "config/ext_mqtt_config.cc"
+        "config/moss_config_service.cc"
+        "device/ir_catalog.cc"
         "external_mqtt_client.cc"
     )
     file(GLOB MOSS_MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
@@ -314,10 +318,11 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         ${CMAKE_CURRENT_SOURCE_DIR}/device
         ${CMAKE_CURRENT_SOURCE_DIR}/api
         ${CMAKE_CURRENT_SOURCE_DIR}/api/methods
+        ${CMAKE_CURRENT_SOURCE_DIR}/config
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
     )
-    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server espressif2022__esp_emote_gfx)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server spiffs mdns espressif2022__esp_emote_gfx)
     file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
 endif()
 
@@ -353,6 +358,13 @@ idf_component_register(SRCS ${SOURCES}
 
 # Moss splash uses private eaf_dec headers from esp_emote_gfx.
 if(CONFIG_BOARD_TYPE_MOSS_DESKTOP AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    if(NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
+        message(FATAL_ERROR
+            "moss-desktop requires partitions/moss-desktop-16m.csv "
+            "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
+            "Update sdkconfig and flash partition-table + app together, not OTA."
+        )
+    endif()
     idf_component_get_property(EMOTE_GFX_DIR espressif2022__esp_emote_gfx COMPONENT_DIR)
     if(EMOTE_GFX_DIR)
         target_include_directories(${COMPONENT_LIB} PRIVATE "${EMOTE_GFX_DIR}/src")

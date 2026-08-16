@@ -6,11 +6,15 @@
 namespace api_methods {
 namespace ir {
 
-// 红外发送处理器
-esp_err_t HandleIrSend(httpd_req_t *req);
+esp_err_t HandleIrSend(httpd_req_t* req);
+esp_err_t HandleIrRead(httpd_req_t* req);
+esp_err_t HandleIrLearn(httpd_req_t* req);
+esp_err_t HandleIrTest(httpd_req_t* req);
+esp_err_t HandleIrDevicesGet(httpd_req_t* req);
+esp_err_t HandleIrDevicePut(httpd_req_t* req);
+esp_err_t HandleIrDeviceDelete(httpd_req_t* req);
+esp_err_t HandleIrCommandPut(httpd_req_t* req);
+esp_err_t HandleIrCommandDelete(httpd_req_t* req);
 
-// 红外读取处理器
-esp_err_t HandleIrRead(httpd_req_t *req);
-
-} // namespace ir
-} // namespace api_methods
+}  // namespace ir
+}  // namespace api_methods
