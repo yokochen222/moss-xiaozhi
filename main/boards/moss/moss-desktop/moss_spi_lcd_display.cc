@@ -1,5 +1,6 @@
 #include "moss_spi_lcd_display.h"
 #include "assets/lang_config.h"
+#include "audio_wave_plugin.h"
 #include "splash_player.h"
 #include "moss_splash.h"
 
@@ -35,10 +36,8 @@ static constexpr uint16_t kWarnColor     = 0xFC00;  // orange-amber
 static constexpr uint16_t kSuccessColor  = 0x07E0;  // green
 // 白色 - 纯白高亮
 static constexpr uint16_t kWhiteColor    = 0xFFFF;
-// 聆听中文字 #13F696
-static constexpr uint16_t kListenColor   = 0x17B2;
-// AI 回答文字 #E10000
-static constexpr uint16_t kSpeakColor    = 0xE000;
+// 聆听 / 说话信号弹窗与音谱线 #0AB9E8
+static constexpr uint16_t kSignalColor   = 0x0DDC;
 
 moss_splash::DialogState s_dialog{};
 
@@ -167,6 +166,7 @@ MossSpiLcdDisplay::MossSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io,
 }
 
 MossSpiLcdDisplay::~MossSpiLcdDisplay() {
+    moss_wave::Detach();
     moss_splash::stop_code_scroll_loop();
     if (splash_out_buf_ != nullptr) {
         free(splash_out_buf_);
@@ -193,6 +193,7 @@ void MossSpiLcdDisplay::StartSplashLoop() {
     cfg.dialog_state_ptr = &s_dialog;
 
     moss_splash::start_code_scroll_loop(cfg);
+    moss_wave::Attach();
 }
 
 void MossSpiLcdDisplay::SetStatus(const char* status) {
@@ -201,7 +202,9 @@ void MossSpiLcdDisplay::SetStatus(const char* status) {
 
     // 聆听 / AI 回答: 常驻信号弹窗 (无超时, 左右布局).
     if (is_listening_status(status) || is_speaking_status(status)) {
-        const uint16_t color = is_speaking_status(status) ? kSpeakColor : kListenColor;
+        const bool speaking = is_speaking_status(status);
+        moss_wave::SetPlaybackSource(speaking);
+        const uint16_t color = kSignalColor;
         moss_splash::set_dialog_state(&s_dialog, true, "检测信号", color,
                                       moss_splash::kPriorityInfo, nullptr, 0,
                                       moss_splash::kDialogStyleSignal);

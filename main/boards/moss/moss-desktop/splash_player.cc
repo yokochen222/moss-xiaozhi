@@ -1,4 +1,5 @@
 #include "splash_player.h"
+#include "audio_wave_plugin.h"
 #include "moss_splash.h"
 #include "config.h"
 #include "eaf_iface.h"
@@ -472,6 +473,26 @@ static uint32_t uhash(uint32_t x) {
     return x;
 }
 
+static constexpr int kWaveBarW = 2;
+static constexpr int kWaveGapW = 2;
+static constexpr int kWaveStride = kWaveBarW + kWaveGapW;
+
+static void draw_wave_bar(uint16_t* dst, int dst_w, int dst_h,
+                          int x0, int y0, int w, int h, int mid_y,
+                          int x_rel, int amp, uint16_t color) {
+    int y1 = mid_y - amp;
+    int y2 = mid_y + amp;
+    if (y1 < y0) y1 = y0;
+    if (y2 > y0 + h - 1) y2 = y0 + h - 1;
+    for (int dx = 0; dx < kWaveBarW; dx++) {
+        int x = x0 + x_rel + dx;
+        if (x < x0 || x >= x0 + w) continue;
+        for (int y = y1; y <= y2; y++) {
+            plot_rgb565(dst, dst_w, dst_h, x, y, color);
+        }
+    }
+}
+
 static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h,
                                  int x0, int y0, int w, int h, int mid_y,
                                  uint16_t color, uint32_t t) {
@@ -481,37 +502,56 @@ static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h,
     if (down < max_amp) max_amp = down;
     if (max_amp < 2) max_amp = 2;
 
-    for (int i = 0; i < w; i++) {
+    for (int i = 0; i < w; i += kWaveStride) {
         int env = 0;
         int period = w;
-        int offset = (int)((t / 2) % (uint32_t)period);
-        for (int k = 0; k < 6; k++) {
-            int cx = (k * period / 6 + offset) % period;
+        int offset = (int)((t / 4) % (uint32_t)period);
+        for (int k = 0; k < 3; k++) {
+            int cx = (k * period / 3 + offset) % period;
             int dist = i - cx;
             if (dist < 0) dist = -dist;
             int wrap = period - dist;
             if (wrap < dist) dist = wrap;
-            int radius = 4 + (k % 3) * 2;
+            int radius = 8 + (k % 2) * 4;
             if (dist >= radius) continue;
             int bump = (max_amp * (radius - dist) * (72 + k * 7)) / (radius * 100);
             if (bump > env) env = bump;
         }
 
         uint32_t n = uhash((uint32_t)i * 131u + t * 7u);
-        int jagged = 28 + (int)(n % 100);
-        int floor_n = 1 + (int)((n >> 8) % 3);
+        int jagged = 48 + (int)(n % 48);
+        int floor_n = 1;
         int amp = floor_n + env * jagged / 128;
         if (amp > max_amp) amp = max_amp;
         if (amp < 1) amp = 1;
+        draw_wave_bar(dst, dst_w, dst_h, x0, y0, w, h, mid_y, i, amp, color);
+    }
+}
 
-        int x = x0 + i;
-        int y1 = mid_y - amp;
-        int y2 = mid_y + amp;
-        if (y1 < y0) y1 = y0;
-        if (y2 > y0 + h - 1) y2 = y0 + h - 1;
-        for (int y = y1; y <= y2; y++) {
-            plot_rgb565(dst, dst_w, dst_h, x, y, color);
+static void draw_signal_waveform_pcm(uint16_t* dst, int dst_w, int dst_h,
+                                     int x0, int y0, int w, int h, int mid_y,
+                                     uint16_t color, const uint8_t* bins, int n_bins) {
+    if (w < 4 || h < 6 || bins == nullptr || n_bins <= 0) return;
+    int max_amp = mid_y - y0;
+    int down = (y0 + h - 1) - mid_y;
+    if (down < max_amp) max_amp = down;
+    if (max_amp < 2) max_amp = 2;
+
+    int bars = (w + kWaveStride - 1) / kWaveStride;
+    for (int b = 0; b < bars; b++) {
+        int bin = (b * n_bins) / bars;
+        if (bin >= n_bins) bin = n_bins - 1;
+        int level = bins[bin];
+
+        uint32_t n = uhash((uint32_t)b * 131u + (uint32_t)level * 17u);
+        int jagged = 104 + (int)(n % 24);
+        int amp = 1;
+        if (level > 4) {
+            amp = 1 + (max_amp - 1) * level * jagged / (255 * 128);
         }
+        if (amp > max_amp) amp = max_amp;
+        if (amp < 1) amp = 1;
+        draw_wave_bar(dst, dst_w, dst_h, x0, y0, w, h, mid_y, b * kWaveStride, amp, color);
     }
 }
 
@@ -549,9 +589,10 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
                             uint16_t color,
                             const char* title, const char* body,
                             uint8_t style, int64_t now_us) {
-    static constexpr uint16_t kFrame  = 0xFFFF;
-    static constexpr uint16_t kInner  = 0x632C;
-    static constexpr uint16_t kCorner = 0xFFFF;
+    static constexpr uint16_t kFrame  = 0x2BD2;  // #2E7A96 外框
+    static constexpr uint16_t kInner  = 0x19C9;  // #1A3A4A 内框
+    static constexpr uint16_t kCorner = 0x5DB9;  // #5CB8D4 角括号
+    static constexpr uint16_t kTitle  = 0xC73D;  // #C8E8F0 标题 (非纯白)
     const bool signal = (style == kDialogStyleSignal);
 
     if (signal) {
@@ -682,8 +723,17 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
         int ww = box_x + box_w - 8 - wx;
         int wh = box_h - 8;
         if (ww > 4 && wh > 4) {
-            uint32_t t = (uint32_t)(now_us / 8000);
-            draw_signal_waveform(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y, color, t);
+            uint8_t bins[128];
+            int n = (ww + kWaveStride - 1) / kWaveStride;
+            if (n < 8) n = 8;
+            if (n > 128) n = 128;
+            if (moss_wave::CopyBins(bins, n, now_us)) {
+                draw_signal_waveform_pcm(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y,
+                                         color, bins, n);
+            } else {
+                uint32_t t = (uint32_t)(now_us / 8000);
+                draw_signal_waveform(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y, color, t);
+            }
         }
         return;
     }
@@ -692,7 +742,7 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
     if (title != nullptr && title[0] != '\0') {
         // ASCII 5x7 字符顶部 = baseline - 6, 留 4px 上边距 → baseline = box_y + 11
         int title_baseline = box_y + 11;
-        draw_text(dst, dst_w, dst_h, box_x + 4, title_baseline, title, kFrame);
+        draw_text(dst, dst_w, dst_h, box_x + 4, title_baseline, title, kTitle);
     }
 
     // 正文

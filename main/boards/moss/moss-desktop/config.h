@@ -82,4 +82,9 @@
 #define MOSS_IR_UART_RX_PIN GPIO_NUM_18
 #define MOSS_IR_UART_PORT UART_NUM_2
 
+// 1=接入实时音谱插件 (聆听=麦克风, 说话=播放). 0=拔掉, 信号弹窗回退到时间驱动波形.
+#ifndef MOSS_AUDIO_WAVE_PLUGIN
+#define MOSS_AUDIO_WAVE_PLUGIN 1
+#endif
+
 #endif  // _BOARD_CONFIG_H_

@@ -1,10 +1,16 @@
 #include "audio_codec.h"
+#include "audio_pcm_tap.h"
 #include "board.h"
 #include "settings.h"
 
 #include <esp_log.h>
 #include <cstring>
 #include <driver/i2s_common.h>
+
+extern "C" {
+void __attribute__((weak)) AudioPcmTap_OnInput(const int16_t*, size_t, int) {}
+void __attribute__((weak)) AudioPcmTap_OnOutput(const int16_t*, size_t, int) {}
+}
 
 #define TAG "AudioCodec"
 
@@ -16,11 +22,13 @@ AudioCodec::~AudioCodec() {
 
 void AudioCodec::OutputData(std::vector<int16_t>& data) {
     Write(data.data(), data.size());
+    AudioPcmTap_OnOutput(data.data(), data.size(), output_channels_);
 }
 
 bool AudioCodec::InputData(std::vector<int16_t>& data) {
     int samples = Read(data.data(), data.size());
     if (samples > 0) {
+        AudioPcmTap_OnInput(data.data(), static_cast<size_t>(samples), input_channels_);
         return true;
     }
     return false;
