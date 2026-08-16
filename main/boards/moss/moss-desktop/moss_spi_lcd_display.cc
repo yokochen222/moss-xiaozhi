@@ -18,8 +18,8 @@ namespace {
 // active=false 时, splash 只画 EAF 背景, 不画 dialog.
 //
 // 优先级系统:
-//   kPriorityState(1): 聆听说/待命/连接中 → 不弹窗
-//   kPriorityInfo(2):  普通通知 → 弹窗
+//   kPriorityState(1): 待命/连接中 → 不弹窗
+//   kPriorityInfo(2):  普通通知 / 聆听·说话信号弹窗
 //   kPriorityWarning(3): 警告/升级
 //   kPriorityError(4):   错误/失败
 //
@@ -36,6 +36,10 @@ static constexpr uint16_t kWarnColor     = 0xFC00;  // orange-amber
 static constexpr uint16_t kSuccessColor  = 0x07E0;  // green
 // 白色 - 纯白高亮
 static constexpr uint16_t kWhiteColor    = 0xFFFF;
+// 聆听中文字 #13F696
+static constexpr uint16_t kListenColor   = 0x17B2;
+// AI 回答文字 #E10000
+static constexpr uint16_t kSpeakColor    = 0xE000;
 
 moss_splash::DialogState s_dialog{};
 
@@ -109,17 +113,23 @@ void classify_color_priority(const char* s, uint16_t& color, uint8_t& priority) 
 }
 
 // 判断状态字符串是否静默 (不需要弹窗).
-// 聆听说/待命/连接中等状态不弹窗，只更新内部状态.
+// 待命/连接中等状态不弹窗. 聆听/说话走信号弹窗.
 bool is_silent_status(const char* s) {
     if (s == nullptr) return false;
-    // 注意: 后端传的实际上是 Lang::Strings::LISTENING 等常量字符串值,
+    // 注意: 后端传的实际上是 Lang::Strings::STANDBY 等常量字符串值,
     // 不是英文 key 名. 所以这里比较实际文本内容.
-    // 聆听说/待命/连接中 → 不弹窗 (只在串口 log 显示)
-    if (strstr(s, "聆听") || strstr(s, "说话") || strstr(s, "待命")
-        || strstr(s, "连接中") || strstr(s, "已连接")) {
+    if (strstr(s, "待命") || strstr(s, "连接中") || strstr(s, "已连接")) {
         return true;
     }
     return false;
+}
+
+bool is_listening_status(const char* s) {
+    return s != nullptr && strstr(s, "聆听") != nullptr;
+}
+
+bool is_speaking_status(const char* s) {
+    return s != nullptr && strstr(s, "说话") != nullptr;
 }
 
 }  // namespace
@@ -201,13 +211,18 @@ void MossSpiLcdDisplay::SetStatus(const char* status) {
         }
     }
 
-    // 静默状态 (聆听说/待命/连接中) 不弹窗，只清空弹窗内容
+    // 聆听 / AI 回答: 常驻信号弹窗 (无超时, 左右布局).
+    if (is_listening_status(status) || is_speaking_status(status)) {
+        const uint16_t color = is_speaking_status(status) ? kSpeakColor : kListenColor;
+        moss_splash::set_dialog_state(&s_dialog, true, "检测信号", color,
+                                      moss_splash::kPriorityInfo, nullptr, 0,
+                                      moss_splash::kDialogStyleSignal);
+        return;
+    }
+
+    // 静默状态 (待命/连接中) 强制关弹窗, 否则 sticky 信号弹窗优先级会挡住关闭.
     if (is_silent_status(status)) {
-        uint16_t color;
-        uint8_t priority;
-        classify_color_priority(status, color, priority);
-        // 直接清空 title 让弹窗不显示，不需要 priority 保护
-        moss_splash::set_dialog_state(&s_dialog, false, "", kDialogColor, moss_splash::kPriorityNone);
+        moss_splash::dismiss_dialog(&s_dialog);
         return;
     }
 

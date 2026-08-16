@@ -12,7 +12,8 @@ namespace moss_splash {
 struct DialogState {
     bool active;
     uint16_t color;   // RGB565
-    uint8_t  priority; // 0=无弹窗, 1=状态级(聆听说), 2=通知级, 3=警告级, 4=错误级
+    uint8_t  priority; // 0=无弹窗, 1=状态级(待命/连接中), 2=通知级, 3=警告级, 4=错误级
+    uint8_t  style;    // kDialogStyleDefault / kDialogStyleSignal
     char title[64];    // 主文字 (居中, 带下划线)
     char body[64];     // 副内容 (可空, 空时只画一行)
     int64_t show_until_tick; // 弹窗自动关闭时刻 (esp_timer tick), 0=无超时
@@ -20,10 +21,14 @@ struct DialogState {
 
 // 优先级常量
 static constexpr uint8_t kPriorityNone    = 0;  // 不弹窗
-static constexpr uint8_t kPriorityState    = 1;  // 聆听/说话/待命/连接中 (不弹)
-static constexpr uint8_t kPriorityInfo     = 2;  // 普通通知
+static constexpr uint8_t kPriorityState    = 1;  // 待命/连接中 (不弹)
+static constexpr uint8_t kPriorityInfo     = 2;  // 普通通知 / 聆听·说话信号弹窗
 static constexpr uint8_t kPriorityWarning = 3;  // 警告/升级
 static constexpr uint8_t kPriorityError   = 4;  // 错误/失败
+
+// 弹窗布局
+static constexpr uint8_t kDialogStyleDefault = 0;  // 标题 (+ 可选正文)
+static constexpr uint8_t kDialogStyleSignal  = 1;  // 左文字 + 右固定波动音谱线
 
 const int DIALOG_TITLE_MAX = sizeof(DialogState::title) - 1;
 const int DIALOG_BODY_MAX  = sizeof(DialogState::body)  - 1;
@@ -87,5 +92,7 @@ void set_dialog_state(DialogState* state, bool active, const char* title, uint16
 void set_dialog_state(DialogState* state, bool active, const char* title, uint16_t color, uint8_t priority, const char* body);
 // 7 参数版本: 带超时 (ms, 0=无超时, 默认 DIALOG_DEFAULT_TIMEOUT_MS).
 void set_dialog_state(DialogState* state, bool active, const char* title, uint16_t color, uint8_t priority, const char* body, int timeout_ms);
+// 8 参数版本: 指定布局 style (默认 kDialogStyleDefault).
+void set_dialog_state(DialogState* state, bool active, const char* title, uint16_t color, uint8_t priority, const char* body, int timeout_ms, uint8_t style);
 
 }  // namespace moss_splash
