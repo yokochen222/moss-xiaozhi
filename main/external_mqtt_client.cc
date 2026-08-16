@@ -4,10 +4,15 @@
 #include "application.h"
 #include "board.h"
 #include "config/moss_config_service.h"
+#include "device/eye_motor.h"
 #include "device/infrared.h"
 #include "device/ir_catalog.h"
+#include "device/lamp_bar.h"
+#include "device/lamp_eye.h"
+#include "device/lamp_panel.h"
 
 #include <esp_log.h>
+#include <cstdint>
 #include <cstring>
 
 #define TAG "ExternalMqtt"
@@ -22,6 +27,14 @@ std::string JsonString(cJSON* obj, const char* key) {
         return item->valuestring;
     }
     return "";
+}
+
+int JsonInt(cJSON* obj, const char* key, int fallback) {
+    cJSON* item = cJSON_GetObjectItem(obj, key);
+    if (cJSON_IsNumber(item)) {
+        return item->valueint;
+    }
+    return fallback;
 }
 }  // namespace
 
@@ -221,6 +234,19 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
     }
     ESP_LOGI(TAG, "cmd type=%s", type.c_str());
 
+    if (type == "chat.wake") {
+        Application::GetInstance().WakeWordInvoke("MOSS");
+        PublishAck("chat.ack", id, true, "waking");
+        return;
+    }
+    if (type == "hw.control") {
+        HandleHwControl(id, payload);
+        return;
+    }
+    if (type == "hw.status") {
+        PublishHwState(id, true, "ok");
+        return;
+    }
     if (type == "bind.hello") {
         PublishAck("bind.ack", id, true, "ok");
         Application::GetInstance().Schedule(
@@ -353,4 +379,92 @@ void ExternalMqttClient::HandleCommandDelete(const std::string& request_id, cJSO
     } else {
         PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
     }
+}
+
+void ExternalMqttClient::PublishHwState(const std::string& request_id, bool ok,
+                                        const std::string& message) {
+    auto& eye = LampEyeDevice::GetInstance();
+    auto& bar = LampBarDevice::GetInstance();
+    auto& panel = LampPanelDevice::GetInstance();
+    auto& motor = EyeMotorDevice::GetInstance();
+    cJSON* payload = cJSON_CreateObject();
+    cJSON_AddBoolToObject(payload, "ok", ok);
+    cJSON_AddStringToObject(payload, "message", message.c_str());
+    cJSON_AddBoolToObject(payload, "eye", eye.IsPowered() || eye.IsBreathing());
+    cJSON_AddBoolToObject(payload, "bar", bar.IsFlowing());
+    cJSON_AddBoolToObject(payload, "panel", panel.IsPanelLed1On() || panel.IsPanelLed2On());
+    cJSON_AddBoolToObject(payload, "bottom", panel.IsBottomLedOn());
+    cJSON_AddBoolToObject(payload, "motor", motor.IsRunning());
+    const char* dir = "stop";
+    if (motor.GetState() == EYE_MOTOR_STATE_FORWARD) {
+        dir = "forward";
+    } else if (motor.GetState() == EYE_MOTOR_STATE_BACKWARD) {
+        dir = "backward";
+    }
+    cJSON_AddStringToObject(payload, "motor_dir", dir);
+    cJSON_AddNumberToObject(payload, "motor_speed", motor.GetCurrentSpeedPercent());
+    PublishUp("hw.state", request_id, payload);
+    cJSON_Delete(payload);
+}
+
+void ExternalMqttClient::HandleHwControl(const std::string& request_id, cJSON* payload) {
+    const std::string device = payload ? JsonString(payload, "device") : "";
+    const std::string action = payload ? JsonString(payload, "action") : "";
+    int speed = payload ? JsonInt(payload, "speed", 80) : 80;
+    if (speed < 1) speed = 1;
+    if (speed > 100) speed = 100;
+
+    auto eye_on = []() {
+        auto& eye = LampEyeDevice::GetInstance();
+        return eye.StartBreathing() || eye.TurnOn();
+    };
+    auto eye_off = []() {
+        auto& eye = LampEyeDevice::GetInstance();
+        eye.StopBreathing();
+        return eye.TurnOff();
+    };
+
+    bool ok = false;
+    std::string message = "ok";
+    if (device == "eye") {
+        ok = action == "off" ? eye_off() : eye_on();
+    } else if (device == "bar") {
+        auto& bar = LampBarDevice::GetInstance();
+        ok = action == "off" ? bar.StopFlow() : bar.StartFlow();
+    } else if (device == "panel") {
+        auto& panel = LampPanelDevice::GetInstance();
+        ok = action == "off" ? panel.TurnOffPanelLeds() : panel.TurnOnPanelLeds();
+    } else if (device == "bottom") {
+        auto& panel = LampPanelDevice::GetInstance();
+        ok = action == "off" ? panel.TurnOffBottomLed() : panel.TurnOnBottomLed();
+    } else if (device == "motor") {
+        auto& motor = EyeMotorDevice::GetInstance();
+        if (action == "forward") {
+            ok = motor.StartForward(static_cast<uint8_t>(speed));
+        } else if (action == "backward") {
+            ok = motor.StartBackward(static_cast<uint8_t>(speed));
+        } else {
+            ok = motor.Stop();
+        }
+    } else if (device == "all") {
+        auto& bar = LampBarDevice::GetInstance();
+        auto& panel = LampPanelDevice::GetInstance();
+        auto& motor = EyeMotorDevice::GetInstance();
+        if (action == "off") {
+            eye_off();
+            bar.StopFlow();
+            panel.TurnOffAll();
+            motor.Stop();
+            ok = true;
+        } else {
+            eye_on();
+            bar.StartFlow();
+            panel.TurnOnAll();
+            motor.StartForward(static_cast<uint8_t>(speed));
+            ok = true;
+        }
+    } else {
+        message = "unknown device";
+    }
+    PublishHwState(request_id, ok, message);
 }

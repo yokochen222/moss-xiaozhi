@@ -34,6 +34,8 @@ private:
     void HandleDeviceDelete(const std::string& request_id, cJSON* payload);
     void HandleCommandPut(const std::string& request_id, cJSON* payload);
     void HandleCommandDelete(const std::string& request_id, cJSON* payload);
+    void HandleHwControl(const std::string& request_id, cJSON* payload);
+    void PublishHwState(const std::string& request_id, bool ok, const std::string& message);
     void PublishAck(const std::string& type, const std::string& request_id, bool ok,
                     const std::string& message);
     void ScheduleReconnect();

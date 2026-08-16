@@ -1,6 +1,7 @@
 #include "moss_config_service.h"
 #include "api/api.h"
 #include "api/methods/ir/ir_data_manager.h"
+#include "application.h"
 #include "device/infrared.h"
 #include "device/ir_catalog.h"
 #include "ext_mqtt_config.h"
@@ -51,6 +52,24 @@ std::string MossConfigService::InstanceName() const {
 }
 
 void MossConfigService::OnNetworkConnected() {
+    Application::GetInstance().RegisterChatRelayCallback(
+        [](const std::string& event, const std::string& role, const std::string& text,
+           const std::string& state) {
+            cJSON* payload = cJSON_CreateObject();
+            if (!role.empty()) {
+                cJSON_AddStringToObject(payload, "role", role.c_str());
+            }
+            if (!text.empty()) {
+                cJSON_AddStringToObject(payload, "text", text.c_str());
+            }
+            if (!state.empty()) {
+                cJSON_AddStringToObject(payload, "state", state.c_str());
+            }
+            const char* type = event == "message" ? "chat.message" : "chat.state";
+            MossConfigService::GetInstance().PublishUp(type, "", payload);
+            cJSON_Delete(payload);
+        });
+
     IrCatalog::GetInstance().Initialize();
     SeedIrCatalogFromBuiltin();
     InfraredDevice::GetInstance().Start();

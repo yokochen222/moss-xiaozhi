@@ -644,10 +644,11 @@ void Application::InitializeProtocol() {
                         glyphs.clear();
                     }
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([display, message = std::string(text->valuestring),
+                    Schedule([this, display, message = std::string(text->valuestring),
                               glyphs = std::move(glyphs), bpp]() {
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
+                        RelayChat("message", "assistant", message);
                     });
                 }
             }
@@ -660,10 +661,11 @@ void Application::InitializeProtocol() {
                     glyphs.clear();
                 }
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring),
+                Schedule([this, display, message = std::string(text->valuestring),
                           glyphs = std::move(glyphs), bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
+                    RelayChat("message", "user", message);
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
@@ -1054,6 +1056,7 @@ void Application::HandleStateChangedEvent() {
             // Do nothing
             break;
     }
+    RelayChat("state", "", "");
 }
 
 #if CONFIG_ENABLE_VAD_INTERRUPT
@@ -1328,6 +1331,17 @@ bool Application::CanEnterSleepMode() {
 
     // Now it is safe to enter sleep mode
     return true;
+}
+
+void Application::RegisterChatRelayCallback(ChatRelayCallback callback) {
+    chat_relay_callback_ = std::move(callback);
+}
+
+void Application::RelayChat(const std::string& event, const std::string& role, const std::string& text) {
+    if (!chat_relay_callback_) {
+        return;
+    }
+    chat_relay_callback_(event, role, text, DeviceStateMachine::GetStateName(GetDeviceState()));
 }
 
 void Application::RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback) {
