@@ -589,9 +589,9 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
                             uint16_t color,
                             const char* title, const char* body,
                             uint8_t style, int64_t now_us) {
-    static constexpr uint16_t kFrame  = 0x2BD2;  // #2E7A96 外框
+    static constexpr uint16_t kFrame  = 0xFFFF;  // 白色外框
     static constexpr uint16_t kInner  = 0x19C9;  // #1A3A4A 内框
-    static constexpr uint16_t kCorner = 0x5DB9;  // #5CB8D4 角括号
+    static constexpr uint16_t kCorner = 0xFFFF;  // 白色角括号
     static constexpr uint16_t kTitle  = 0xC73D;  // #C8E8F0 标题 (非纯白)
     const bool signal = (style == kDialogStyleSignal);
 
