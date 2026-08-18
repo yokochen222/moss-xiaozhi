@@ -239,6 +239,22 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         PublishAck("chat.ack", id, true, "waking");
         return;
     }
+    if (type == "task.completed") {
+        std::string prompt = JsonString(payload, "prompt");
+        if (prompt.empty()) {
+            std::string title = JsonString(payload, "title");
+            std::string summary = JsonString(payload, "summary");
+            if (title.empty()) {
+                title = "后台任务";
+            }
+            prompt = "请明确告知用户：MOSS 后台任务「" + title + "」已经完成。" + summary;
+        }
+        Application::GetInstance().Schedule([prompt]() {
+            Application::GetInstance().HandleExternalTextMessage(prompt);
+        });
+        PublishAck("task.ack", id, true, "queued");
+        return;
+    }
     if (type == "hw.control") {
         HandleHwControl(id, payload);
         return;

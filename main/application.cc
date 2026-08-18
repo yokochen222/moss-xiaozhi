@@ -1309,6 +1309,12 @@ void Application::HandleExternalTextMessage(const std::string& text) {
         } else if (state == kDeviceStateSpeaking) {
             pending_text_to_send_ = text;
             AbortSpeaking(kAbortReasonNone);
+        } else if (state == kDeviceStateListening || state == kDeviceStateConnecting) {
+            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                protocol_->SendTextChat(text);
+            } else {
+                pending_text_to_send_ = text;
+            }
         } else {
             ESP_LOGW(TAG, "HandleExternalTextMessage: device busy (state=%d), ignored",
                      static_cast<int>(state));
