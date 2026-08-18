@@ -463,9 +463,8 @@ private:
 
         // Face-track UI: stop code scroll + draw HUD while tracking.
         auto* moss_disp = static_cast<MossSpiLcdDisplay*>(display_);
-        FaceTracker::GetInstance().SetUiHooks(
-            [moss_disp]() { moss_disp->EnterFaceTrackMode(); },
-            [moss_disp]() { moss_disp->ExitFaceTrackMode(); });
+        FaceTracker::GetInstance().SetUiHooks([moss_disp]() { moss_disp->EnterFaceTrackMode(); },
+                                              [moss_disp]() { moss_disp->ExitFaceTrackMode(); });
         FaceTracker::GetInstance().SetStatusSink(
             [moss_disp](const FaceTrackerStatus& s) { moss_disp->UpdateFaceTrackOverlay(s); });
     }
@@ -527,6 +526,11 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
+        // Soft USB reset can leave ES7210 mid-transaction; clear the shared bus first.
+        if (i2c_bus_) {
+            i2c_master_bus_reset(i2c_bus_);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
         static BoxAudioCodec audio_codec(
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,

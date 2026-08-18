@@ -2,6 +2,7 @@
 
 #include "device/stepper_gimbal.h"
 #include "human_face_detect.hpp"
+#include "sdkconfig.h"
 
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -93,13 +94,24 @@ bool FaceTracker::EnsureDetector() {
     if (detector_) {
         return true;
     }
+#if CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD || !CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1
+    ESP_LOGE(TAG, "Face detect model is not embedded in flash; refusing to start");
+    return false;
+#else
     const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     const size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    ESP_LOGI(TAG, "Creating HumanFaceDetect (MSR+MNP) free_psram=%u free_int=%u",
+    ESP_LOGI(TAG, "Creating HumanFaceDetect (MSR+MNP flash) free_psram=%u free_int=%u",
              (unsigned)free_psram, (unsigned)free_int);
-    auto* det = new (std::nothrow) HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1, true);
+    // Eager-load: lazy HumanFaceDetect::run() would otherwise construct MSR on the
+    // track task and crash inside esp-dl if the packed model is missing.
+    auto* det = new (std::nothrow) HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1, false);
     if (!det) {
         ESP_LOGE(TAG, "Failed to allocate HumanFaceDetect");
+        return false;
+    }
+    if (det->get_raw_model(0) == nullptr || det->get_raw_model(1) == nullptr) {
+        ESP_LOGE(TAG, "HumanFaceDetect model failed to load from flash");
+        delete det;
         return false;
     }
     // Looser than default 0.5: distant / partial faces on OV2640 were often missed.
@@ -107,6 +119,7 @@ bool FaceTracker::EnsureDetector() {
     det->set_score_thr(0.25f, 1);
     detector_ = det;
     return true;
+#endif
 }
 
 void FaceTracker::ReleaseDetector() {
@@ -123,8 +136,8 @@ bool FaceTracker::EnsurePreviewBuffer(int w, int h) {
     }
     ReleasePreviewBuffer();
     const size_t bytes = static_cast<size_t>(w) * static_cast<size_t>(h) * sizeof(uint16_t);
-    preview_buf_ = static_cast<uint16_t*>(
-        heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    preview_buf_ =
+        static_cast<uint16_t*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!preview_buf_) {
         preview_buf_ = static_cast<uint16_t*>(malloc(bytes));
     }
@@ -165,8 +178,7 @@ void FaceTracker::FillPreviewFromFrame(const camera_fb_t* fb) {
 
 void FaceTracker::ApplyControl(int err_x, int err_y, int frame_w) {
     // Normalize to QVGA-equivalent pixels so thresholds stay stable across resolutions.
-    const float scale =
-        static_cast<float>(kRefFrameW) / static_cast<float>(std::max(frame_w, 1));
+    const float scale = static_cast<float>(kRefFrameW) / static_cast<float>(std::max(frame_w, 1));
     const float nerr_x = static_cast<float>(err_x) * scale;
     const float nerr_y = static_cast<float>(err_y) * scale;
 
@@ -191,9 +203,9 @@ void FaceTracker::ApplyControl(int err_x, int err_y, int frame_w) {
         t = std::clamp(t, 0.f, 1.f);
         // Mild ease (t^1.5): faster mid-range than pure t^2, still brakes near center.
         t = t * std::sqrt(t);
-        delay_ms = static_cast<uint16_t>(std::lround(
-            static_cast<float>(kMaxStepDelayMs) -
-            t * static_cast<float>(kMaxStepDelayMs - kMinStepDelayMs)));
+        delay_ms = static_cast<uint16_t>(
+            std::lround(static_cast<float>(kMaxStepDelayMs) -
+                        t * static_cast<float>(kMaxStepDelayMs - kMinStepDelayMs)));
         delay_ms = std::clamp(delay_ms, kMinStepDelayMs, kMaxStepDelayMs);
     }
 
@@ -380,8 +392,7 @@ void FaceTracker::TaskLoop() {
         ++frame_i;
         if ((t1 - last_log_us) > 1500000) {
             last_log_us = t1;
-            ESP_LOGI(TAG,
-                     "frame=%u faces=%d has=%d box=%dx%d err=(%d,%d) detect=%ums fb=%dx%d",
+            ESP_LOGI(TAG, "frame=%u faces=%d has=%d box=%dx%d err=(%d,%d) detect=%ums fb=%dx%d",
                      (unsigned)frame_i, faces, (int)has_face, face_w, face_h, err_x, err_y,
                      (unsigned)((t1 - t0) / 1000), frame_w, frame_h);
         }

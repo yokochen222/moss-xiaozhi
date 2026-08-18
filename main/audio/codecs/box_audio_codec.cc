@@ -64,37 +64,101 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
     output_dev_ = esp_codec_dev_new(&dev_cfg);
     assert(output_dev_ != NULL);
 
-    // Input
-    i2c_cfg.addr = es7210_addr;
-    in_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    assert(in_ctrl_if_ != NULL);
+    // Input (ES7210). After USB/flash soft-reset the ADC can NACK until the bus
+    // is recovered; never assert here or the board reboot-loops without power-cycle.
+    auto* bus = static_cast<i2c_master_bus_handle_t>(i2c_master_handle);
+    const uint16_t es7210_addr7 = static_cast<uint16_t>(es7210_addr >> 1);
+    constexpr int kEs7210Attempts = 5;
+    for (int attempt = 1; attempt <= kEs7210Attempts; ++attempt) {
+        if (bus != nullptr) {
+            esp_err_t probe = i2c_master_probe(bus, es7210_addr7, 100);
+            if (probe != ESP_OK) {
+                ESP_LOGW(TAG, "ES7210 probe 0x%02x failed: %s (try %d/%d)", es7210_addr7,
+                         esp_err_to_name(probe), attempt, kEs7210Attempts);
+                i2c_master_bus_reset(bus);
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        }
 
-    es7210_codec_cfg_t es7210_cfg = {};
-    es7210_cfg.ctrl_if = in_ctrl_if_;
-    es7210_cfg.mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2 | ES7210_SEL_MIC3 | ES7210_SEL_MIC4;
-    in_codec_if_ = es7210_codec_new(&es7210_cfg);
-    assert(in_codec_if_ != NULL);
+        i2c_cfg.addr = es7210_addr;
+        if (in_ctrl_if_ == nullptr) {
+            in_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
+            if (in_ctrl_if_ == nullptr) {
+                ESP_LOGW(TAG, "ES7210 ctrl create failed (try %d/%d)", attempt, kEs7210Attempts);
+                if (bus != nullptr) {
+                    i2c_master_bus_reset(bus);
+                }
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+        }
 
-    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
-    dev_cfg.codec_if = in_codec_if_;
-    input_dev_ = esp_codec_dev_new(&dev_cfg);
-    assert(input_dev_ != NULL);
+        es7210_codec_cfg_t es7210_cfg = {};
+        es7210_cfg.ctrl_if = in_ctrl_if_;
+        es7210_cfg.mic_selected =
+            ES7210_SEL_MIC1 | ES7210_SEL_MIC2 | ES7210_SEL_MIC3 | ES7210_SEL_MIC4;
+        in_codec_if_ = es7210_codec_new(&es7210_cfg);
+        if (in_codec_if_ != nullptr) {
+            break;
+        }
+        ESP_LOGW(TAG, "es7210_codec_new failed (try %d/%d)", attempt, kEs7210Attempts);
+        if (bus != nullptr) {
+            i2c_master_bus_reset(bus);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
 
-    ESP_LOGI(TAG, "BoxAudioDevice initialized");
+    if (in_codec_if_ != nullptr) {
+        dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
+        dev_cfg.codec_if = in_codec_if_;
+        input_dev_ = esp_codec_dev_new(&dev_cfg);
+        if (input_dev_ == nullptr) {
+            ESP_LOGE(TAG, "esp_codec_dev_new(input) failed; mic input disabled");
+        }
+    } else {
+        ESP_LOGE(TAG, "ES7210 init failed after %d tries; mic input disabled (playback OK)",
+                 kEs7210Attempts);
+    }
+
+    ESP_LOGI(TAG, "BoxAudioDevice initialized (input=%s)", input_dev_ ? "ok" : "disabled");
 }
 
 BoxAudioCodec::~BoxAudioCodec() {
-    ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
-    esp_codec_dev_delete(output_dev_);
-    ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
-    esp_codec_dev_delete(input_dev_);
+    if (output_dev_) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(output_dev_));
+        esp_codec_dev_delete(output_dev_);
+        output_dev_ = nullptr;
+    }
+    if (input_dev_) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(input_dev_));
+        esp_codec_dev_delete(input_dev_);
+        input_dev_ = nullptr;
+    }
 
-    audio_codec_delete_codec_if(in_codec_if_);
-    audio_codec_delete_ctrl_if(in_ctrl_if_);
-    audio_codec_delete_codec_if(out_codec_if_);
-    audio_codec_delete_ctrl_if(out_ctrl_if_);
-    audio_codec_delete_gpio_if(gpio_if_);
-    audio_codec_delete_data_if(data_if_);
+    if (in_codec_if_) {
+        audio_codec_delete_codec_if(in_codec_if_);
+        in_codec_if_ = nullptr;
+    }
+    if (in_ctrl_if_) {
+        audio_codec_delete_ctrl_if(in_ctrl_if_);
+        in_ctrl_if_ = nullptr;
+    }
+    if (out_codec_if_) {
+        audio_codec_delete_codec_if(out_codec_if_);
+        out_codec_if_ = nullptr;
+    }
+    if (out_ctrl_if_) {
+        audio_codec_delete_ctrl_if(out_ctrl_if_);
+        out_ctrl_if_ = nullptr;
+    }
+    if (gpio_if_) {
+        audio_codec_delete_gpio_if(gpio_if_);
+        gpio_if_ = nullptr;
+    }
+    if (data_if_) {
+        audio_codec_delete_data_if(data_if_);
+        data_if_ = nullptr;
+    }
 }
 
 void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws,
@@ -178,6 +242,12 @@ void BoxAudioCodec::SetOutputVolume(int volume) {
 void BoxAudioCodec::EnableInput(bool enable) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == input_enabled_) {
+        return;
+    }
+    if (input_dev_ == nullptr) {
+        if (enable) {
+            ESP_LOGW(TAG, "EnableInput ignored: ES7210 was not initialized");
+        }
         return;
     }
     if (enable) {

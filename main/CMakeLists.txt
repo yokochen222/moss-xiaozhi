@@ -359,6 +359,13 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(EMOTE_GFX_DIR)
         target_include_directories(${COMPONENT_LIB} PRIVATE "${EMOTE_GFX_DIR}/src")
     endif()
+    # human_face_detect defaults to SD card on S3; moss-desktop has no slot.
+    if(CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD)
+        message(FATAL_ERROR
+            "moss-desktop has no SD card; embed human_face_detect in flash "
+            "(CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y). "
+            "Rebuild with: python3 scripts/build.py moss/moss-desktop --name moss-desktop")
+    endif()
 endif()
 
 # Use target_compile_definitions to define the reported board identity
