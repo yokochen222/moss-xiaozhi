@@ -6,6 +6,7 @@
 
 #include <esp_log.h>
 #include <cJSON.h>
+#include <cstring>
 #include <vector>
 
 #define TAG "IrHandlers"
@@ -178,6 +179,36 @@ esp_err_t HandleIrCommandDelete(httpd_req_t* req) {
     std::string id = JsonStr(json, "id");
     cJSON_Delete(json);
     return CatalogReply(req, IrCatalog::GetInstance().DeleteCommand(device_id, id), "deleted");
+}
+
+esp_err_t HandleIrExport(httpd_req_t* req) {
+    return http_util::SendJson(req, IrCatalog::GetInstance().ExportJson());
+}
+
+esp_err_t HandleIrImport(httpd_req_t* req) {
+    std::string body = http_util::ReadBody(req);
+    cJSON* json = cJSON_Parse(body.c_str());
+    if (!json) {
+        return http_util::SendError(req, "400 Bad Request", "Invalid JSON");
+    }
+    bool replace = true;
+    cJSON* mode = cJSON_GetObjectItem(json, "mode");
+    if (cJSON_IsString(mode) && mode->valuestring && strcmp(mode->valuestring, "merge") == 0) {
+        replace = false;
+    }
+    cJSON_Delete(json);
+    auto status = IrCatalog::GetInstance().ImportCatalog(body, replace);
+    if (status == IrCatalogStatus::kOk) {
+        return OkMessage(req, "imported");
+    }
+    const char* http_status = "400 Bad Request";
+    if (status == IrCatalogStatus::kWriteFailed) {
+        http_status = "500 Internal Server Error";
+    }
+    const char* message = status == IrCatalogStatus::kInvalid
+                              ? IrCatalog::GetInstance().LastErrorMessage()
+                              : IrCatalog::StatusMessage(status);
+    return http_util::SendError(req, http_status, message);
 }
 
 }  // namespace ir

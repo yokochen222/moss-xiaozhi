@@ -303,6 +303,14 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         HandleCommandDelete(id, payload);
         return;
     }
+    if (type == "ir.export.get") {
+        HandleExportGet(id);
+        return;
+    }
+    if (type == "ir.import") {
+        HandleImport(id, payload);
+        return;
+    }
 }
 
 void ExternalMqttClient::HandleIrLearn(const std::string& request_id) {
@@ -394,6 +402,39 @@ void ExternalMqttClient::HandleCommandDelete(const std::string& request_id, cJSO
         PublishAck("ir.ack", request_id, true, "deleted");
     } else {
         PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleExportGet(const std::string& request_id) {
+    std::string json = IrCatalog::GetInstance().ExportJson();
+    cJSON* parsed = cJSON_Parse(json.c_str());
+    PublishUp("ir.export", request_id, parsed);
+    cJSON_Delete(parsed);
+}
+
+void ExternalMqttClient::HandleImport(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    char* printed = cJSON_PrintUnformatted(payload);
+    std::string json = printed ? printed : "{}";
+    if (printed) {
+        cJSON_free(printed);
+    }
+    bool replace = true;
+    cJSON* mode = cJSON_GetObjectItem(payload, "mode");
+    if (cJSON_IsString(mode) && mode->valuestring && strcmp(mode->valuestring, "merge") == 0) {
+        replace = false;
+    }
+    auto status = IrCatalog::GetInstance().ImportCatalog(json, replace);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "imported");
+    } else {
+        const char* message = status == IrCatalogStatus::kInvalid
+                                  ? IrCatalog::GetInstance().LastErrorMessage()
+                                  : IrCatalog::StatusMessage(status);
+        PublishAck("ir.error", request_id, false, message);
     }
 }
 

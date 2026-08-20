@@ -15,6 +15,8 @@ esp_err_t HandleIrDevicePut(httpd_req_t* req);
 esp_err_t HandleIrDeviceDelete(httpd_req_t* req);
 esp_err_t HandleIrCommandPut(httpd_req_t* req);
 esp_err_t HandleIrCommandDelete(httpd_req_t* req);
+esp_err_t HandleIrExport(httpd_req_t* req);
+esp_err_t HandleIrImport(httpd_req_t* req);
 
 }  // namespace ir
 }  // namespace api_methods

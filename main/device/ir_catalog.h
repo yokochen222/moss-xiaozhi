@@ -43,8 +43,11 @@ public:
     IrCatalogStatus DeleteCommand(const std::string& appliance_id, const std::string& command_id);
 
     std::string MetadataJson() const;
+    std::string ExportJson() const;
+    IrCatalogStatus ImportCatalog(const std::string& json, bool replace);
     void SeedIfEmpty(const std::vector<IrAppliance>& seed);
 
+    const char* LastErrorMessage() const;
     static const char* StatusMessage(IrCatalogStatus status);
     static std::string NormalizeCode(const std::string& raw);
     static std::string UartPayload(const std::string& code_or_cmd);
@@ -62,6 +65,7 @@ private:
 
     mutable std::mutex mutex_;
     std::vector<IrAppliance> appliances_;
+    mutable std::string last_error_;
     bool mounted_ = false;
 };
 

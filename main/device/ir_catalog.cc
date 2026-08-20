@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 #include <unistd.h>
 
 #define TAG "IrCatalog"
@@ -66,6 +67,165 @@ void LogSpiffsUsage(const char* when) {
         ESP_LOGI(TAG, "SPIFFS %s used=%u total=%u free=%u", when, (unsigned)used, (unsigned)total,
                  (unsigned)(total - used));
     }
+}
+
+bool RequireStringField(cJSON* obj, const char* key, std::string& out) {
+    cJSON* item = cJSON_GetObjectItem(obj, key);
+    if (!cJSON_IsString(item) || !item->valuestring) {
+        return false;
+    }
+    out = item->valuestring;
+    return true;
+}
+
+bool TrimCopy(const std::string& raw, std::string& out) {
+    out = raw;
+    while (!out.empty() && (out.front() == ' ' || out.front() == '\t')) {
+        out.erase(out.begin());
+    }
+    while (!out.empty() && (out.back() == ' ' || out.back() == '\t')) {
+        out.pop_back();
+    }
+    return true;
+}
+
+bool ParseImportCatalog(cJSON* root, std::vector<IrAppliance>& out, std::string& error) {
+    if (!cJSON_IsObject(root)) {
+        error = "根节点必须是 JSON 对象";
+        return false;
+    }
+    cJSON* version = cJSON_GetObjectItem(root, "version");
+    if (version && (!cJSON_IsNumber(version) || version->valueint != 1)) {
+        error = "导入文件版本不支持";
+        return false;
+    }
+    cJSON* devices_json = cJSON_GetObjectItem(root, "devices");
+    if (!cJSON_IsArray(devices_json)) {
+        error = "缺少 devices 数组";
+        return false;
+    }
+
+    std::unordered_set<std::string> device_ids;
+    std::unordered_set<std::string> device_names;
+    int device_index = 0;
+    cJSON* device = nullptr;
+    cJSON_ArrayForEach(device, devices_json) {
+        ++device_index;
+        if (!cJSON_IsObject(device)) {
+            error = "第 " + std::to_string(device_index) + " 个电器格式错误";
+            return false;
+        }
+
+        IrAppliance appliance;
+        std::string raw_id;
+        std::string raw_name;
+        if (!RequireStringField(device, "id", raw_id) || !RequireStringField(device, "name", raw_name) ||
+            !RequireStringField(device, "type", appliance.type)) {
+            error = "第 " + std::to_string(device_index) + " 个电器缺少 id/name/type 字符串字段";
+            return false;
+        }
+        TrimCopy(raw_id, appliance.id);
+        TrimCopy(raw_name, appliance.name);
+
+        cJSON* commands = cJSON_GetObjectItem(device, "commands");
+        if (!cJSON_IsArray(commands)) {
+            error = "电器「" + appliance.name + "」缺少 commands 数组";
+            return false;
+        }
+
+        if (!IrCatalog::ValidId(appliance.id)) {
+            error = "电器 id「" + appliance.id + "」不合法";
+            return false;
+        }
+        if (!IrCatalog::ValidName(appliance.name)) {
+            error = "电器 name「" + appliance.name + "」不合法";
+            return false;
+        }
+        if (!IrCatalog::ValidType(appliance.type)) {
+            error = "电器「" + appliance.name + "」type 不合法";
+            return false;
+        }
+        if (device_ids.count(appliance.id)) {
+            error = "电器 id「" + appliance.id + "」重复";
+            return false;
+        }
+        if (device_names.count(appliance.name)) {
+            error = "电器名称「" + appliance.name + "」重复";
+            return false;
+        }
+        device_ids.insert(appliance.id);
+        device_names.insert(appliance.name);
+
+        std::unordered_set<std::string> command_ids;
+        std::unordered_set<std::string> command_names;
+        int command_index = 0;
+        cJSON* cmd = nullptr;
+        cJSON_ArrayForEach(cmd, commands) {
+            ++command_index;
+            if (!cJSON_IsObject(cmd)) {
+                error = "电器「" + appliance.name + "」第 " + std::to_string(command_index) +
+                        " 个按键格式错误";
+                return false;
+            }
+
+            IrCommand command;
+            std::string raw_command_id;
+            std::string raw_command_name;
+            if (!RequireStringField(cmd, "id", raw_command_id) ||
+                !RequireStringField(cmd, "name", raw_command_name)) {
+                error = "电器「" + appliance.name + "」第 " + std::to_string(command_index) +
+                        " 个按键缺少 id/name 字符串字段";
+                return false;
+            }
+            TrimCopy(raw_command_id, command.id);
+            TrimCopy(raw_command_name, command.name);
+
+            cJSON* code = cJSON_GetObjectItem(cmd, "code");
+            if (code && !cJSON_IsString(code)) {
+                error = "电器「" + appliance.name + "」按键「" + command.name + "」code 必须是字符串";
+                return false;
+            }
+            if (cJSON_IsString(code) && code->valuestring) {
+                command.code = IrCatalog::NormalizeCode(code->valuestring);
+            }
+
+            if (!IrCatalog::ValidId(command.id)) {
+                error = "电器「" + appliance.name + "」按键 id「" + command.id + "」不合法";
+                return false;
+            }
+            if (!IrCatalog::ValidName(command.name)) {
+                error = "电器「" + appliance.name + "」按键 name「" + command.name + "」不合法";
+                return false;
+            }
+            if (!IrCatalog::ValidCode(command.code)) {
+                error = "电器「" + appliance.name + "」按键「" + command.name + "」红外码不合法";
+                return false;
+            }
+            if (command_ids.count(command.id)) {
+                error = "电器「" + appliance.name + "」按键 id「" + command.id + "」重复";
+                return false;
+            }
+            if (command_names.count(command.name)) {
+                error = "电器「" + appliance.name + "」按键名称「" + command.name + "」重复";
+                return false;
+            }
+            command_ids.insert(command.id);
+            command_names.insert(command.name);
+            appliance.commands.push_back(std::move(command));
+        }
+
+        if (appliance.commands.size() > kMaxCommands) {
+            error = "电器「" + appliance.name + "」按键数量超过上限";
+            return false;
+        }
+        out.push_back(std::move(appliance));
+    }
+
+    if (out.size() > kMaxAppliances) {
+        error = "电器数量超过上限";
+        return false;
+    }
+    return true;
 }
 }  // namespace
 
@@ -528,6 +688,112 @@ IrCatalogStatus IrCatalog::DeleteCommand(const std::string& appliance_id, const 
     }
     appliance->commands.push_back(std::move(removed));
     return IrCatalogStatus::kWriteFailed;
+}
+
+std::string IrCatalog::ExportJson() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "version", 1);
+    cJSON* devices = cJSON_CreateArray();
+    for (const auto& appliance : appliances_) {
+        cJSON* device = cJSON_CreateObject();
+        cJSON_AddStringToObject(device, "id", appliance.id.c_str());
+        cJSON_AddStringToObject(device, "name", appliance.name.c_str());
+        cJSON_AddStringToObject(device, "type", appliance.type.c_str());
+        cJSON* commands = cJSON_CreateArray();
+        for (const auto& command : appliance.commands) {
+            cJSON* cmd = cJSON_CreateObject();
+            cJSON_AddStringToObject(cmd, "id", command.id.c_str());
+            cJSON_AddStringToObject(cmd, "name", command.name.c_str());
+            cJSON_AddStringToObject(cmd, "code", command.code.c_str());
+            cJSON_AddItemToArray(commands, cmd);
+        }
+        cJSON_AddItemToObject(device, "commands", commands);
+        cJSON_AddItemToArray(devices, device);
+    }
+    cJSON_AddItemToObject(root, "devices", devices);
+    char* printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    std::string json = printed ? printed : "{}";
+    if (printed) {
+        cJSON_free(printed);
+    }
+    return json;
+}
+
+IrCatalogStatus IrCatalog::ImportCatalog(const std::string& json, bool replace) {
+    std::vector<IrAppliance> incoming;
+    std::string error;
+
+    cJSON* root = cJSON_Parse(json.c_str());
+    if (!root) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_error_ = "JSON 解析失败";
+        return IrCatalogStatus::kInvalid;
+    }
+    if (!ParseImportCatalog(root, incoming, error)) {
+        cJSON_Delete(root);
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_error_ = error.empty() ? "数据不完整或不合法" : error;
+        ESP_LOGW(TAG, "Import rejected: %s", last_error_.c_str());
+        return IrCatalogStatus::kInvalid;
+    }
+    cJSON_Delete(root);
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_error_.clear();
+    std::vector<IrAppliance> backup = appliances_;
+
+    if (replace) {
+        appliances_ = std::move(incoming);
+    } else {
+        for (auto& appliance : incoming) {
+            IrAppliance* existing = FindApplianceMutable(appliance.id);
+            if (existing) {
+                existing->name = appliance.name;
+                existing->type = appliance.type;
+                for (auto& command : appliance.commands) {
+                    bool found = false;
+                    for (auto& existing_cmd : existing->commands) {
+                        if (existing_cmd.id == command.id) {
+                            existing_cmd.name = command.name;
+                            if (!command.code.empty()) {
+                                existing_cmd.code = command.code;
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        if (existing->commands.size() >= kMaxCommands) {
+                            appliances_ = std::move(backup);
+                            last_error_ = "电器「" + appliance.name + "」按键数量超过上限";
+                            return IrCatalogStatus::kInvalid;
+                        }
+                        existing->commands.push_back(std::move(command));
+                    }
+                }
+            } else {
+                if (appliances_.size() >= kMaxAppliances) {
+                    appliances_ = std::move(backup);
+                    last_error_ = "电器数量超过上限";
+                    return IrCatalogStatus::kInvalid;
+                }
+                appliances_.push_back(std::move(appliance));
+            }
+        }
+    }
+
+    if (!WriteUnlocked()) {
+        appliances_ = std::move(backup);
+        return IrCatalogStatus::kWriteFailed;
+    }
+    return IrCatalogStatus::kOk;
+}
+
+const char* IrCatalog::LastErrorMessage() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return last_error_.empty() ? StatusMessage(IrCatalogStatus::kInvalid) : last_error_.c_str();
 }
 
 std::string IrCatalog::MetadataJson() const {

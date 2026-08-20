@@ -65,6 +65,8 @@ bool ApiServer::Start(int port) {
     add("/ir/device/delete", HTTP_POST, api_methods::ir::HandleIrDeviceDelete);
     add("/ir/command", HTTP_PUT, api_methods::ir::HandleIrCommandPut);
     add("/ir/command/delete", HTTP_POST, api_methods::ir::HandleIrCommandDelete);
+    add("/ir/export", HTTP_GET, api_methods::ir::HandleIrExport);
+    add("/ir/import", HTTP_POST, api_methods::ir::HandleIrImport);
     add("/*", HTTP_OPTIONS, http_util::HandleOptions);
 
     is_running_ = true;
