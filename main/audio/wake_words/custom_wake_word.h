@@ -80,7 +80,7 @@ private:
     void ParseWakenetModelConfig();
     void LoadStoredConfig();
     bool UpdateMultinetCommands();
-    void SaveStoredConfig();
+    bool SaveStoredConfig();
     static bool ParseEntriesJson(const std::string& json, std::vector<Command>* out);
 };
 

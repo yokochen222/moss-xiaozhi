@@ -13,6 +13,14 @@
 
 #define TAG "CustomWakeWord"
 
+// NVS key names must be <= 15 characters (NVS_KEY_NAME_MAX_SIZE).
+namespace {
+constexpr const char* kNvsWakeWordsJson = "wake_words_json";
+constexpr const char* kNvsWakeWordCmd = "wake_word_cmd";
+constexpr const char* kNvsWakeWordDisp = "wake_word_disp";
+constexpr const char* kNvsWakeWordThr = "wake_word_thr";
+}  // namespace
+
 CustomWakeWord::CustomWakeWord()
     : wake_word_opus_() {
 }
@@ -86,12 +94,12 @@ void CustomWakeWord::ParseWakenetModelConfig() {
 void CustomWakeWord::LoadStoredConfig() {
     Settings settings("vendor");
     std::vector<Command> loaded;
-    const std::string json = settings.GetString("custom_wake_words_json");
+    const std::string json = settings.GetString(kNvsWakeWordsJson);
     if (!json.empty() && ParseEntriesJson(json, &loaded)) {
         commands_.assign(loaded.begin(), loaded.end());
     } else {
-        std::string command = settings.GetString("custom_wake_word_command");
-        std::string display = settings.GetString("custom_wake_word_display");
+        std::string command = settings.GetString(kNvsWakeWordCmd);
+        std::string display = settings.GetString(kNvsWakeWordDisp);
         WakeWordCommandEntry entry{command, display};
         if (!command.empty() && !display.empty() &&
             IsValidWakeWordPinyin(entry.command) && IsValidWakeWordDisplay(entry.display)) {
@@ -103,7 +111,7 @@ void CustomWakeWord::LoadStoredConfig() {
         }
     }
 
-    int threshold = settings.GetInt("custom_wake_word_threshold", -1);
+    int threshold = settings.GetInt(kNvsWakeWordThr, -1);
     if (threshold >= 1 && threshold <= 99) {
         threshold_ = threshold / 100.0f;
     }
@@ -143,7 +151,7 @@ bool CustomWakeWord::ParseEntriesJson(const std::string& json, std::vector<Comma
     return !out->empty();
 }
 
-void CustomWakeWord::SaveStoredConfig() {
+bool CustomWakeWord::SaveStoredConfig() {
     cJSON* root = cJSON_CreateArray();
     for (const auto& entry : commands_) {
         cJSON* item = cJSON_CreateObject();
@@ -154,16 +162,22 @@ void CustomWakeWord::SaveStoredConfig() {
     char* printed = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!printed) {
-        return;
+        return false;
     }
     Settings settings("vendor", true);
-    settings.SetString("custom_wake_words_json", printed);
+    if (!settings.SetString(kNvsWakeWordsJson, printed)) {
+        cJSON_free(printed);
+        return false;
+    }
     cJSON_free(printed);
     if (!commands_.empty()) {
-        settings.SetString("custom_wake_word_command", commands_.front().command);
-        settings.SetString("custom_wake_word_display", commands_.front().text);
+        if (!settings.SetString(kNvsWakeWordCmd, commands_.front().command) ||
+            !settings.SetString(kNvsWakeWordDisp, commands_.front().text)) {
+            return false;
+        }
     }
-    settings.SetInt("custom_wake_word_threshold", GetThresholdPercent());
+    settings.SetInt(kNvsWakeWordThr, GetThresholdPercent());
+    return true;
 }
 
 
@@ -465,7 +479,10 @@ bool CustomWakeWord::ApplyConfig(const std::vector<WakeWordCommandEntry>& entrie
         threshold_ = threshold_percent / 100.0f;
         commands_ = std::move(next);
     }
-    SaveStoredConfig();
+    if (!SaveStoredConfig()) {
+        ESP_LOGE(TAG, "ApplyConfig failed to persist wake word settings");
+        return false;
+    }
 
     if (multinet_model_data_ == nullptr || multinet_ == nullptr) {
         return true;

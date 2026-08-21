@@ -37,13 +37,23 @@ std::string Settings::GetString(const std::string& key, const std::string& defau
     return value;
 }
 
-void Settings::SetString(const std::string& key, const std::string& value) {
-    if (read_write_) {
-        ESP_ERROR_CHECK(nvs_set_str(nvs_handle_, key.c_str(), value.c_str()));
-        dirty_ = true;
-    } else {
+bool Settings::SetString(const std::string& key, const std::string& value) {
+    if (!read_write_) {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
+        return false;
     }
+    if (key.size() > NVS_KEY_NAME_MAX_SIZE - 1) {
+        ESP_LOGE(TAG, "NVS key too long (%zu > %d): %s", key.size(), NVS_KEY_NAME_MAX_SIZE - 1,
+                 key.c_str());
+        return false;
+    }
+    const esp_err_t err = nvs_set_str(nvs_handle_, key.c_str(), value.c_str());
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_set_str failed for key %s: %s", key.c_str(), esp_err_to_name(err));
+        return false;
+    }
+    dirty_ = true;
+    return true;
 }
 
 int32_t Settings::GetInt(const std::string& key, int32_t default_value) {
