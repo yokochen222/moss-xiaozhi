@@ -121,6 +121,17 @@ const std::string& LiteAudioEngine::GetLastDetectedWakeWord() const {
     return wake_word_ ? wake_word_->GetLastDetectedWakeWord() : empty_wake_word_;
 }
 
+std::vector<std::string> LiteAudioEngine::GetWakeWordPhrases() const {
+    if (!wake_word_) {
+        return {};
+    }
+    const auto& last = wake_word_->GetLastDetectedWakeWord();
+    if (!last.empty()) {
+        return {last};
+    }
+    return {};
+}
+
 void LiteAudioEngine::OutputRawAudio(const std::vector<int16_t>& data) {
     if (!output_callback_ || codec_ == nullptr) {
         return;

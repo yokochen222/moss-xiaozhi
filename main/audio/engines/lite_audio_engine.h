@@ -37,6 +37,8 @@ public:
     void EncodeWakeWordData() override;
     bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
     const std::string& GetLastDetectedWakeWord() const override;
+    std::vector<std::string> GetWakeWordPhrases() const override;
+    std::string GetWakeWordEngine() const override { return wake_word_ ? "esp_wakenet" : "none"; }
 
 private:
     AudioCodec* codec_ = nullptr;

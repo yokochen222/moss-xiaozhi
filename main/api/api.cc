@@ -56,6 +56,8 @@ bool ApiServer::Start(int port) {
     add("/health", HTTP_GET, api_methods::config::HandleHealth);
     add("/config/mqtt", HTTP_GET, api_methods::config::HandleMqttGet);
     add("/config/mqtt", HTTP_PUT, api_methods::config::HandleMqttPut);
+    add("/config/device", HTTP_GET, api_methods::config::HandleDeviceGet);
+    add("/config/device", HTTP_PUT, api_methods::config::HandleDevicePut);
     add("/ir/send", HTTP_POST, api_methods::ir::HandleIrSend);
     add("/ir/read", HTTP_GET, api_methods::ir::HandleIrRead);
     add("/ir/learn", HTTP_POST, api_methods::ir::HandleIrLearn);

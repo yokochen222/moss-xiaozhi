@@ -10,6 +10,7 @@
 #include <model_path.h>
 
 #include "audio_codec.h"
+#include "wake_word_config.h"
 
 class AudioEngine {
 public:
@@ -35,6 +36,18 @@ public:
     virtual void EncodeWakeWordData() = 0;
     virtual bool GetWakeWordOpus(std::vector<uint8_t>& opus) = 0;
     virtual const std::string& GetLastDetectedWakeWord() const = 0;
+    virtual std::vector<std::string> GetWakeWordPhrases() const { return {}; }
+    virtual std::string GetWakeWordEngine() const { return "none"; }
+    virtual bool GetWakeWordConfig(std::vector<WakeWordCommandEntry>* entries, int* threshold_percent) const {
+        (void)entries;
+        (void)threshold_percent;
+        return false;
+    }
+    virtual bool ApplyWakeWordConfig(const std::vector<WakeWordCommandEntry>& entries, int threshold_percent) {
+        (void)entries;
+        (void)threshold_percent;
+        return false;
+    }
 };
 
 #endif

@@ -29,15 +29,15 @@ void EyeMotorTool::Register() {
         "EyeMotor TB6612FNG电机驱动控制工具\n"
         "硬件说明：GPIO9=PWM(速度), GPIO10=IN1(正转), GPIO11=IN2(反转)\n"
         "使用说明：\n"
-        "- action='start_forward'：电机正转，默认全速\n"
-        "- action='start_backward'：电机反转，默认全速\n"
+        "- action='start_forward'：电机正转，默认40%速度\n"
+        "- action='start_backward'：电机反转，默认40%速度\n"
         "- action='stop'：停止电机\n"
         "- action='get_status'：获取电机状态\n"
         "- action='set_speed'：调整当前转速(需先启动电机)\n"
         ,
         std::vector<Property>{
             Property("action", kPropertyTypeString),
-            Property("speed", kPropertyTypeInteger, 100, 1, 100)
+            Property("speed", kPropertyTypeInteger, 40, 1, 100)
         },
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();

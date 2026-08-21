@@ -9,6 +9,8 @@ namespace config {
 esp_err_t HandleHealth(httpd_req_t* req);
 esp_err_t HandleMqttGet(httpd_req_t* req);
 esp_err_t HandleMqttPut(httpd_req_t* req);
+esp_err_t HandleDeviceGet(httpd_req_t* req);
+esp_err_t HandleDevicePut(httpd_req_t* req);
 
 }  // namespace config
 }  // namespace api_methods

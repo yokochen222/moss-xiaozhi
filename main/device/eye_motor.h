@@ -22,7 +22,6 @@ private:
     static constexpr uint32_t LEDC_FREQUENCY = 1000;
 
     static constexpr uint32_t MAX_DUTY = (1 << LEDC_DUTY_RES) - 1;
-    static constexpr uint32_t DEFAULT_DUTY = MAX_DUTY;
 
     EyeMotorState state_;
     uint32_t current_duty_;
@@ -30,6 +29,8 @@ private:
     void InitializeGpio();
 
 public:
+    static constexpr uint8_t DEFAULT_SPEED_PERCENT = 40;
+
     EyeMotorDevice();
     ~EyeMotorDevice();
 

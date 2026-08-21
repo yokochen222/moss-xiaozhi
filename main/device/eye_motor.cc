@@ -52,11 +52,11 @@ void EyeMotorDevice::InitializeGpio() {
 }
 
 bool EyeMotorDevice::StartForward() {
-    return StartForward(DEFAULT_DUTY);
+    return StartForward(DEFAULT_SPEED_PERCENT);
 }
 
 bool EyeMotorDevice::StartBackward() {
-    return StartBackward(DEFAULT_DUTY);
+    return StartBackward(DEFAULT_SPEED_PERCENT);
 }
 
 bool EyeMotorDevice::StartForward(uint8_t speed_percent) {

@@ -19,6 +19,7 @@
 #include "audio_codec.h"
 #include "wake_word.h"
 #include "wake_word_audio_cache.h"
+#include "wake_word_config.h"
 
 class CustomWakeWord : public WakeWord {
 public:
@@ -35,6 +36,11 @@ public:
     void EncodeWakeWordData();
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
+
+    std::vector<std::string> GetDisplayPhrases() const;
+    std::vector<WakeWordCommandEntry> GetEntries() const;
+    int GetThresholdPercent() const;
+    bool ApplyConfig(const std::vector<WakeWordCommandEntry>& entries, int threshold_percent);
 
 private:
     struct Command {
@@ -53,6 +59,7 @@ private:
     int duration_ = 3000;
     float threshold_ = 0.2;
     std::deque<Command> commands_;
+    mutable std::mutex commands_mutex_;
  
     std::function<void(const std::string& wake_word)> wake_word_detected_callback_;
     AudioCodec* codec_ = nullptr;
@@ -71,6 +78,10 @@ private:
 
     void FeedSamples(const int16_t* data, size_t samples, bool mono);
     void ParseWakenetModelConfig();
+    void LoadStoredConfig();
+    bool UpdateMultinetCommands();
+    void SaveStoredConfig();
+    static bool ParseEntriesJson(const std::string& json, std::vector<Command>* out);
 };
 
 #endif

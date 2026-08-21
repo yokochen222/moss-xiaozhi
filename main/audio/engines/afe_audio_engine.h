@@ -44,7 +44,11 @@ public:
 
     void EncodeWakeWordData() override;
     bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
-    const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
+    const std::string& GetLastDetectedWakeWord() const override;
+    std::vector<std::string> GetWakeWordPhrases() const override;
+    std::string GetWakeWordEngine() const override;
+    bool GetWakeWordConfig(std::vector<WakeWordCommandEntry>* entries, int* threshold_percent) const override;
+    bool ApplyWakeWordConfig(const std::vector<WakeWordCommandEntry>& entries, int threshold_percent) override;
 
 private:
     enum class WakeDetector {

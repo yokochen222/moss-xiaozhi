@@ -308,6 +308,7 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "api/methods/config/config_handlers.cc"
         "config/ext_mqtt_config.cc"
         "config/moss_config_service.cc"
+        "config/device_config.cc"
         "device/ir_catalog.cc"
         "external_mqtt_client.cc"
     )

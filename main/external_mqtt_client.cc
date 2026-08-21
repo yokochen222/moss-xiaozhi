@@ -3,6 +3,7 @@
 #include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
 #include "board.h"
+#include "config/device_config.h"
 #include "config/moss_config_service.h"
 #include "device/eye_motor.h"
 #include "device/infrared.h"
@@ -263,6 +264,14 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         PublishHwState(id, true, "ok");
         return;
     }
+    if (type == "device.config.get") {
+        HandleDeviceConfigGet(id);
+        return;
+    }
+    if (type == "device.config.set") {
+        HandleDeviceConfigSet(id, payload);
+        return;
+    }
     if (type == "bind.hello") {
         PublishAck("bind.ack", id, true, "ok");
         Application::GetInstance().Schedule(
@@ -467,7 +476,7 @@ void ExternalMqttClient::PublishHwState(const std::string& request_id, bool ok,
 void ExternalMqttClient::HandleHwControl(const std::string& request_id, cJSON* payload) {
     const std::string device = payload ? JsonString(payload, "device") : "";
     const std::string action = payload ? JsonString(payload, "action") : "";
-    int speed = payload ? JsonInt(payload, "speed", 80) : 80;
+    int speed = payload ? JsonInt(payload, "speed", DeviceConfig::DefaultMotorSpeedPercent()) : DeviceConfig::DefaultMotorSpeedPercent();
     if (speed < 1) speed = 1;
     if (speed > 100) speed = 100;
 
@@ -524,4 +533,31 @@ void ExternalMqttClient::HandleHwControl(const std::string& request_id, cJSON* p
         message = "unknown device";
     }
     PublishHwState(request_id, ok, message);
+}
+
+void ExternalMqttClient::HandleDeviceConfigGet(const std::string& request_id) {
+    Application::GetInstance().Schedule([this, request_id]() {
+        cJSON* payload = DeviceConfig::BuildJson();
+        cJSON_AddBoolToObject(payload, "ok", true);
+        PublishUp("device.config", request_id, payload);
+        cJSON_Delete(payload);
+    });
+}
+
+void ExternalMqttClient::HandleDeviceConfigSet(const std::string& request_id, cJSON* payload) {
+    cJSON* payload_copy = payload ? cJSON_Duplicate(payload, 1) : nullptr;
+    Application::GetInstance().Schedule([this, request_id, payload_copy]() {
+        std::string error;
+        bool ok = DeviceConfig::Apply(payload_copy, &error);
+        cJSON* resp = DeviceConfig::BuildJson();
+        cJSON_AddBoolToObject(resp, "ok", ok);
+        if (!ok) {
+            cJSON_AddStringToObject(resp, "message", error.c_str());
+        }
+        PublishUp("device.config", request_id, resp);
+        cJSON_Delete(resp);
+        if (payload_copy) {
+            cJSON_Delete(payload_copy);
+        }
+    });
 }

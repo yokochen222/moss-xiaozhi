@@ -37,6 +37,8 @@ private:
     void HandleExportGet(const std::string& request_id);
     void HandleImport(const std::string& request_id, cJSON* payload);
     void HandleHwControl(const std::string& request_id, cJSON* payload);
+    void HandleDeviceConfigGet(const std::string& request_id);
+    void HandleDeviceConfigSet(const std::string& request_id, cJSON* payload);
     void PublishHwState(const std::string& request_id, bool ok, const std::string& message);
     void PublishAck(const std::string& type, const std::string& request_id, bool ok,
                     const std::string& message);

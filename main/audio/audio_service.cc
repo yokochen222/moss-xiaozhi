@@ -828,6 +828,36 @@ bool AudioService::IsAfeWakeWord() {
     return audio_engine_initialized_ && audio_engine_->IsAfeWakeWord();
 }
 
+std::vector<std::string> AudioService::GetWakeWordPhrases() const {
+    if (!audio_engine_initialized_ || !audio_engine_) {
+        return {};
+    }
+    return audio_engine_->GetWakeWordPhrases();
+}
+
+std::string AudioService::GetWakeWordEngine() const {
+    if (!audio_engine_initialized_ || !audio_engine_) {
+        return "none";
+    }
+    return audio_engine_->GetWakeWordEngine();
+}
+
+bool AudioService::GetWakeWordConfig(std::vector<WakeWordCommandEntry>* entries,
+                                     int* threshold_percent) const {
+    if (!audio_engine_initialized_ || !audio_engine_) {
+        return false;
+    }
+    return audio_engine_->GetWakeWordConfig(entries, threshold_percent);
+}
+
+bool AudioService::ApplyWakeWordConfig(const std::vector<WakeWordCommandEntry>& entries,
+                                       int threshold_percent) {
+    if (!audio_engine_initialized_ || !audio_engine_) {
+        return false;
+    }
+    return audio_engine_->ApplyWakeWordConfig(entries, threshold_percent);
+}
+
 bool AudioService::InitializeAudioEngine() {
     if (!audio_engine_) {
         return false;

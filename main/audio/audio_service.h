@@ -122,6 +122,10 @@ public:
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
     bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
     bool IsAfeWakeWord();
+    std::vector<std::string> GetWakeWordPhrases() const;
+    std::string GetWakeWordEngine() const;
+    bool GetWakeWordConfig(std::vector<WakeWordCommandEntry>* entries, int* threshold_percent) const;
+    bool ApplyWakeWordConfig(const std::vector<WakeWordCommandEntry>& entries, int threshold_percent);
 
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);

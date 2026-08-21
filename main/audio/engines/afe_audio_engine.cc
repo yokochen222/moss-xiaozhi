@@ -584,3 +584,62 @@ bool AfeAudioEngine::GetWakeWordOpus(std::vector<uint8_t>& opus) {
     wake_word_opus_.pop_front();
     return !opus.empty();
 }
+
+const std::string& AfeAudioEngine::GetLastDetectedWakeWord() const {
+    return last_detected_wake_word_;
+}
+
+std::vector<std::string> AfeAudioEngine::GetWakeWordPhrases() const {
+    if (wake_detector_ == WakeDetector::kMultiNet && custom_wake_word_) {
+        return custom_wake_word_->GetDisplayPhrases();
+    }
+    return wake_words_;
+}
+
+std::string AfeAudioEngine::GetWakeWordEngine() const {
+    if (wake_detector_ == WakeDetector::kMultiNet) {
+        return "custom";
+    }
+    if (wake_detector_ == WakeDetector::kWakeNet) {
+        return "afe_wakenet";
+    }
+    return "none";
+}
+
+bool AfeAudioEngine::GetWakeWordConfig(std::vector<WakeWordCommandEntry>* entries,
+                                       int* threshold_percent) const {
+    if (wake_detector_ != WakeDetector::kMultiNet || !custom_wake_word_) {
+        return false;
+    }
+    if (entries) {
+        *entries = custom_wake_word_->GetEntries();
+    }
+    if (threshold_percent) {
+        *threshold_percent = custom_wake_word_->GetThresholdPercent();
+    }
+    return true;
+}
+
+bool AfeAudioEngine::ApplyWakeWordConfig(const std::vector<WakeWordCommandEntry>& entries,
+                                         int threshold_percent) {
+    if (wake_detector_ != WakeDetector::kMultiNet || !custom_wake_word_) {
+        return false;
+    }
+
+    const bool was_enabled = IsWakeWordDetectionEnabled();
+    if (was_enabled) {
+        xEventGroupClearBits(event_group_, kWakeWordEnabled);
+        custom_wake_word_->Stop();
+        UpdateActiveState();
+        // Wait for ProcessingTask to finish the in-flight AFE frame before updating MultiNet.
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    const bool ok = custom_wake_word_->ApplyConfig(entries, threshold_percent);
+    if (was_enabled && ok) {
+        custom_wake_word_->Start();
+        xEventGroupSetBits(event_group_, kWakeWordEnabled);
+        UpdateActiveState();
+    }
+    return ok;
+}
