@@ -164,10 +164,14 @@ private:
     int64_t speaking_started_us_ = 0;
     int64_t last_tts_sentence_us_ = 0;
     bool vad_interrupt_armed_ = false;
+    bool barge_in_listen_ = false;
+    std::deque<std::unique_ptr<AudioStreamPacket>> barge_in_hold_;
     esp_timer_handle_t vad_interrupt_timer_ = nullptr;
     void CancelVadInterruptTimer();
     void MaybeStartVadInterruptTimer();
     void HandleVadInterruptConfirm();
+    void HoldSpeakingUplink();
+    void FlushBargeInHold(bool send);
 #endif
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;

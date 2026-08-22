@@ -258,15 +258,24 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
-                    // Drop the remaining packets. Leaving them in the queue would
-                    // stall the Opus codec task (it waits for queue space), which in
-                    // turn deadlocks the whole audio input pipeline, as no new
-                    // MAIN_EVENT_SEND_AUDIO event would ever be triggered again.
-                    while (audio_service_.PopPacketFromSendQueue())
-                        ;
-                    break;
+            const auto state = GetDeviceState();
+            if (state == kDeviceStateSpeaking) {
+#if CONFIG_ENABLE_VAD_INTERRUPT
+                HoldSpeakingUplink();
+#else
+                while (audio_service_.PopPacketFromSendQueue())
+                    ;
+#endif
+            } else if (state != kDeviceStateListening || pending_listening_start_) {
+                while (audio_service_.PopPacketFromSendQueue())
+                    ;
+            } else {
+                while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+                    if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
+                        while (audio_service_.PopPacketFromSendQueue())
+                            ;
+                        break;
+                    }
                 }
             }
         }
@@ -1029,12 +1038,29 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             break;
-        case kDeviceStateListening:
+        case kDeviceStateListening: {
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
+            const bool keep_preroll = barge_in_listen_;
+            barge_in_listen_ = false;
+#else
+            const bool keep_preroll = false;
 #endif
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
+
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            if (keep_preroll) {
+                FlushBargeInHold(true);
+            } else {
+                FlushBargeInHold(false);
+                while (audio_service_.PopPacketFromSendQueue())
+                    ;
+            }
+#else
+            while (audio_service_.PopPacketFromSendQueue())
+                ;
+#endif
 
             // Keep the AEC processor running across speaking -> listening
             // (realtime). Only wait for drain when we have to start it fresh.
@@ -1049,6 +1075,7 @@ void Application::HandleStateChangedEvent() {
                 ConfigureWakeWordForListening();
             }
             break;
+        }
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
 
@@ -1067,6 +1094,7 @@ void Application::HandleStateChangedEvent() {
             last_tts_sentence_us_ = speaking_started_us_;
             // Wait for silence after the previous user turn before arming barge-in.
             vad_interrupt_armed_ = !audio_service_.IsVoiceDetected();
+            FlushBargeInHold(false);
 #endif
             audio_service_.ResetDecoder();
             break;
@@ -1089,18 +1117,12 @@ void Application::CancelVadInterruptTimer() {
 }
 
 void Application::MaybeStartVadInterruptTimer() {
-    // Wait for TTS/AEC settle; loud playback needs a longer window.
-    constexpr int64_t kVadInterruptGuardUs = 1500 * 1000;
+    constexpr int64_t kVadInterruptGuardUs = 700 * 1000;
 
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
-    // Never barge-in before TTS audio is actually playing (avoids aborting silent waits).
     if (audio_service_.IsPlaybackIdle()) {
-        return;
-    }
-    const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
-    if (elapsed < kVadInterruptGuardUs) {
         return;
     }
     if (vad_interrupt_timer_ == nullptr) {
@@ -1110,20 +1132,26 @@ void Application::MaybeStartVadInterruptTimer() {
         return;
     }
 
+    const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
+    int64_t extra_guard_us = 0;
+    if (elapsed < kVadInterruptGuardUs) {
+        extra_guard_us = kVadInterruptGuardUs - elapsed;
+    }
+
     int volume = 70;
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         volume = codec->output_volume();
     }
-    int64_t sustain_ms = 550;
+    int64_t sustain_ms = 400;
     if (volume >= 80) {
-        sustain_ms = 950;
+        sustain_ms = 600;
     } else if (volume >= 60) {
-        sustain_ms = 750;
+        sustain_ms = 500;
     }
 
     ESP_LOGI(TAG, "VAD barge-in candidate (vol=%d), confirming in %d ms", volume,
-             (int)sustain_ms);
-    esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000);
+             (int)(sustain_ms + extra_guard_us / 1000));
+    esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000 + extra_guard_us);
 }
 
 void Application::HandleVadInterruptConfirm() {
@@ -1137,7 +1165,34 @@ void Application::HandleVadInterruptConfirm() {
     AbortSpeaking(kAbortReasonVadInterrupt);
     // Stop TTS immediately; keep send-queue pre-roll for ASR onset.
     audio_service_.ResetDecoder();
+    barge_in_listen_ = true;
     SetListeningMode(GetDefaultListeningMode());
+}
+
+void Application::HoldSpeakingUplink() {
+    // Keep recent near-end frames locally. Echo-only (VAD silent) is dropped
+    // so a normal TTS stop cannot be ASR'd as the user.
+    constexpr size_t kBargeInHoldMaxPackets = 34;
+    while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+        if (!audio_service_.IsVoiceDetected()) {
+            continue;
+        }
+        barge_in_hold_.push_back(std::move(packet));
+        while (barge_in_hold_.size() > kBargeInHoldMaxPackets) {
+            barge_in_hold_.pop_front();
+        }
+    }
+}
+
+void Application::FlushBargeInHold(bool send) {
+    if (send && protocol_) {
+        for (auto& packet : barge_in_hold_) {
+            if (!protocol_->SendAudio(std::move(packet))) {
+                break;
+            }
+        }
+    }
+    barge_in_hold_.clear();
 }
 #endif
 
