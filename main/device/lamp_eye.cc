@@ -99,21 +99,44 @@ bool LampEyeDevice::TurnOff() {
     return true;
 }
 
+void LampEyeDevice::WaitBreathingTaskExit(int max_ms) {
+    const int step_ms = 50;
+    int waited = 0;
+    while (breathing_task_handle_ != nullptr && waited < max_ms) {
+        vTaskDelay(pdMS_TO_TICKS(step_ms));
+        waited += step_ms;
+    }
+    if (breathing_task_handle_ != nullptr) {
+        ESP_LOGW(TAG, "Force deleting breathing task");
+        vTaskDelete(breathing_task_handle_);
+        breathing_task_handle_ = nullptr;
+    }
+}
+
 bool LampEyeDevice::StartBreathing() {
-    if (!breathing_) {
-        breathing_ = true;
-        pause_ = false;
-        BaseType_t result = xTaskCreate(BreathingTask, "BreathingTask", 2048, this, 5, &breathing_task_handle_);
-        if (result != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create breathing task");
-            breathing_ = false;
-            pause_ = false;
-            return false;
-        }
-        ESP_LOGI(TAG, "Breathing effect started");
+    if (breathing_ && breathing_task_handle_ != nullptr) {
         return true;
     }
-    return true; // 已经在运行
+
+    if (breathing_task_handle_ != nullptr) {
+        ESP_LOGW(TAG, "Cleaning stale breathing task before start");
+        breathing_ = false;
+        pause_ = false;
+        WaitBreathingTaskExit(2000);
+    }
+
+    breathing_ = true;
+    pause_ = false;
+    BaseType_t result = xTaskCreate(BreathingTask, "BreathingTask", 2560, this, 5, &breathing_task_handle_);
+    if (result != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create breathing task");
+        breathing_ = false;
+        pause_ = false;
+        breathing_task_handle_ = nullptr;
+        return false;
+    }
+    ESP_LOGI(TAG, "Breathing effect started");
+    return true;
 }
 
 bool LampEyeDevice::PauseBreathing() {
@@ -135,37 +158,22 @@ bool LampEyeDevice::ResumeBreathing() {
 }
 
 bool LampEyeDevice::StopBreathing() {
-    if (breathing_ && breathing_task_handle_) {
-        ESP_LOGI(TAG, "Stopping breathing mode");
-        
-        // 发送停止通知给任务
-        xTaskNotify(breathing_task_handle_, STOP_NOTIFICATION, eSetBits);
-        
-        // 设置状态标志
-        breathing_ = false;
-        pause_ = false;
-        power_ = false;
-        
-        // 等待任务自然退出（最多等待2秒）
-        int wait_count = 0;
-        while (breathing_task_handle_ && wait_count < 40) {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            wait_count++;
-        }
-        
-        // 如果任务仍然存在，强制删除
-        if (breathing_task_handle_) {
-            ESP_LOGW(TAG, "Force deleting breathing task");
-            vTaskDelete(breathing_task_handle_);
-            breathing_task_handle_ = nullptr;
-        }
-        
-        // 确保灯光关闭
-        SetDuty(0);
-        ESP_LOGI(TAG, "Breathing mode stopped");
+    if (!breathing_ && breathing_task_handle_ == nullptr) {
         return true;
     }
-    return true; // 已经停止
+
+    ESP_LOGI(TAG, "Stopping breathing mode");
+    if (breathing_task_handle_ != nullptr) {
+        xTaskNotify(breathing_task_handle_, STOP_NOTIFICATION, eSetBits);
+    }
+
+    breathing_ = false;
+    pause_ = false;
+    power_ = false;
+    WaitBreathingTaskExit(2000);
+    SetDuty(0);
+    ESP_LOGI(TAG, "Breathing mode stopped");
+    return true;
 }
 
 void LampEyeDevice::BreathingTask(void* arg) {

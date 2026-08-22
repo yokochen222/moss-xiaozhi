@@ -236,8 +236,20 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
     ESP_LOGI(TAG, "cmd type=%s", type.c_str());
 
     if (type == "chat.wake") {
-        Application::GetInstance().WakeWordInvoke("MOSS");
-        PublishAck("chat.ack", id, true, "waking");
+        Application::GetInstance().Schedule([this, id]() {
+            auto& app = Application::GetInstance();
+            const auto state = app.GetDeviceState();
+            if (state == kDeviceStateConnecting) {
+                PublishAck("chat.ack", id, false, "connecting");
+                return;
+            }
+            if (state == kDeviceStateIdle || state == kDeviceStateListening || state == kDeviceStateSpeaking) {
+                app.WakeWordInvoke("MOSS");
+                PublishAck("chat.ack", id, true, state == kDeviceStateIdle ? "waking" : "toggling");
+                return;
+            }
+            PublishAck("chat.ack", id, false, "busy");
+        });
         return;
     }
     if (type == "task.completed") {
@@ -257,7 +269,13 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         return;
     }
     if (type == "hw.control") {
-        HandleHwControl(id, payload);
+        cJSON* payload_copy = payload ? cJSON_Duplicate(payload, 1) : nullptr;
+        Application::GetInstance().Schedule([this, id, payload_copy]() {
+            HandleHwControl(id, payload_copy);
+            if (payload_copy) {
+                cJSON_Delete(payload_copy);
+            }
+        });
         return;
     }
     if (type == "hw.status") {
@@ -523,11 +541,14 @@ void ExternalMqttClient::HandleHwControl(const std::string& request_id, cJSON* p
             motor.Stop();
             ok = true;
         } else {
-            eye_on();
-            bar.StartFlow();
-            panel.TurnOnAll();
-            motor.StartForward(static_cast<uint8_t>(speed));
-            ok = true;
+            const bool eye_ok = eye_on();
+            const bool bar_ok = bar.StartFlow();
+            const bool panel_ok = panel.TurnOnAll();
+            const bool motor_ok = motor.StartForward(static_cast<uint8_t>(speed));
+            ok = eye_ok && bar_ok && panel_ok && motor_ok;
+            if (!ok) {
+                message = "partial failure";
+            }
         }
     } else {
         message = "unknown device";

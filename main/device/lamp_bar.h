@@ -21,6 +21,7 @@ private:
     ShiftRegister74HC595* shift_register_;
 
     void InitializeShiftRegister();
+    void WaitFlowTaskExit(int max_ms = 2000);
     static void FlowTask(void* arg);
 
 public:

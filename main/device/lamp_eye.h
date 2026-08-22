@@ -29,6 +29,7 @@ private:
 
     void InitializeGpio();
     void SetDuty(int duty);
+    void WaitBreathingTaskExit(int max_ms = 2000);
     static void BreathingTask(void* arg);
 
 public:
