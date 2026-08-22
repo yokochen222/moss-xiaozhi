@@ -155,8 +155,13 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->wakenet_mode = DET_MODE_95;
     afe_config->agc_init = true;
     afe_config->agc_mode = AFE_AGC_MODE_WAKENET;
-    // Digital boost into WakeNet / ASR (range typically 0.1~10).
-    afe_config->afe_linear_gain = 3.0f;
+    // Analog mic is already 37.5 dB. Extra digital gain triples AEC residual
+    // and NLP artifacts into the ASR uplink.
+    afe_config->afe_linear_gain = 1.0f;
+    if (afe_config->aec_init) {
+        // Longer filter: better linear cancel, less leftover for NLP to crush.
+        afe_config->aec_filter_length = 8;
+    }
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
     afe_iface_ = esp_afe_handle_from_config(afe_config);
@@ -342,8 +347,16 @@ void AfeAudioEngine::ApplyAfeControls() {
         const bool enable_aec = device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
+            // AGC ducks the near-end while TTS echo is loud. Keep AGC for
+            // idle wake only.
+            if (afe_iface_->disable_agc) {
+                afe_iface_->disable_agc(afe_data_);
+            }
         } else {
             afe_iface_->disable_aec(afe_data_);
+            if (afe_iface_->enable_agc) {
+                afe_iface_->enable_agc(afe_data_);
+            }
         }
     }
 }
