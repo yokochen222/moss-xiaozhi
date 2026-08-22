@@ -13,6 +13,7 @@
 #include "device/lamp_panel.h"
 
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <cstdint>
 #include <cstring>
 
@@ -21,6 +22,7 @@
 namespace {
 constexpr int kMaxFails = 3;
 constexpr uint64_t kReconnectUs = 5ULL * 1000ULL * 1000ULL;
+constexpr uint64_t kWakeDeferUs = 20ULL * 1000ULL;
 
 std::string JsonString(cJSON* obj, const char* key) {
     cJSON* item = cJSON_GetObjectItem(obj, key);
@@ -48,10 +50,24 @@ ExternalMqttClient::ExternalMqttClient() {
         .skip_unhandled_events = true,
     };
     esp_timer_create(&args, &reconnect_timer_);
+
+    esp_timer_create_args_t wake_args = {
+        .callback = WakeDeferTimerCallback,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ext_mqtt_wake",
+        .skip_unhandled_events = true,
+    };
+    esp_timer_create(&wake_args, &wake_defer_timer_);
 }
 
 ExternalMqttClient::~ExternalMqttClient() {
     Stop();
+    if (wake_defer_timer_) {
+        esp_timer_stop(wake_defer_timer_);
+        esp_timer_delete(wake_defer_timer_);
+        wake_defer_timer_ = nullptr;
+    }
     if (reconnect_timer_) {
         esp_timer_stop(reconnect_timer_);
         esp_timer_delete(reconnect_timer_);
@@ -164,6 +180,49 @@ void ExternalMqttClient::ReconnectTimerCallback(void* arg) {
     });
 }
 
+void ExternalMqttClient::DeferChatWake(const std::string& request_id) {
+    pending_wake_id_ = request_id;
+    if (!wake_defer_timer_) {
+        HandleDeferredChatWake();
+        return;
+    }
+    esp_timer_stop(wake_defer_timer_);
+    esp_timer_start_once(wake_defer_timer_, kWakeDeferUs);
+}
+
+void ExternalMqttClient::WakeDeferTimerCallback(void* arg) {
+    auto* self = static_cast<ExternalMqttClient*>(arg);
+    Application::GetInstance().Schedule([self]() { self->HandleDeferredChatWake(); });
+}
+
+void ExternalMqttClient::HandleDeferredChatWake() {
+    const std::string id = pending_wake_id_;
+    pending_wake_id_.clear();
+
+    auto& app = Application::GetInstance();
+    const auto state = app.GetDeviceState();
+    bool ackOk = true;
+    std::string ackMsg = "waking";
+    bool invoke = false;
+
+    if (state == kDeviceStateConnecting) {
+        ackMsg = "connecting";
+    } else if (state == kDeviceStateIdle || state == kDeviceStateListening ||
+               state == kDeviceStateSpeaking) {
+        ackMsg = state == kDeviceStateIdle ? "waking" : "toggling";
+        invoke = true;
+    } else {
+        ackOk = false;
+        ackMsg = "busy";
+    }
+
+    ESP_LOGI(TAG, "chat.wake state=%d ack=%d msg=%s", static_cast<int>(state), ackOk, ackMsg.c_str());
+    PublishAck("chat.ack", id, ackOk, ackMsg);
+    if (invoke) {
+        app.RequestChatWake("MOSS");
+    }
+}
+
 bool ExternalMqttClient::PublishUp(const std::string& type, const std::string& request_id,
                                    cJSON* payload) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -193,7 +252,11 @@ void ExternalMqttClient::PublishAck(const std::string& type, const std::string& 
     cJSON* payload = cJSON_CreateObject();
     cJSON_AddBoolToObject(payload, "ok", ok);
     cJSON_AddStringToObject(payload, "message", message.c_str());
-    PublishUp(ok ? type : "ir.error", request_id, payload);
+    if (!PublishUp(type, request_id, payload)) {
+        ESP_LOGW(TAG, "PublishAck failed type=%s ok=%d free=%u min_free=%u",
+                 type.c_str(), ok, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    }
     cJSON_Delete(payload);
 }
 
@@ -236,20 +299,7 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
     ESP_LOGI(TAG, "cmd type=%s", type.c_str());
 
     if (type == "chat.wake") {
-        Application::GetInstance().Schedule([this, id]() {
-            auto& app = Application::GetInstance();
-            const auto state = app.GetDeviceState();
-            if (state == kDeviceStateConnecting) {
-                PublishAck("chat.ack", id, false, "connecting");
-                return;
-            }
-            if (state == kDeviceStateIdle || state == kDeviceStateListening || state == kDeviceStateSpeaking) {
-                app.WakeWordInvoke("MOSS");
-                PublishAck("chat.ack", id, true, state == kDeviceStateIdle ? "waking" : "toggling");
-                return;
-            }
-            PublishAck("chat.ack", id, false, "busy");
-        });
+        DeferChatWake(id);
         return;
     }
     if (type == "task.completed") {

@@ -6,6 +6,7 @@
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -108,6 +109,7 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    void RequestChatWake(const std::string& wake_word = "MOSS");
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -168,6 +170,12 @@ private:
 #endif
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    std::string pending_chat_wake_word_;
+    bool chat_wake_dispatch_scheduled_ = false;
+    uint32_t audio_session_generation_ = 0;
+
+    void ProcessChatWake(const std::string& wake_word);
+    void CloseVoiceSession(bool send_goodbye);
 
     // Event handlers
     void HandleStateChangedEvent();
@@ -179,8 +187,8 @@ private:
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
     void ContinueOpenAudioChannel(ListeningMode mode);
-    void BeginWakeWordInvoke(const std::string& wake_word);
-    void ContinueWakeWordInvoke(const std::string& wake_word);
+    void BeginWakeWordInvoke(const std::string& wake_word, bool encode_wake_audio = true);
+    void ContinueWakeWordInvoke(const std::string& wake_word, bool encode_wake_audio = true);
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
 

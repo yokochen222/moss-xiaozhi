@@ -22,6 +22,7 @@
 #define MQTT_RECONNECT_INTERVAL_MS 60000
 
 #define MQTT_PROTOCOL_SERVER_HELLO_EVENT (1 << 0)
+#define MQTT_PROTOCOL_CLOSE_EVENT (1 << 1)
 
 class MqttProtocol : public Protocol {
 public:

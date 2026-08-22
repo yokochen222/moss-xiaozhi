@@ -43,14 +43,19 @@ private:
     void PublishAck(const std::string& type, const std::string& request_id, bool ok,
                     const std::string& message);
     void ScheduleReconnect();
+    void DeferChatWake(const std::string& request_id);
+    void HandleDeferredChatWake();
     static void ReconnectTimerCallback(void* arg);
+    static void WakeDeferTimerCallback(void* arg);
 
     std::unique_ptr<Mqtt> mqtt_;
     ExtMqttConfig config_;
     bool running_ = false;
     int fail_count_ = 0;
     std::mutex mutex_;
+    std::string pending_wake_id_;
     esp_timer_handle_t reconnect_timer_ = nullptr;
+    esp_timer_handle_t wake_defer_timer_ = nullptr;
 };
 
 #endif

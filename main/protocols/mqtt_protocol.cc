@@ -130,6 +130,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
             ESP_LOGI(TAG, "Received goodbye message, session_id: %s",
                      cJSON_IsString(session_id) ? session_id->valuestring : "null");
             if (cJSON_IsString(session_id) && session_id_ == session_id->valuestring) {
+                xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_CLOSE_EVENT);
                 auto alive = alive_;  // Capture alive flag
                 Application::GetInstance().Schedule([this, alive]() {
                     if (*alive) {
@@ -212,10 +213,15 @@ bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
 }
 
 void MqttProtocol::CloseAudioChannel(bool send_goodbye) {
+    xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_CLOSE_EVENT);
+
     std::unique_ptr<Udp> udp;
     {
         std::lock_guard<std::mutex> lock(channel_mutex_);
         udp = std::move(udp_);
+    }
+    if (!udp) {
+        return;
     }
     udp.reset();
 
@@ -246,16 +252,21 @@ bool MqttProtocol::OpenAudioChannel() {
 
     error_occurred_ = false;
     session_id_ = "";
-    xEventGroupClearBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT);
+    xEventGroupClearBits(event_group_handle_,
+                         MQTT_PROTOCOL_SERVER_HELLO_EVENT | MQTT_PROTOCOL_CLOSE_EVENT);
 
     auto message = GetHelloMessage();
     if (!SendText(message)) {
         return false;
     }
 
-    // 等待服务器响应
-    EventBits_t bits = xEventGroupWaitBits(event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT,
-                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(10000));
+    EventBits_t bits = xEventGroupWaitBits(
+        event_group_handle_, MQTT_PROTOCOL_SERVER_HELLO_EVENT | MQTT_PROTOCOL_CLOSE_EVENT, pdTRUE,
+        pdFALSE, pdMS_TO_TICKS(10000));
+    if (bits & MQTT_PROTOCOL_CLOSE_EVENT) {
+        ESP_LOGW(TAG, "Open audio channel canceled");
+        return false;
+    }
     if (!(bits & MQTT_PROTOCOL_SERVER_HELLO_EVENT)) {
         ESP_LOGE(TAG, "Failed to receive server hello");
         SetError(Lang::Strings::SERVER_TIMEOUT);
