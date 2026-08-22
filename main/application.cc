@@ -660,6 +660,9 @@ void Application::InitializeProtocol() {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
                     Schedule([this, display, message = std::string(text->valuestring),
                               glyphs = std::move(glyphs), bpp]() {
+#if CONFIG_ENABLE_VAD_INTERRUPT
+                        last_tts_sentence_us_ = esp_timer_get_time();
+#endif
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
                         RelayChat("message", "assistant", message);
@@ -1033,13 +1036,11 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
-            // Make sure the audio processor is running
+            // Keep the AEC processor running across speaking -> listening
+            // (realtime). Only wait for drain when we have to start it fresh.
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
-                // For auto mode, wait for the playback queue to drain before enabling
-                // voice processing. This prevents audio truncation when STOP arrives
-                // late due to network jitter. Instead of blocking the main loop here,
-                // defer the start until MAIN_EVENT_PLAYBACK_DRAINED arrives.
-                if (listening_mode_ == kListeningModeAutoStop && !audio_service_.IsPlaybackIdle()) {
+                if (listening_mode_ == kListeningModeAutoStop &&
+                    !audio_service_.IsPlaybackIdle()) {
                     pending_listening_start_ = true;
                 } else {
                     StartListeningAudio();
@@ -1063,6 +1064,7 @@ void Application::HandleStateChangedEvent() {
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
             speaking_started_us_ = esp_timer_get_time();
+            last_tts_sentence_us_ = speaking_started_us_;
             // Wait for silence after the previous user turn before arming barge-in.
             vad_interrupt_armed_ = !audio_service_.IsVoiceDetected();
 #endif
@@ -1104,12 +1106,10 @@ void Application::MaybeStartVadInterruptTimer() {
     if (vad_interrupt_timer_ == nullptr) {
         return;
     }
-    // Already armed a confirm timer for this speech bout.
     if (esp_timer_is_active(vad_interrupt_timer_)) {
         return;
     }
 
-    // Louder speaker → more echo into the mic → demand longer sustained speech.
     int volume = 70;
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         volume = codec->output_volume();
@@ -1121,8 +1121,8 @@ void Application::MaybeStartVadInterruptTimer() {
         sustain_ms = 750;
     }
 
-    ESP_LOGD(TAG, "VAD barge-in candidate (vol=%d), confirming in %lld ms", volume,
-             (long long)sustain_ms);
+    ESP_LOGI(TAG, "VAD barge-in candidate (vol=%d), confirming in %d ms", volume,
+             (int)sustain_ms);
     esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000);
 }
 
@@ -1147,6 +1147,8 @@ void Application::StartListeningAudio() {
     if (GetDeviceState() != kDeviceStateListening) {
         return;
     }
+
+    pending_listening_start_ = false;
 
     // Send the start listening command
     protocol_->SendStartListening(listening_mode_);

@@ -160,8 +160,9 @@ private:
     bool pending_listening_start_ =
         false;  // Waiting for playback to drain before starting listening (auto mode)
 #if CONFIG_ENABLE_VAD_INTERRUPT
-    // Barge-in: require silence arm + TTS playing + sustained speech.
+    // Same barge-in as moss-oled96: silence-arm + TTS playing + sustained speech.
     int64_t speaking_started_us_ = 0;
+    int64_t last_tts_sentence_us_ = 0;
     bool vad_interrupt_armed_ = false;
     esp_timer_handle_t vad_interrupt_timer_ = nullptr;
     void CancelVadInterruptTimer();
