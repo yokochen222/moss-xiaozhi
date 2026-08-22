@@ -62,7 +62,7 @@ private:
             }
             GetBacklight()->RestoreBrightness();
         });
-        power_save_timer_->SetEnabled(true);
+        // Enabled only after the device enters idle.
     }
 
     void InitializeI2c() {
@@ -220,10 +220,15 @@ public:
         return &backlight;
     }
 
-    // Application switches WiFi PS to PERFORMANCE when waking for dialogue.
+    // Screen-off timer only runs in idle (LOW_POWER). Any active state keeps the screen on.
     void SetPowerSaveLevel(PowerSaveLevel level) override {
-        if (power_save_timer_ && level != PowerSaveLevel::LOW_POWER) {
-            power_save_timer_->WakeUp();
+        if (power_save_timer_) {
+            if (level == PowerSaveLevel::LOW_POWER) {
+                power_save_timer_->WakeUp();
+                power_save_timer_->SetEnabled(true);
+            } else {
+                power_save_timer_->SetEnabled(false);
+            }
         }
         WifiBoard::SetPowerSaveLevel(level);
     }

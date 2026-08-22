@@ -24,6 +24,10 @@
 
 #define TAG "Application"
 
+namespace {
+constexpr int kConnectingTimeoutTicks = 20;
+}  // namespace
+
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
@@ -311,14 +315,10 @@ void Application::Run() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
-            if (GetDeviceState() == kDeviceStateConnecting && clock_ticks_ == 20) {
+            if (GetDeviceState() == kDeviceStateConnecting &&
+                clock_ticks_ == kConnectingTimeoutTicks) {
                 ESP_LOGW(TAG, "Connecting state timeout, returning to idle");
                 Schedule([this]() { CloseVoiceSession(false); });
-            }
-
-            if (GetDeviceState() == kDeviceStateSpeaking && clock_ticks_ == 45) {
-                ESP_LOGW(TAG, "Speaking state timeout, closing audio channel");
-                Schedule([this]() { CloseVoiceSession(true); });
             }
 
             // Print debug info every 10 seconds
@@ -1000,6 +1000,13 @@ void Application::HandleStateChangedEvent() {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
+
+    // Screen-off / WiFi PS countdown only runs in idle.
+    if (new_state == kDeviceStateIdle) {
+        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    } else if (new_state != kDeviceStateUpgrading) {
+        board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+    }
 
     switch (new_state) {
         case kDeviceStateUnknown:
