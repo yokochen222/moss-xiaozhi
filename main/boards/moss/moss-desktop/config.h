@@ -13,6 +13,9 @@
 
 // ES7210 MIC1 模拟增益（dB）。唤醒偏钝就加大，误唤醒/破音就减小。
 #define AUDIO_CODEC_INPUT_GAIN 37.5f
+// ES7210 AEC 参考声道增益（dB），需与 MIC 电平匹配才有消回声效果。
+#define AUDIO_CODEC_REFERENCE_GAIN 30.0f
+#define AUDIO_CODEC_REFERENCE_CHANNEL 2
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_38
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_13

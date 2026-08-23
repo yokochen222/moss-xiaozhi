@@ -138,13 +138,8 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
-    // Less sensitive than MODE_0/1 — loud speaker leakage is less likely to trip VAD.
-    afe_config->vad_mode = VAD_MODE_3;
+    afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
-    // Require a longer contiguous speech run before VAD reports speech.
-    afe_config->vad_min_speech_ms = 250;
-    // Cache more pre-speech audio so barge-in / ASR doesn't lose the first syllables.
-    afe_config->vad_delay_ms = 256;
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
     }
@@ -153,8 +148,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         wake_detector_ == WakeDetector::kWakeNet ? wakenet_model_name : nullptr;
     // Higher mode = easier to trigger (with higher false-alarm rate).
     afe_config->wakenet_mode = DET_MODE_95;
-    afe_config->agc_init = true;
-    afe_config->agc_mode = AFE_AGC_MODE_WAKENET;
+    afe_config->agc_init = false;
     // Analog mic is already 37.5 dB. Extra digital gain triples AEC residual
     // and NLP artifacts into the ASR uplink.
     afe_config->afe_linear_gain = 1.0f;
@@ -341,22 +335,12 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        // Do not run AEC during idle wake-word-only capture: aggressive NLP
-        // suppresses quiet speech and makes "你好小智" hard to trigger.
-        // Keep AEC for duplex voice processing (barge-in / realtime).
-        const bool enable_aec = device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
+        const bool enable_aec = (bits & kWakeWordEnabled) ||
+                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
-            // AGC ducks the near-end while TTS echo is loud. Keep AGC for
-            // idle wake only.
-            if (afe_iface_->disable_agc) {
-                afe_iface_->disable_agc(afe_data_);
-            }
         } else {
             afe_iface_->disable_aec(afe_data_);
-            if (afe_iface_->enable_agc) {
-                afe_iface_->enable_agc(afe_data_);
-            }
         }
     }
 }

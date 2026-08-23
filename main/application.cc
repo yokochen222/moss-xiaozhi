@@ -11,6 +11,8 @@
 #include "text_glyph_payload.h"
 #include "websocket_protocol.h"
 
+#include "config/device_config.h"
+
 #ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
 #include "config/moss_config_service.h"
 #endif
@@ -21,6 +23,7 @@
 #include <arpa/inet.h>
 #include <cJSON.h>
 #include <cstring>
+#include <algorithm>
 
 #define TAG "Application"
 
@@ -114,6 +117,10 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_PLAYBACK_DRAINED);
     };
     audio_service_.SetCallbacks(callbacks);
+
+#if CONFIG_USE_DEVICE_AEC
+    Application::GetInstance().LoadDeviceAecFromStorage();
+#endif
 
     // Add state change listeners
     state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
@@ -261,22 +268,27 @@ void Application::Run() {
             const auto state = GetDeviceState();
             if (state == kDeviceStateSpeaking) {
 #if CONFIG_ENABLE_VAD_INTERRUPT
-                HoldSpeakingUplink();
+                if (listening_mode_ != kListeningModeRealtime && !IsVadBargeInEnabled()) {
+                    HoldSpeakingUplink();
+                } else if (listening_mode_ != kListeningModeRealtime) {
+                    while (audio_service_.PopPacketFromSendQueue())
+                        ;
+                } else {
+                    SendUplinkFromQueue();
+                }
 #else
-                while (audio_service_.PopPacketFromSendQueue())
-                    ;
+                if (listening_mode_ != kListeningModeRealtime) {
+                    while (audio_service_.PopPacketFromSendQueue())
+                        ;
+                } else {
+                    SendUplinkFromQueue();
+                }
 #endif
             } else if (state != kDeviceStateListening || pending_listening_start_) {
                 while (audio_service_.PopPacketFromSendQueue())
                     ;
             } else {
-                while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-                    if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
-                        while (audio_service_.PopPacketFromSendQueue())
-                            ;
-                        break;
-                    }
-                }
+                SendUplinkFromQueue();
             }
         }
 
@@ -290,15 +302,22 @@ void Application::Run() {
                 led->OnStateChanged();
             }
 #if CONFIG_ENABLE_VAD_INTERRUPT
-            // Barge-in candidate: rising edge after silence-arm. Confirm only after
-            // TTS is actually playing and speech is sustained (timer).
-            if (GetDeviceState() == kDeviceStateSpeaking && protocol_) {
+            // VAD barge-in only when device AEC is off (auto-stop + mic during TTS).
+            if (!IsVadBargeInEnabled() && GetDeviceState() == kDeviceStateSpeaking && protocol_) {
                 const bool voice = audio_service_.IsVoiceDetected();
+                // Brief TTS gaps re-arm; ignore micro-gaps shorter than 280 ms.
+                constexpr int64_t kSilenceArmUs = 280 * 1000;
                 if (!voice) {
-                    vad_interrupt_armed_ = true;
+                    if (vad_silence_started_us_ == 0) {
+                        vad_silence_started_us_ = esp_timer_get_time();
+                    } else if (!vad_interrupt_armed_ &&
+                               esp_timer_get_time() - vad_silence_started_us_ >= kSilenceArmUs) {
+                        vad_interrupt_armed_ = true;
+                    }
                     CancelVadInterruptTimer();
-                } else if (vad_interrupt_armed_) {
-                    MaybeStartVadInterruptTimer();
+                } else {
+                    vad_silence_started_us_ = 0;
+                    MaybeStartVadInterruptTimer(!vad_interrupt_armed_);
                 }
             }
 #endif
@@ -651,6 +670,7 @@ void Application::InitializeProtocol() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                        ESP_LOGI(TAG, "TTS stop -> listening (mode=%d)", listening_mode_);
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -671,6 +691,7 @@ void Application::InitializeProtocol() {
                               glyphs = std::move(glyphs), bpp]() {
 #if CONFIG_ENABLE_VAD_INTERRUPT
                         last_tts_sentence_us_ = esp_timer_get_time();
+                        CancelVadInterruptTimer();
 #endif
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
@@ -1026,6 +1047,7 @@ void Application::HandleStateChangedEvent() {
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
             vad_interrupt_armed_ = false;
+            vad_silence_started_us_ = 0;
 #endif
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
@@ -1064,7 +1086,9 @@ void Application::HandleStateChangedEvent() {
 
             // Keep the AEC processor running across speaking -> listening
             // (realtime). Only wait for drain when we have to start it fresh.
-            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning()) {
+            // Barge-in must re-send listen start even when the processor stays up.
+            if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
+                keep_preroll) {
                 if (listening_mode_ == kListeningModeAutoStop &&
                     !audio_service_.IsPlaybackIdle()) {
                     pending_listening_start_ = true;
@@ -1081,20 +1105,33 @@ void Application::HandleStateChangedEvent() {
 
             if (listening_mode_ != kListeningModeRealtime) {
 #if CONFIG_ENABLE_VAD_INTERRUPT
-                audio_service_.EnableVoiceProcessing(true);
-                audio_service_.EnableWakeWordDetection(false);
+                if (!IsVadBargeInEnabled()) {
+                    audio_service_.EnableVoiceProcessing(true);
+                    audio_service_.EnableWakeWordDetection(false);
+                } else {
+                    audio_service_.EnableVoiceProcessing(false);
+                    audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+                }
 #else
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
 #endif
             }
 #if CONFIG_ENABLE_VAD_INTERRUPT
-            CancelVadInterruptTimer();
-            speaking_started_us_ = esp_timer_get_time();
-            last_tts_sentence_us_ = speaking_started_us_;
-            // Wait for silence after the previous user turn before arming barge-in.
-            vad_interrupt_armed_ = !audio_service_.IsVoiceDetected();
-            FlushBargeInHold(false);
+            if (listening_mode_ != kListeningModeRealtime && !IsVadBargeInEnabled()) {
+                CancelVadInterruptTimer();
+                speaking_started_us_ = esp_timer_get_time();
+                last_tts_sentence_us_ = speaking_started_us_;
+                vad_silence_started_us_ = 0;
+                vad_interrupt_armed_ =
+                    !audio_service_.IsVoiceDetected();
+                FlushBargeInHold(false);
+            } else {
+                CancelVadInterruptTimer();
+                vad_interrupt_armed_ = false;
+                vad_silence_started_us_ = 0;
+                FlushBargeInHold(false);
+            }
 #endif
             audio_service_.ResetDecoder();
             break;
@@ -1116,9 +1153,11 @@ void Application::CancelVadInterruptTimer() {
     }
 }
 
-void Application::MaybeStartVadInterruptTimer() {
-    constexpr int64_t kVadInterruptGuardUs = 700 * 1000;
-
+void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
+    if (IsVadBargeInEnabled()) {
+        return;
+    }
+    constexpr int64_t kVadInterruptGuardUs = 500 * 1000;
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
@@ -1138,23 +1177,36 @@ void Application::MaybeStartVadInterruptTimer() {
         extra_guard_us = kVadInterruptGuardUs - elapsed;
     }
 
+    // Echo spikes often follow a new TTS sentence; defer confirm briefly.
+    constexpr int64_t kPostTtsSentenceGuardUs = 350 * 1000;
+    const int64_t since_sentence_us = esp_timer_get_time() - last_tts_sentence_us_;
+    if (since_sentence_us < kPostTtsSentenceGuardUs) {
+        extra_guard_us = std::max(extra_guard_us, kPostTtsSentenceGuardUs - since_sentence_us);
+    }
+
     int volume = 70;
     if (auto* codec = Board::GetInstance().GetAudioCodec()) {
         volume = codec->output_volume();
     }
-    int64_t sustain_ms = 400;
+
+    // Armed: user spoke after a pause. Unarmed: talking over ongoing TTS.
+    int64_t sustain_ms = unarmed_path ? 520 : 420;
     if (volume >= 80) {
-        sustain_ms = 600;
+        sustain_ms = unarmed_path ? 720 : 580;
     } else if (volume >= 60) {
-        sustain_ms = 500;
+        sustain_ms = unarmed_path ? 620 : 500;
     }
 
-    ESP_LOGI(TAG, "VAD barge-in candidate (vol=%d), confirming in %d ms", volume,
+    ESP_LOGI(TAG, "VAD barge-in candidate (%s, vol=%d), confirming in %d ms",
+             unarmed_path ? "overlap" : "armed", volume,
              (int)(sustain_ms + extra_guard_us / 1000));
     esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000 + extra_guard_us);
 }
 
 void Application::HandleVadInterruptConfirm() {
+    if (IsVadBargeInEnabled()) {
+        return;
+    }
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
@@ -1194,7 +1246,24 @@ void Application::FlushBargeInHold(bool send) {
     }
     barge_in_hold_.clear();
 }
+
 #endif
+
+void Application::SendUplinkFromQueue() {
+    const auto state = GetDeviceState();
+    const bool voice_only =
+        state == kDeviceStateSpeaking && listening_mode_ == kListeningModeRealtime;
+    while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+        if (voice_only && !audio_service_.IsVoiceDetected()) {
+            continue;
+        }
+        if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
+            while (audio_service_.PopPacketFromSendQueue())
+                ;
+            break;
+        }
+    }
+}
 
 void Application::StartListeningAudio() {
     // Runs in the main loop, either directly from HandleStateChangedEvent or
@@ -1259,6 +1328,10 @@ void Application::SetListeningMode(ListeningMode mode) {
 
 ListeningMode Application::GetDefaultListeningMode() const {
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
+}
+
+bool Application::IsVadBargeInEnabled() const {
+    return GetAecMode() == kAecOnDeviceSide;
 }
 
 void Application::Reboot() {
@@ -1475,6 +1548,14 @@ void Application::SendMcpMessage(const std::string& payload) {
             mcp_broadcast_callback_(payload);
         }
     });
+}
+
+void Application::LoadDeviceAecFromStorage() {
+#if CONFIG_USE_DEVICE_AEC
+    const bool enabled = DeviceConfig::LocalAecEnabled();
+    aec_mode_ = enabled ? kAecOnDeviceSide : kAecOff;
+    audio_service_.EnableDeviceAec(enabled);
+#endif
 }
 
 void Application::SetAecMode(AecMode mode) {

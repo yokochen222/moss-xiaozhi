@@ -120,6 +120,10 @@ void AppendHardware(cJSON* root) {
     cJSON_AddStringToObject(hw, "motor_dir", dir);
     cJSON_AddNumberToObject(hw, "motor_speed", motor.GetCurrentSpeedPercent());
     cJSON_AddNumberToObject(hw, "default_motor_speed", DeviceConfig::DefaultMotorSpeedPercent());
+    cJSON_AddBoolToObject(hw, "local_aec_supported", DeviceConfig::LocalAecSupported());
+    if (DeviceConfig::LocalAecSupported()) {
+        cJSON_AddBoolToObject(hw, "local_aec", DeviceConfig::LocalAecEnabled());
+    }
     cJSON_AddItemToObject(root, "hardware", hw);
 }
 
@@ -137,6 +141,31 @@ void SetDefaultMotorSpeedPercent(int speed) {
     speed = std::clamp(speed, 1, 100);
     Settings settings("vendor", true);
     settings.SetInt("default_motor_speed", speed);
+}
+
+bool LocalAecSupported() {
+#if CONFIG_USE_DEVICE_AEC
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool LocalAecEnabled() {
+#if CONFIG_USE_DEVICE_AEC
+    Settings settings("vendor");
+    return settings.GetInt("local_aec", 1) != 0;
+#else
+    return false;
+#endif
+}
+
+void SetLocalAecEnabled(bool enabled) {
+#if CONFIG_USE_DEVICE_AEC
+    Settings settings("vendor", true);
+    settings.SetInt("local_aec", enabled ? 1 : 0);
+    Application::GetInstance().SetAecMode(enabled ? kAecOnDeviceSide : kAecOff);
+#endif
 }
 
 cJSON* BuildJson() {
@@ -319,16 +348,25 @@ bool Apply(cJSON* payload, std::string* error) {
     }
 
     cJSON* hw = cJSON_GetObjectItem(payload, "hardware");
-    if (cJSON_IsObject(hw) && JsonHasNumber(hw, "default_motor_speed")) {
-        int speed = cJSON_GetObjectItem(hw, "default_motor_speed")->valueint;
-        if (speed < 1 || speed > 100) {
-            if (error) {
-                *error = "invalid default_motor_speed";
+    if (cJSON_IsObject(hw)) {
+        if (JsonHasNumber(hw, "default_motor_speed")) {
+            int speed = cJSON_GetObjectItem(hw, "default_motor_speed")->valueint;
+            if (speed < 1 || speed > 100) {
+                if (error) {
+                    *error = "invalid default_motor_speed";
+                }
+                return false;
             }
-            return false;
+            SetDefaultMotorSpeedPercent(speed);
+            changed = true;
         }
-        SetDefaultMotorSpeedPercent(speed);
-        changed = true;
+        if (LocalAecSupported() && JsonHasBool(hw, "local_aec")) {
+            const bool enabled = cJSON_IsTrue(cJSON_GetObjectItem(hw, "local_aec"));
+            if (enabled != LocalAecEnabled()) {
+                SetLocalAecEnabled(enabled);
+            }
+            changed = true;
+        }
     }
 
     if (!changed && error) {

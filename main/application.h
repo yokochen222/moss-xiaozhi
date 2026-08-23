@@ -115,6 +115,7 @@ public:
     void SendMcpMessage(const std::string& payload);
     void RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback);
     void SetAecMode(AecMode mode);
+    void LoadDeviceAecFromStorage();
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
@@ -160,19 +161,21 @@ private:
     bool pending_listening_start_ =
         false;  // Waiting for playback to drain before starting listening (auto mode)
 #if CONFIG_ENABLE_VAD_INTERRUPT
-    // Same barge-in as moss-oled96: silence-arm + TTS playing + sustained speech.
+    // Silence-arm + sustained speech while TTS is playing (see MaybeStartVadInterruptTimer).
     int64_t speaking_started_us_ = 0;
     int64_t last_tts_sentence_us_ = 0;
+    int64_t vad_silence_started_us_ = 0;
     bool vad_interrupt_armed_ = false;
     bool barge_in_listen_ = false;
     std::deque<std::unique_ptr<AudioStreamPacket>> barge_in_hold_;
     esp_timer_handle_t vad_interrupt_timer_ = nullptr;
     void CancelVadInterruptTimer();
-    void MaybeStartVadInterruptTimer();
+    void MaybeStartVadInterruptTimer(bool unarmed_path = false);
     void HandleVadInterruptConfirm();
     void HoldSpeakingUplink();
     void FlushBargeInHold(bool send);
 #endif
+    void SendUplinkFromQueue();
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
     std::string pending_chat_wake_word_;
@@ -207,6 +210,7 @@ private:
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    bool IsVadBargeInEnabled() const;
     void RelayChat(const std::string& event, const std::string& role, const std::string& text);
 
     // State change handler called by state machine

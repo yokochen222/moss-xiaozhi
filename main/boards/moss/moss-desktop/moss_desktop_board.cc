@@ -208,8 +208,8 @@ public:
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
             AUDIO_INPUT_REFERENCE,
             AUDIO_CODEC_INPUT_GAIN,
-            2,
-            0.0f);
+            AUDIO_CODEC_REFERENCE_CHANNEL,
+            AUDIO_CODEC_REFERENCE_GAIN);
         return &audio_codec;
     }
 

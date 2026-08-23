@@ -610,7 +610,11 @@ void ExternalMqttClient::HandleDeviceConfigGet(const std::string& request_id) {
     Application::GetInstance().Schedule([this, request_id]() {
         cJSON* payload = DeviceConfig::BuildJson();
         cJSON_AddBoolToObject(payload, "ok", true);
-        PublishUp("device.config", request_id, payload);
+        if (!PublishUp("device.config", request_id, payload)) {
+            ESP_LOGW(TAG, "device.config publish failed free=%u min_free=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+        }
         cJSON_Delete(payload);
     });
 }

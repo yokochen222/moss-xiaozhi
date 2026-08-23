@@ -11,4 +11,8 @@ bool Apply(cJSON* payload, std::string* error);
 int DefaultMotorSpeedPercent();
 void SetDefaultMotorSpeedPercent(int speed);
 
+bool LocalAecSupported();
+bool LocalAecEnabled();
+void SetLocalAecEnabled(bool enabled);
+
 }  // namespace DeviceConfig
