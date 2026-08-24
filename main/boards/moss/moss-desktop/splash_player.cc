@@ -63,6 +63,9 @@ static void DrawPanelBitmapChunked(esp_lcd_panel_handle_t panel, int x0, int y0,
                      esp_err_to_name(err));
             return;
         }
+        if ((row & 7) == 0) {
+            taskYIELD();
+        }
     }
 }
 
@@ -165,7 +168,7 @@ public:
         ctx->out_buf2 = nullptr;
         ctx->cur_buf_idx = 0;
 
-        BaseType_t ok = xTaskCreate(loop_task, "code_scroll", 8192, ctx, 5, &s_task);
+        BaseType_t ok = xTaskCreate(loop_task, "code_scroll", 8192, ctx, 3, &s_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "Failed to create code_scroll task");
             delete ctx;
@@ -276,23 +279,35 @@ private:
         // 分配双缓冲
         uint16_t* buf0 = cfg.out_buf;
         uint16_t* buf1 = (uint16_t*)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!buf1)
+        if (!buf1) {
             buf1 = (uint16_t*)malloc(buf_size);
-        uint16_t* disp_buf = buf0;
-        uint16_t* render_buf = buf1;
-        int cur_buf = 1;  // 下一帧渲染到 buf1, 显示 buf0
+        }
+        const bool dual = buf1 != nullptr;
+        uint16_t* render_buf = dual ? buf1 : buf0;
+        int cur_buf = dual ? 1 : 0;
+        if (!dual) {
+            ESP_LOGW(TAG, "CodeScroll: single-buffer mode");
+        }
 
         // 代码行解析
         CodeLine lines[MAX_LINES];
         int num_lines = 0;
         parse_code(CODE_CONTENT, lines, &num_lines);
+        if (num_lines <= 0) {
+            ESP_LOGE(TAG, "CodeScroll: no lines parsed");
+            if (buf1)
+                free(buf1);
+            s_task = nullptr;
+            vTaskDelete(nullptr);
+            return;
+        }
 
         ESP_LOGI(TAG, "CodeScroll: %d lines parsed, panel=%dx%d", num_lines, pw, ph);
 
-        // 滚动状态
-        int scroll_offset = 0;    // 向上滚动的像素数 (无限增长)
-        int total_line_idx = 0;   // 无限增长的绝对行索引
-        int cursor_char_idx = 0;  // 当前行内已渲染字符
+        const int cycle_px = num_lines * CODE_LINE_H;
+        int scroll_offset = 0;
+        int total_line_idx = 0;
+        int cursor_char_idx = 0;
 
         // 字符定时器
         int64_t last_char_tick_us = esp_timer_get_time();
@@ -323,10 +338,16 @@ private:
                     }
                 }
 
-                // === 2. 逐像素滚动: 打印位置超出屏幕底部时滚动 ===
                 int print_y = (total_line_idx + 1) * CODE_LINE_H - scroll_offset;
                 if (print_y >= ph) {
                     scroll_offset++;
+                }
+
+                // Subtract one source cycle from both counters together so print_y
+                // and the typing-line-to-viewport relationship stay unchanged.
+                while (scroll_offset >= cycle_px && total_line_idx >= num_lines) {
+                    scroll_offset -= cycle_px;
+                    total_line_idx -= num_lines;
                 }
 
                 // === 3. 渲染帧 ===
@@ -335,48 +356,42 @@ private:
                     last_render_tick_us =
                         now_us - (elapsed_render_us % (code_scroll_cfg::RENDER_INTERVAL_MS * 1000));
 
-                    // 切换 buffer
-                    int display_idx = cur_buf;
-                    cur_buf = (cur_buf == 0) ? 1 : 0;
-                    disp_buf = (display_idx == 0) ? buf0 : buf1;
-                    render_buf = (cur_buf == 0) ? buf0 : buf1;
+                    if (dual) {
+                        render_buf = (cur_buf == 0) ? buf0 : buf1;
+                    } else {
+                        render_buf = buf0;
+                    }
 
-                    // 清屏
                     std::memset(render_buf, 0, buf_size);
 
-                    // 渲染代码行 (无限滚动，无缝衔接)
-                    int first_vis_line = scroll_offset / CODE_LINE_H;
-                    int y_offset_in_line = scroll_offset % CODE_LINE_H;
-                    int code_x = 0;
+                    const int first_vis_line = scroll_offset / CODE_LINE_H;
+                    const int y_offset_in_line = scroll_offset % CODE_LINE_H;
+                    const int vis_lines = ph / CODE_LINE_H + 3;
+                    const int code_x = 0;
 
-                    // 显示范围: [first_vis_line, total_line_idx] 落在屏幕内的行
-                    for (int abs_li = first_vis_line; abs_li <= total_line_idx; abs_li++) {
-                        int row_in_screen =
-                            (abs_li - first_vis_line) * CODE_LINE_H - y_offset_in_line;
-                        int baseline = row_in_screen + CODE_LINE_H - 1;
-
-                        if (baseline < -CODE_LINE_H || baseline >= ph)
+                    for (int i = 0; i < vis_lines; i++) {
+                        const int abs_li = first_vis_line + i;
+                        const int row_in_screen = i * CODE_LINE_H - y_offset_in_line;
+                        const int baseline = row_in_screen + CODE_LINE_H - 1;
+                        if (baseline < -CODE_LINE_H || baseline >= ph) {
                             continue;
-
-                        int line_in_buf = abs_li % num_lines;
-                        CodeLine& cl = lines[line_in_buf];
-
-                        // 每行根据与当前行的距离独立计算逐字进度
-                        int rendered_here;
-                        if (abs_li < total_line_idx) {
-                            // 已完成的行: 显示全部
-                            rendered_here = cl.text_len;
-                        } else {
-                            // 当前行或未来行: 逐字递减
-                            int line_dist = total_line_idx - abs_li;  // 0=当前, -1=下一行未开始
-                            rendered_here =
-                                cursor_char_idx + line_dist * code_scroll_cfg::CHARS_PER_TICK;
-                            if (rendered_here > cl.text_len)
-                                rendered_here = cl.text_len;
-                            if (rendered_here < 0)
-                                rendered_here = 0;
                         }
 
+                        int line_in_buf = abs_li % num_lines;
+                        if (line_in_buf < 0) {
+                            line_in_buf += num_lines;
+                        }
+                        CodeLine& cl = lines[line_in_buf];
+
+                        int rendered_here = 0;
+                        if (abs_li < total_line_idx) {
+                            rendered_here = cl.text_len;
+                        } else if (abs_li == total_line_idx) {
+                            rendered_here = cursor_char_idx;
+                        }
+                        if (rendered_here > cl.text_len) {
+                            rendered_here = cl.text_len;
+                        }
                         if (rendered_here > 0) {
                             draw_code_line(render_buf, pw, ph, code_x, baseline, cl.text,
                                            rendered_here);
@@ -404,8 +419,11 @@ private:
                         }
                     }
 
-                    // === 5. 发送到 panel ===
-                    DrawPanelBitmapChunked(cfg.panel, 0, 0, pw, ph, disp_buf);
+                    // === 5. 发送刚画完的帧，再切到另一块缓冲画下一帧 ===
+                    DrawPanelBitmapChunked(cfg.panel, 0, 0, pw, ph, render_buf);
+                    if (dual) {
+                        cur_buf = 1 - cur_buf;
+                    }
                 }
 
                 // === 6. 低功耗: 等待下一个 tick ===
@@ -491,9 +509,7 @@ static int glyph_advance(uint32_t cp);
 static int draw_codepoint(uint16_t* dst, int dst_w, int dst_h, int x_left, int y_baseline,
                           uint32_t cp, uint16_t color);
 
-static inline uint16_t swap_rgb565(uint16_t c) {
-    return (uint16_t)((c >> 8) | (c << 8));
-}
+static inline uint16_t swap_rgb565(uint16_t c) { return (uint16_t)((c >> 8) | (c << 8)); }
 
 static inline void plot_rgb565(uint16_t* dst, int dst_w, int dst_h, int x, int y, uint16_t c) {
     if (x < 0 || x >= dst_w || y < 0 || y >= dst_h)

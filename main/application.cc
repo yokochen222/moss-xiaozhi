@@ -11,6 +11,10 @@
 #include "text_glyph_payload.h"
 #include "websocket_protocol.h"
 
+#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+#include "config/moss_config_service.h"
+#endif
+
 #include <driver/gpio.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -319,6 +323,9 @@ void Application::Run() {
 
 void Application::HandleNetworkConnectedEvent() {
     ESP_LOGI(TAG, "Network connected");
+#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+    MossConfigService::GetInstance().OnNetworkConnected();
+#endif
     auto state = GetDeviceState();
 
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring) {
@@ -712,11 +719,9 @@ void Application::InitializeProtocol() {
 
     protocol_->Start();
 
-    external_mqtt_client_ = std::make_unique<ExternalMqttClient>();
-    if (!external_mqtt_client_->Start()) {
-        ESP_LOGE(TAG, "Failed to start external MQTT client");
-        external_mqtt_client_.reset();
-    }
+#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+    // External MQTT is started by MossConfigService after Wi-Fi is up.
+#endif
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -1271,6 +1276,15 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
                 protocol_->CloseAudioChannel();
             }
         });
+    }
+}
+
+void Application::RequestChatWake(const std::string& wake_word) {
+    (void)wake_word;
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateIdle || state == kDeviceStateListening ||
+        state == kDeviceStateSpeaking) {
+        ToggleChatState();
     }
 }
 

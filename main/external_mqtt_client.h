@@ -1,31 +1,51 @@
 #ifndef EXTERNAL_MQTT_CLIENT_H
 #define EXTERNAL_MQTT_CLIENT_H
 
-#include <string>
-#include <functional>
+#include "config/ext_mqtt_config.h"
+
+#include <cJSON.h>
+#include <esp_timer.h>
 #include <memory>
 #include <mqtt.h>
-#include <cJSON.h>
+#include <mutex>
+#include <string>
 
 class ExternalMqttClient {
 public:
-    using TextMessageCallback = std::function<void(const std::string& prompt_preview)>;
-
     ExternalMqttClient();
     ~ExternalMqttClient();
 
     bool Start();
     void Stop();
-
-    void OnTextMessage(TextMessageCallback callback) { on_text_message_ = callback; }
+    void Reload();
+    void ResetFailCount() { fail_count_ = 0; }
+    int fail_count() const { return fail_count_; }
+    bool IsConnected() const;
+    bool PublishUp(const std::string& type, const std::string& request_id, cJSON* payload);
 
 private:
     void HandleMessage(const std::string& topic, const std::string& payload);
-    bool ParseTextEvent(const std::string& payload);
+    void HandleTypedMessage(cJSON* root);
+    void HandleHwControl(const std::string& request_id, cJSON* payload);
+    void HandleDeviceConfigGet(const std::string& request_id);
+    void HandleDeviceConfigSet(const std::string& request_id, cJSON* payload);
+    void PublishHwState(const std::string& request_id, bool ok, const std::string& message);
+    void PublishAck(const std::string& type, const std::string& request_id, bool ok,
+                    const std::string& message);
+    void ScheduleReconnect();
+    void DeferChatWake(const std::string& request_id);
+    void HandleDeferredChatWake();
+    static void ReconnectTimerCallback(void* arg);
+    static void WakeDeferTimerCallback(void* arg);
 
     std::unique_ptr<Mqtt> mqtt_;
+    ExtMqttConfig config_;
     bool running_ = false;
-    TextMessageCallback on_text_message_;
+    int fail_count_ = 0;
+    std::mutex mutex_;
+    std::string pending_wake_id_;
+    esp_timer_handle_t reconnect_timer_ = nullptr;
+    esp_timer_handle_t wake_defer_timer_ = nullptr;
 };
 
-#endif // EXTERNAL_MQTT_CLIENT_H
+#endif

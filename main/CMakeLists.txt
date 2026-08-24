@@ -307,6 +307,13 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "api/api.cc"
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"
+        "api/methods/config/config_handlers.cc"
+        "api/methods/camera/camera_handlers.cc"
+        "config/ext_mqtt_config.cc"
+        "config/moss_config_service.cc"
+        "config/device_config.cc"
+        "config/product.cc"
+        "device/moss_camera_stream.cc"
         "external_mqtt_client.cc"
     )
     file(GLOB MOSS_MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
@@ -316,10 +323,11 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         ${CMAKE_CURRENT_SOURCE_DIR}/device
         ${CMAKE_CURRENT_SOURCE_DIR}/api
         ${CMAKE_CURRENT_SOURCE_DIR}/api/methods
+        ${CMAKE_CURRENT_SOURCE_DIR}/config
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
     )
-    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server espressif2022__esp_emote_gfx)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server mdns espressif2022__esp_emote_gfx)
     file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
 endif()
 

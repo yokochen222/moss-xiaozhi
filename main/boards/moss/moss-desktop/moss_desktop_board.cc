@@ -5,12 +5,14 @@
 #include "codecs/box_audio_codec.h"
 #include "config.h"
 #include "device/face_tracker.h"
+#include "device/moss_camera_stream.h"
 #include "device/stepper_gimbal.h"
 #include "display/display.h"
 #include "esp32_camera.h"
 #include "mcp_server.h"
 #include "moss_spi_lcd_display.h"
 #include "pca9685_driver.h"
+#include "power_save_timer.h"
 #include "press_to_talk_mcp_tool.h"
 #include "wifi_board.h"
 
@@ -68,7 +70,7 @@ private:
 
 // 按需启停摄像头：平时释放 DVP DMA，避免与 LCD SPI / WiFi 争抢内部 DMA。
 // FaceTrackCamera：跟踪态切 RGB565；默认 JPEG 路径语义不变。
-class OnDemandEsp32Camera : public Camera, public FaceTrackCamera {
+class OnDemandEsp32Camera : public Camera, public FaceTrackCamera, public LiveJpegSource {
 public:
     explicit OnDemandEsp32Camera(const camera_config_t& config) : config_(config) {}
 
@@ -82,20 +84,24 @@ public:
     }
 
     bool Capture() override {
-        FaceTracker::GetInstance().PauseForExternalCameraUse();
+        if (!stream_acquired_) {
+            FaceTracker::GetInstance().PauseForExternalCameraUse();
+        }
         bool ok = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!EnsureStartedLocked()) {
                 ok = false;
             } else if (!camera_->Capture()) {
-                ReleaseLocked();
+                if (!stream_acquired_) {
+                    ReleaseLocked();
+                }
                 ok = false;
             } else {
                 ok = true;
             }
         }
-        if (!ok) {
+        if (!ok && !stream_acquired_) {
             FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
         }
         return ok;
@@ -140,22 +146,100 @@ public:
             std::string result = cam->Explain(question);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                ReleaseLocked();
+                if (!stream_acquired_) {
+                    ReleaseLocked();
+                }
             }
-            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            if (!stream_acquired_) {
+                FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            }
             return result;
         } catch (...) {
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                ReleaseLocked();
+                if (!stream_acquired_) {
+                    ReleaseLocked();
+                }
             }
-            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            if (!stream_acquired_) {
+                FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            }
             throw;
         }
     }
 
+    bool AcquireLiveStream() override {
+        FaceTracker::GetInstance().PauseForExternalCameraUse();
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tracking_acquired_) {
+            ReleaseTrackingLocked();
+        }
+        if (VoiceBusy()) {
+            stream_refs_++;
+            stream_acquired_ = true;
+            return true;
+        }
+        if (!EnsureStartedLocked(true)) {
+            if (stream_refs_ == 0) {
+                FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            }
+            return false;
+        }
+        stream_refs_++;
+        stream_acquired_ = true;
+        return true;
+    }
+
+    void ReleaseLiveStream() override {
+        bool resume = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stream_refs_ > 0) {
+                stream_refs_--;
+            }
+            if (stream_refs_ == 0 && stream_acquired_) {
+                stream_acquired_ = false;
+                ReleaseLocked();
+                resume = true;
+            }
+        }
+        if (resume) {
+            FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+        }
+    }
+
+    camera_fb_t* GrabJpeg() override {
+        if (VoiceBusy()) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ReleaseLocked();
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!stream_acquired_) {
+            return nullptr;
+        }
+        if (!camera_ || !camera_->IsInitialized()) {
+            if (!EnsureStartedLocked(true)) {
+                return nullptr;
+            }
+        }
+        return esp_camera_fb_get();
+    }
+
+    void ReturnJpeg(camera_fb_t* fb) override {
+        if (!fb) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        esp_camera_fb_return(fb);
+    }
+
     bool AcquireTracking() override {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (stream_acquired_) {
+            ESP_LOGW(TAG, "AcquireTracking blocked while live stream is active");
+            return false;
+        }
         if (tracking_acquired_) {
             return true;
         }
@@ -233,7 +317,13 @@ public:
     }
 
 private:
-    bool EnsureStartedLocked() {
+    static bool VoiceBusy() {
+        const auto state = Application::GetInstance().GetDeviceState();
+        return state == kDeviceStateSpeaking || state == kDeviceStateListening ||
+               state == kDeviceStateConnecting;
+    }
+
+    bool EnsureStartedLocked(bool preview = false) {
         if (tracking_acquired_) {
             // Caller should have paused tracker; force release if still held.
             ReleaseTrackingLocked();
@@ -247,7 +337,13 @@ private:
         if (pca.IsReady()) {
             // PWDN 低 = OV2640 工作；传感器上电后需留足稳定时间再 SCCB/DVP
             pca.SetDvpPowerDown(false);
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(80));
+        }
+
+        camera_config_t cfg = config_;
+        if (preview) {
+            cfg.frame_size = FRAMESIZE_QVGA;
+            cfg.jpeg_quality = 12;
         }
 
         const size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -257,7 +353,7 @@ private:
         ESP_LOGI(TAG,
                  "On-demand OV2640 start (JPEG XCLK=%dHz size=%d) free_int=%u free_dma=%u "
                  "largest_dma=%u free_psram=%u",
-                 (int)config_.xclk_freq_hz, (int)config_.frame_size, (unsigned)free_internal,
+                 (int)cfg.xclk_freq_hz, (int)cfg.frame_size, (unsigned)free_internal,
                  (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
         if (largest_dma < 8192) {
             ESP_LOGW(TAG,
@@ -265,7 +361,7 @@ private:
                      (unsigned)largest_dma);
         }
 
-        camera_.reset(new Esp32Camera(config_));
+        camera_.reset(new Esp32Camera(cfg));
         if (!camera_->IsInitialized()) {
             ESP_LOGE(TAG, "OV2640 esp_camera_init failed (see Esp32Camera logs)");
             camera_.reset();
@@ -276,8 +372,8 @@ private:
         } else {
             ESP_LOGW(TAG, "Vision explain URL not set yet; Capture ok but Explain may fail");
         }
-        // Warm up sensor AE/AWB before first get
-        vTaskDelay(pdMS_TO_TICKS(500));
+        // Sensor stays powered; short settle is enough for first JPEG.
+        vTaskDelay(pdMS_TO_TICKS(200));
         return true;
     }
 
@@ -305,6 +401,8 @@ private:
     std::string explain_token_;
     mutable std::mutex mutex_;
     bool tracking_acquired_ = false;
+    bool stream_acquired_ = false;
+    int stream_refs_ = 0;
 };
 
 // waveshare esp_lcd_st7735 default init lacks INVON for most 0.96" ST7735S modules.
@@ -322,6 +420,7 @@ private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     PressToTalkMcpTool* press_to_talk_tool_ = nullptr;
+    PowerSaveTimer* power_save_timer_ = nullptr;
 
     void InitializeI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -390,6 +489,7 @@ private:
 
         camera_ = new OnDemandEsp32Camera(config);
         FaceTracker::GetInstance().SetCamera(camera_);
+        MossCameraStream::GetInstance().SetSource(camera_);
         ESP_LOGI(TAG, "OV2640 registered (on-demand JPEG XCLK=%d XCLK=IO%d D6=IO%d)", XCLK_FREQ_HZ,
                  (int)CAMERA_PIN_XCLK, (int)CAMERA_PIN_D6);
     }
@@ -463,14 +563,36 @@ private:
 
         // Face-track UI: stop code scroll + draw HUD while tracking.
         auto* moss_disp = static_cast<MossSpiLcdDisplay*>(display_);
-        FaceTracker::GetInstance().SetUiHooks([moss_disp]() { moss_disp->EnterFaceTrackMode(); },
-                                              [moss_disp]() { moss_disp->ExitFaceTrackMode(); });
+        FaceTracker::GetInstance().SetUiHooks(
+            [this, moss_disp]() {
+                moss_disp->EnterFaceTrackMode();
+                if (power_save_timer_) {
+                    power_save_timer_->SetEnabled(false);
+                }
+            },
+            [this, moss_disp]() {
+                moss_disp->ExitFaceTrackMode();
+                if (power_save_timer_) {
+                    power_save_timer_->SetEnabled(true);
+                }
+            });
         FaceTracker::GetInstance().SetStatusSink(
             [moss_disp](const FaceTrackerStatus& s) { moss_disp->UpdateFaceTrackOverlay(s); });
     }
 
+    void InitializePowerSaveTimer() {
+        // Keep wake word running. Idle only turns the screen off.
+        power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
+        power_save_timer_->OnEnterSleepMode([this]() { GetDisplay()->SetPowerSaveMode(true); });
+        power_save_timer_->OnExitSleepMode([this]() { GetDisplay()->SetPowerSaveMode(false); });
+        power_save_timer_->SetEnabled(true);
+    }
+
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            if (power_save_timer_) {
+                power_save_timer_->WakeUp();
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting &&
                 !WifiManager::GetInstance().IsConnected()) {
@@ -483,6 +605,9 @@ private:
             app.ToggleChatState();
         });
         boot_button_.OnPressDown([this]() {
+            if (power_save_timer_) {
+                power_save_timer_->WakeUp();
+            }
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
                 Application::GetInstance().StartListening();
             }
@@ -521,6 +646,7 @@ public:
         InitializeCamera();
         InitializeButtons();
         InitializeTools();
+        InitializePowerSaveTimer();
         // 上电清零 595，避免随机输出导致步进线圈常通发烫
         StepperGimbalDevice::GetInstance().Stop();
     }

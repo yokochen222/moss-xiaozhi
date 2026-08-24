@@ -33,6 +33,8 @@ public:
 
     void SetScreenOn(bool on);
     bool IsScreenOn() const { return screen_on_; }
+    void PauseBackgroundAnimation() override;
+    void ResumeBackgroundAnimation() override;
 
     // Face-track UI: stop code scroll and show detection HUD.
     void EnterFaceTrackMode();
@@ -49,6 +51,7 @@ private:
     std::string current_status_;
     bool screen_on_ = true;
     bool face_track_mode_ = false;
+    bool scroll_paused_ = false;
     std::mutex face_ui_mutex_;
 
     void StartSplashLoop();

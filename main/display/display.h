@@ -49,6 +49,8 @@ public:
     virtual void ClearTextGlyphs() {}
     virtual void SetEmojiCollection(std::shared_ptr<EmojiCollection>) {}
     virtual void SetupUI() { setup_ui_called_ = true; }
+    virtual void PauseBackgroundAnimation() {}
+    virtual void ResumeBackgroundAnimation() {}
 
     inline int width() const { return width_; }
     inline int height() const { return height_; }

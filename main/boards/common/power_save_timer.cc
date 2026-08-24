@@ -6,14 +6,16 @@
 
 #define TAG "PowerSaveTimer"
 
-
 PowerSaveTimer::PowerSaveTimer(int cpu_max_freq, int seconds_to_sleep, int seconds_to_shutdown)
-    : cpu_max_freq_(cpu_max_freq), seconds_to_sleep_(seconds_to_sleep), seconds_to_shutdown_(seconds_to_shutdown) {
+    : cpu_max_freq_(cpu_max_freq),
+      seconds_to_sleep_(seconds_to_sleep),
+      seconds_to_shutdown_(seconds_to_shutdown) {
     esp_timer_create_args_t timer_args = {
-        .callback = [](void* arg) {
-            auto self = static_cast<PowerSaveTimer*>(arg);
-            self->PowerSaveCheck();
-        },
+        .callback =
+            [](void* arg) {
+                auto self = static_cast<PowerSaveTimer*>(arg);
+                self->PowerSaveCheck();
+            },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
         .name = "power_save_timer",
@@ -61,6 +63,10 @@ void PowerSaveTimer::OnShutdownRequest(std::function<void()> callback) {
 
 void PowerSaveTimer::PowerSaveCheck() {
     auto& app = Application::GetInstance();
+    if (in_sleep_mode_ && !app.CanEnterSleepMode()) {
+        WakeUp();
+        return;
+    }
     if (!in_sleep_mode_ && !app.CanEnterSleepMode()) {
         ticks_ = 0;
         return;

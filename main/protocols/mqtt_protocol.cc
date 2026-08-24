@@ -302,7 +302,7 @@ bool MqttProtocol::OpenAudioChannel() {
                 return;
             }
             if (sequence != remote_sequence_ + 1) {
-                ESP_LOGW(TAG, "Received audio packet with wrong sequence: %lu, expected: %lu",
+                ESP_LOGD(TAG, "Received audio packet with wrong sequence: %lu, expected: %lu",
                          sequence, remote_sequence_ + 1);
             }
         }

@@ -15,7 +15,6 @@
 #include "audio_service.h"
 #include "device_state.h"
 #include "device_state_machine.h"
-#include "external_mqtt_client.h"
 #include "ota.h"
 #include "protocol.h"
 
@@ -109,6 +108,7 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    void RequestChatWake(const std::string& wake_word = "MOSS");
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -144,7 +144,6 @@ private:
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
-    std::unique_ptr<ExternalMqttClient> external_mqtt_client_;
     std::string pending_text_to_send_;
 
     bool has_server_time_ = false;

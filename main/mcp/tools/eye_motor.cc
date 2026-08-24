@@ -28,8 +28,9 @@ void EyeMotorTool::Register() {
         "EyeMotor TB6612FNG电机驱动控制工具\n"
         "硬件说明：PCA9685 通道 AIN2=ch3, AIN1=ch4, PWMA=ch5\n"
         "使用说明：\n"
-        "- action='start_forward'：电机正转，默认全速\n"
-        "- action='start_backward'：电机反转，默认全速\n"
+        "- action='start'：默认预设，正转 8 秒再反转 8 秒，循环\n"
+        "- action='start_forward'：电机持续正转，默认全速\n"
+        "- action='start_backward'：电机持续反转，默认全速\n"
         "- action='stop'：停止电机\n"
         "- action='get_status'：获取电机状态\n"
         "- action='set_speed'：调整当前转速(需先启动电机)\n",
@@ -39,7 +40,14 @@ void EyeMotorTool::Register() {
             auto action = properties["action"].value<std::string>();
             auto speed = properties["speed"].value<int>();
 
-            if (action == "start_forward") {
+            if (action == "start" || action == "oscillate") {
+                if (eye_motor_device_.StartOscillate(speed)) {
+                    return "电机已按预设运行: 正转8秒 / 反转8秒, 速度: " + std::to_string(speed) +
+                           "%";
+                } else {
+                    return "启动电机预设失败";
+                }
+            } else if (action == "start_forward") {
                 if (eye_motor_device_.StartForward(speed)) {
                     return "电机已正转, 速度: " + std::to_string(speed) + "%";
                 } else {
@@ -83,7 +91,8 @@ void EyeMotorTool::Register() {
                 }
             } else {
                 return "未知动作: " + action +
-                       "\n支持的动作: start_forward, start_backward, stop, get_status, set_speed";
+                       "\n支持的动作: start, start_forward, start_backward, stop, get_status, "
+                       "set_speed";
             }
         });
 }
