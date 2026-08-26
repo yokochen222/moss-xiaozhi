@@ -5,6 +5,7 @@
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "sdkconfig.h"
 
 #define TAG "BoxAudioCodec"
 
@@ -308,6 +309,9 @@ void BoxAudioCodec::EnableOutput(bool enable) {
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+        MossDesktopSetNs4150Pa(false);
+#endif
     }
     AudioCodec::EnableOutput(enable);
 }
