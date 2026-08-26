@@ -2,6 +2,8 @@
 #include <esp_log.h>
 #include <cstring>
 
+#include "sdkconfig.h"
+
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
     (esp_ae_rate_cvt_cfg_t) {                                                                \
         .src_rate = (uint32_t)(_src_rate), .dest_rate = (uint32_t)(_dest_rate),              \
@@ -190,6 +192,9 @@ void AudioService::Stop() {
     if (notify_drained && callbacks_.on_playback_drained) {
         callbacks_.on_playback_drained();
     }
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+    MossDesktopReleasePlayback(codec_);
+#endif
 }
 
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
@@ -334,11 +339,16 @@ void AudioService::AudioOutputTask() {
         audio_queue_cv_.notify_all();
         lock.unlock();
 
+        esp_timer_stop(audio_power_timer_);
+        esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+        MossDesktopPreparePlayback(codec_);
+#else
         if (!codec_->output_enabled()) {
-            esp_timer_stop(audio_power_timer_);
-            esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
             codec_->EnableOutput(true);
         }
+#endif
 
         codec_->OutputData(task->pcm);
 
@@ -362,6 +372,11 @@ void AudioService::AudioOutputTask() {
         if (notify_drained && callbacks_.on_playback_drained) {
             callbacks_.on_playback_drained();
         }
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+        if (notify_drained) {
+            MossDesktopReleasePlayback(codec_);
+        }
+#endif
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
@@ -727,11 +742,13 @@ void AudioService::EnableDeviceAec(bool enable) {
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) { callbacks_ = callbacks; }
 
 void AudioService::PlaySound(const std::string_view& ogg) {
+#if !CONFIG_BOARD_TYPE_MOSS_DESKTOP
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
         codec_->EnableOutput(true);
     }
+#endif
 
     const auto* buf = reinterpret_cast<const uint8_t*>(ogg.data());
     size_t size = ogg.size();
@@ -779,6 +796,11 @@ void AudioService::ResetDecoder() {
     if (notify_drained && callbacks_.on_playback_drained) {
         callbacks_.on_playback_drained();
     }
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+    if (notify_drained) {
+        MossDesktopReleasePlayback(codec_);
+    }
+#endif
 }
 
 bool AudioService::IsPlaybackDrainedLocked() const {
@@ -805,11 +827,21 @@ void AudioService::CheckAndUpdateAudioPowerState() {
         // input task instead of closing the codec from the esp_timer task.
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
     }
-    if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled()) {
-        // Keep TX clock when duplex RX is active; otherwise RX may stall on some boards.
-        if (!(codec_->duplex() && codec_->input_enabled())) {
-            codec_->EnableOutput(false);
+    if (codec_->output_enabled()) {
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+        // moss-desktop: close ES8311/PA whenever playback queues are idle, even in
+        // duplex listening — open output only around actual PCM writes.
+        if (output_elapsed > 200 && IsPlaybackIdle()) {
+            MossDesktopReleasePlayback(codec_);
         }
+#else
+        if (output_elapsed > AUDIO_POWER_TIMEOUT_MS) {
+            // Keep TX clock when duplex RX is active; otherwise RX may stall on some boards.
+            if (!(codec_->duplex() && codec_->input_enabled())) {
+                codec_->EnableOutput(false);
+            }
+        }
+#endif
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);

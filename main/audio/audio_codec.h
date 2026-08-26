@@ -1,14 +1,14 @@
 #ifndef _AUDIO_CODEC_H
 #define _AUDIO_CODEC_H
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
 #include <driver/i2s_std.h>
 #include <esp_idf_version.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 
-#include <vector>
-#include <string>
 #include <functional>
+#include <string>
+#include <vector>
 
 #include "board.h"
 
@@ -28,7 +28,7 @@ class AudioCodec {
 public:
     AudioCodec();
     virtual ~AudioCodec();
-    
+
     virtual void SetOutputVolume(int volume);
     virtual void SetInputGain(float gain);
     virtual void EnableInput(bool enable);
@@ -68,4 +68,10 @@ protected:
     virtual int Write(const int16_t* data, int samples) = 0;
 };
 
-#endif // _AUDIO_CODEC_H
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+void MossDesktopSetNs4150Pa(bool enable);
+void MossDesktopPreparePlayback(AudioCodec* codec);
+void MossDesktopReleasePlayback(AudioCodec* codec);
+#endif
+
+#endif  // _AUDIO_CODEC_H

@@ -5,12 +5,59 @@
 #include <driver/i2s_common.h>
 #include <esp_log.h>
 #include <cstring>
+#include "sdkconfig.h"
 
 #if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "mcp/utils/pca9685_driver.h"
 #endif
 
 #define TAG "AudioCodec"
+
+#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
+namespace {
+
+constexpr uint8_t kNs4150PaPcaChannel = 1;
+bool ns4150_pa_enabled = false;
+
+}  // namespace
+
+void MossDesktopSetNs4150Pa(bool enable) {
+    if (ns4150_pa_enabled == enable) {
+        return;
+    }
+    if (!Pca9685::GetInstance().IsReady()) {
+        return;
+    }
+    if (!Pca9685::GetInstance().SetDigital(kNs4150PaPcaChannel, enable)) {
+        ESP_LOGW(TAG, "NS4150B EN %s failed (PCA9685 ch%d)", enable ? "on" : "off",
+                 (int)kNs4150PaPcaChannel);
+        return;
+    }
+    ns4150_pa_enabled = enable;
+    ESP_LOGI(TAG, "NS4150B EN %s (PCA9685 ch%d)", enable ? "on" : "off", (int)kNs4150PaPcaChannel);
+}
+
+void MossDesktopPreparePlayback(AudioCodec* codec) {
+    if (codec == nullptr) {
+        return;
+    }
+    if (!codec->output_enabled()) {
+        codec->EnableOutput(true);
+        // Brief settle for ES8311 DAC before PA enable reduces turn-on thump.
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    MossDesktopSetNs4150Pa(true);
+}
+
+void MossDesktopReleasePlayback(AudioCodec* codec) {
+    MossDesktopSetNs4150Pa(false);
+    if (codec != nullptr && codec->output_enabled()) {
+        codec->EnableOutput(false);
+    }
+}
+#endif
 
 AudioCodec::AudioCodec() {}
 
@@ -34,15 +81,6 @@ void AudioCodec::Start() {
                  output_volume_);
         output_volume_ = 10;
     }
-
-#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
-    // NS4150B EN（PCA9685 LED1）：等 ES8311/ES7210 构造成功后再拉高。
-    // 之后保持常开，勿在 EnableOutput 里反复写 PCA9685（与 codec 共 I2C，易打断 ES7210）。
-    if (Pca9685::GetInstance().IsReady()) {
-        Pca9685::GetInstance().SetDigital(1, true);
-        ESP_LOGI(TAG, "NS4150B EN asserted (PCA9685 LED1) after codec init");
-    }
-#endif
 
     ESP_LOGI(TAG, "Audio codec started");
 }
