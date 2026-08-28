@@ -14,6 +14,7 @@ public:
     void LeaveBindMode();
     void OnMqttConnected();
     void OnMqttDisconnected();
+    void AnnounceOnline();
     void OnBindHello();
     void OnBindClear();
     void OnConfigSavedStartMqtt();

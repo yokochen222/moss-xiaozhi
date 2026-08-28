@@ -65,7 +65,7 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
-    // External MQTT / text wake: send listen+detect with text to trigger LLM.
+    // External MQTT / 云享记: detect 只能是短文本（小智云限制）。
     virtual void SendTextChat(const std::string& text);
     void SetPendingAudioDropped(bool dropped);
     bool IsPendingAudioDropped() const;

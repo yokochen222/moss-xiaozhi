@@ -19,6 +19,7 @@ public:
     void SetSource(LiveJpegSource* source);
     LiveJpegSource* source() const { return source_; }
     void Disarm();
+    bool IsArmed() const;
 
     esp_err_t HandleStream(httpd_req_t* req);
     esp_err_t HandleSnapshot(httpd_req_t* req);

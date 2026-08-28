@@ -193,6 +193,11 @@ void MossCameraStream::Disarm() {
     }
 }
 
+bool MossCameraStream::IsArmed() const {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return g_armed || g_held;
+}
+
 esp_err_t MossCameraStream::HandleSnapshot(httpd_req_t* req) {
     http_util::SetCors(req);
     if (FaceTracker::GetInstance().IsRunning() || VoiceBusy()) {

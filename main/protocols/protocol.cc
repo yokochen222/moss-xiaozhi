@@ -1,9 +1,38 @@
 #include "protocol.h"
 #include "assets.h"
 
+#include <cJSON.h>
 #include <esp_log.h>
 
 #define TAG "Protocol"
+
+namespace {
+constexpr size_t kDetectMaxChars = 16;
+
+std::string TruncateUtf8Chars(const std::string& text, size_t max_chars) {
+    size_t i = 0;
+    size_t chars = 0;
+    while (i < text.size() && chars < max_chars) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        size_t n = 1;
+        if ((c & 0x80) == 0) {
+            n = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            n = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            n = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            n = 4;
+        }
+        if (i + n > text.size()) {
+            break;
+        }
+        i += n;
+        chars++;
+    }
+    return text.substr(0, i);
+}
+}  // namespace
 
 void Protocol::AddTextFontCapabilities(cJSON* root) {
     auto capability = Assets::GetInstance().text_font_capability();
@@ -100,32 +129,23 @@ void Protocol::SendMcpMessage(const std::string& payload) {
 }
 
 void Protocol::SendTextChat(const std::string& text) {
-    constexpr size_t kMaxTextBytes = 2048;
-    std::string safe_text = text;
-
-    if (text.size() > kMaxTextBytes) {
-        size_t limit = kMaxTextBytes;
-        while (limit > 0 && (text[limit] & 0xC0) == 0x80) {
-            limit--;
-        }
-        if (limit > 0) {
-            safe_text = text.substr(0, limit);
-        } else {
-            limit = kMaxTextBytes;
-            while (limit > 0 && (text[limit] & 0xC0) == 0x80) {
-                limit--;
-            }
-            safe_text = text.substr(0, limit);
-        }
-        ESP_LOGW(TAG, "Text truncated from %zu to %zu bytes", text.size(), safe_text.size());
+    // Official Xiaozhi cloud: detect is wake-word / short utterance only.
+    const std::string detect = TruncateUtf8Chars(text, kDetectMaxChars);
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "listen");
+    cJSON_AddStringToObject(root, "state", "detect");
+    cJSON_AddStringToObject(root, "text", detect.c_str());
+    char* printed = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!printed) {
+        ESP_LOGE(TAG, "SendTextChat json failed");
+        return;
     }
-
-    // listen+detect is what the server uses to trigger LLM from text input.
-    std::string json = "{\"session_id\":\"" + session_id_ +
-                       "\",\"type\":\"listen\",\"state\":\"detect\",\"text\":\"" + safe_text +
-                       "\"}";
-    SendText(json);
-    ESP_LOGI(TAG, "SendTextChat: sent listen+detect with text: %s", safe_text.c_str());
+    SendText(printed);
+    ESP_LOGI(TAG, "SendTextChat detect=%s full_len=%u", detect.c_str(),
+             (unsigned)text.size());
+    cJSON_free(printed);
 }
 
 void Protocol::SetPendingAudioDropped(bool dropped) {

@@ -119,6 +119,12 @@ public:
     AudioService& GetAudioService() { return audio_service_; }
     // External MQTT codesuccess / text wake trigger.
     void HandleExternalTextMessage(const std::string& text);
+    void SetPendingAnnounce(const std::string& text);
+    std::string TakePendingAnnounce();
+
+    using ChatRelayCallback = std::function<void(const std::string& event, const std::string& role,
+                                                 const std::string& text, const std::string& state)>;
+    void RegisterChatRelayCallback(ChatRelayCallback callback);
 
     /**
      * Reset protocol resources (thread-safe)
@@ -144,7 +150,9 @@ private:
     std::unique_ptr<Ota> ota_;
 
     std::function<void(const std::string&)> mcp_broadcast_callback_;
+    ChatRelayCallback chat_relay_callback_;
     std::string pending_text_to_send_;
+    std::string pending_announce_;
 
     bool has_server_time_ = false;
     bool aborted_ = false;
@@ -190,6 +198,7 @@ private:
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    void RelayChat(const std::string& event, const std::string& role, const std::string& text);
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

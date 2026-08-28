@@ -3,6 +3,8 @@
 #include "assets/lang_config.h"
 #include "audio_codec.h"
 #include "board.h"
+#include "device/face_tracker.h"
+#include "device/moss_camera_stream.h"
 #include "display.h"
 #include "mcp_server.h"
 #include "mqtt_protocol.h"
@@ -644,10 +646,11 @@ void Application::InitializeProtocol() {
                         glyphs.clear();
                     }
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([display, message = std::string(text->valuestring),
+                    Schedule([this, display, message = std::string(text->valuestring),
                               glyphs = std::move(glyphs), bpp]() {
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
+                        RelayChat("message", "assistant", message);
                     });
                 }
             }
@@ -660,10 +663,11 @@ void Application::InitializeProtocol() {
                     glyphs.clear();
                 }
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring),
+                Schedule([this, display, message = std::string(text->valuestring),
                           glyphs = std::move(glyphs), bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
+                    RelayChat("message", "user", message);
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
@@ -1000,6 +1004,16 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+            if (!pending_text_to_send_.empty()) {
+                Schedule([this]() {
+                    if (GetDeviceState() != kDeviceStateIdle || pending_text_to_send_.empty()) {
+                        return;
+                    }
+                    const std::string text = pending_text_to_send_;
+                    pending_text_to_send_.clear();
+                    HandleExternalTextMessage(text);
+                });
+            }
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -1056,6 +1070,7 @@ void Application::HandleStateChangedEvent() {
             // Do nothing
             break;
     }
+    RelayChat("state", "", "");
 }
 
 #if CONFIG_ENABLE_VAD_INTERRUPT
@@ -1288,20 +1303,40 @@ void Application::RequestChatWake(const std::string& wake_word) {
     }
 }
 
+void Application::SetPendingAnnounce(const std::string& text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_announce_ = text;
+}
+
+std::string Application::TakePendingAnnounce() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string text = pending_announce_;
+    pending_announce_.clear();
+    return text;
+}
+
 void Application::HandleExternalTextMessage(const std::string& text) {
     if (text.empty()) {
         return;
     }
 
+    SetPendingAnnounce(text);
+
     Schedule([this, text]() {
         auto state = GetDeviceState();
+
+        if (state == kDeviceStateSpeaking) {
+            // Don't abort current TTS; flush on next listening/idle.
+            pending_text_to_send_ = text;
+            ESP_LOGI(TAG, "HandleExternalTextMessage: queue until idle (speaking)");
+            return;
+        }
 
         if (state == kDeviceStateIdle) {
             if (!protocol_) {
                 ESP_LOGE(TAG, "Protocol not initialized");
                 return;
             }
-            // Set pending text before opening channel — OnAudioChannelOpened may run sync.
             pending_text_to_send_ = text;
             listening_mode_ = kListeningModeAutoStop;
             if (!protocol_->IsAudioChannelOpened()) {
@@ -1314,13 +1349,22 @@ void Application::HandleExternalTextMessage(const std::string& text) {
                     return;
                 }
             }
-        } else if (state == kDeviceStateSpeaking) {
-            pending_text_to_send_ = text;
-            AbortSpeaking(kAbortReasonNone);
-        } else {
-            ESP_LOGW(TAG, "HandleExternalTextMessage: device busy (state=%d), ignored",
-                     static_cast<int>(state));
+            return;
         }
+
+        if (state == kDeviceStateListening || state == kDeviceStateConnecting) {
+            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                protocol_->SetPendingAudioDropped(true);
+                protocol_->SendTextChat(text);
+            } else {
+                pending_text_to_send_ = text;
+            }
+            return;
+        }
+
+        ESP_LOGW(TAG, "HandleExternalTextMessage: device busy (state=%d), queued",
+                 static_cast<int>(state));
+        pending_text_to_send_ = text;
     });
 }
 
@@ -1337,8 +1381,26 @@ bool Application::CanEnterSleepMode() {
         return false;
     }
 
-    // Now it is safe to enter sleep mode
+    if (MossCameraStream::GetInstance().IsArmed()) {
+        return false;
+    }
+
+    if (FaceTracker::GetInstance().IsRunning()) {
+        return false;
+    }
+
     return true;
+}
+
+void Application::RegisterChatRelayCallback(ChatRelayCallback callback) {
+    chat_relay_callback_ = std::move(callback);
+}
+
+void Application::RelayChat(const std::string& event, const std::string& role, const std::string& text) {
+    if (!chat_relay_callback_) {
+        return;
+    }
+    chat_relay_callback_(event, role, text, DeviceStateMachine::GetStateName(GetDeviceState()));
 }
 
 void Application::RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback) {

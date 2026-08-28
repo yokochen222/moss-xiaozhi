@@ -2,8 +2,10 @@
 #include "api/api.h"
 #include "application.h"
 #include "ext_mqtt_config.h"
+#include "product.h"
 
 #include <cJSON.h>
+#include <wifi_manager.h>
 
 #include <esp_log.h>
 #include <esp_netif.h>
@@ -48,6 +50,24 @@ std::string MossConfigService::InstanceName() const {
 }
 
 void MossConfigService::OnNetworkConnected() {
+    Application::GetInstance().RegisterChatRelayCallback(
+        [](const std::string& event, const std::string& role, const std::string& text,
+           const std::string& state) {
+            cJSON* payload = cJSON_CreateObject();
+            if (!role.empty()) {
+                cJSON_AddStringToObject(payload, "role", role.c_str());
+            }
+            if (!text.empty()) {
+                cJSON_AddStringToObject(payload, "text", text.c_str());
+            }
+            if (!state.empty()) {
+                cJSON_AddStringToObject(payload, "state", state.c_str());
+            }
+            const char* type = event == "message" ? "chat.message" : "chat.state";
+            MossConfigService::GetInstance().PublishUp(type, "", payload);
+            cJSON_Delete(payload);
+        });
+
     // Keep LAN HTTP up for onboard MJPEG even after MQTT bind.
     if (!ApiServer::GetInstance().IsRunning()) {
         ApiServer::GetInstance().Start(5500);
@@ -84,6 +104,7 @@ void MossConfigService::LeaveBindMode() {
 
 void MossConfigService::OnMqttConnected() {
     mqtt_client_.ResetFailCount();
+    Application::GetInstance().Schedule([]() { MossConfigService::GetInstance().AnnounceOnline(); });
     if (awaiting_hello_ && hello_timer_) {
         esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
         esp_timer_start_once(reinterpret_cast<esp_timer_handle_t>(hello_timer_), kHelloTimeoutUs);
@@ -92,6 +113,23 @@ void MossConfigService::OnMqttConnected() {
 }
 
 void MossConfigService::OnMqttDisconnected() {}
+
+void MossConfigService::AnnounceOnline() {
+    cJSON* payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(payload, "product", MossProduct::kId);
+    cJSON_AddStringToObject(payload, "hostname", hostname_.c_str());
+    const std::string ip = WifiManager::GetInstance().GetIpAddress();
+    if (!ip.empty()) {
+        cJSON_AddStringToObject(payload, "ip", ip.c_str());
+    }
+    cJSON_AddBoolToObject(payload, "onboard_camera", true);
+    if (!PublishUp("device.online", "", payload)) {
+        ESP_LOGW(TAG, "device.online publish failed");
+    } else {
+        ESP_LOGI(TAG, "device.online ip=%s", ip.c_str());
+    }
+    cJSON_Delete(payload);
+}
 
 void MossConfigService::OnBindHello() {
     ESP_LOGI(TAG, "bind.hello received");
@@ -127,7 +165,15 @@ void MossConfigService::StartMdns() {
     }
     mdns_hostname_set(hostname_.c_str());
     mdns_instance_name_set(InstanceName().c_str());
-    mdns_service_add(InstanceName().c_str(), "_moss-http", "_tcp", 5500, nullptr, 0);
+    mdns_txt_item_t txt[] = {
+        {"path", "/health"},
+        {"product", MossProduct::kId},
+    };
+    esp_err_t add_err =
+        mdns_service_add(InstanceName().c_str(), "_moss-http", "_tcp", 5500, txt, 2);
+    if (add_err != ESP_OK && add_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "mdns_service_add: %s", esp_err_to_name(add_err));
+    }
     mdns_started_ = true;
     ESP_LOGI(TAG, "mDNS started hostname=%s.local instance=%s", hostname_.c_str(),
              InstanceName().c_str());
