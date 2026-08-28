@@ -16,9 +16,11 @@
 #define TAG "MossCamStream"
 
 namespace {
-constexpr int kIdleUs = 1800 * 1000;
-constexpr int kGrabPeriodMs = 550;
-constexpr int kFirstWaitMs = 800;
+// Keep DVP running like a live stream so AEC/AWB stay locked between snapshots.
+constexpr int kIdleUs = 20 * 1000 * 1000;
+constexpr int kGrabPeriodMs = 180;
+constexpr int kFirstWaitMs = 6000;
+constexpr int kSkipAfterStart = 4;
 
 std::mutex g_mu;
 std::vector<uint8_t> g_last_jpeg;
@@ -26,7 +28,9 @@ TaskHandle_t g_task = nullptr;
 SemaphoreHandle_t g_frame_sem = nullptr;
 bool g_armed = false;
 int64_t g_touch_us = 0;
+int64_t g_jpeg_us = 0;
 bool g_held = false;
+int g_skip_after_start = 0;
 
 bool VoiceBusy() {
     const auto state = Application::GetInstance().GetDeviceState();
@@ -37,9 +41,11 @@ bool VoiceBusy() {
 void ReleaseHeld(MossCameraStream* self) {
     if (!g_held || !self || !self->source()) {
         g_held = false;
+        g_skip_after_start = 0;
         return;
     }
     g_held = false;
+    g_skip_after_start = 0;
     self->source()->ReleaseLiveStream();
 }
 
@@ -76,12 +82,19 @@ void PreviewTask(void* arg) {
                     continue;
                 }
                 g_held = true;
+                g_skip_after_start = kSkipAfterStart;
             }
             camera_fb_t* fb = self->source()->GrabJpeg();
             if (fb && fb->buf && fb->len > 0) {
+                if (g_skip_after_start > 0) {
+                    --g_skip_after_start;
+                    self->source()->ReturnJpeg(fb);
+                    continue;
+                }
                 {
                     std::lock_guard<std::mutex> lock(g_mu);
                     g_last_jpeg.assign(fb->buf, fb->buf + fb->len);
+                    g_jpeg_us = esp_timer_get_time();
                 }
                 self->source()->ReturnJpeg(fb);
                 if (g_frame_sem) {
@@ -90,8 +103,6 @@ void PreviewTask(void* arg) {
             } else if (fb) {
                 self->source()->ReturnJpeg(fb);
             }
-            // Drop DVP between frames so LCD code scroll can keep the SPI bus.
-            ReleaseHeld(self);
             vTaskDelay(pdMS_TO_TICKS(kGrabPeriodMs));
         }
     }
@@ -137,6 +148,31 @@ esp_err_t SendCachedOrEmpty(httpd_req_t* req) {
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, reinterpret_cast<const char*>(jpeg.data()), jpeg.size());
 }
+
+void WaitForFreshJpeg(int64_t request_us) {
+    if (!g_frame_sem) {
+        return;
+    }
+    const int64_t deadline_us = request_us + (int64_t)kFirstWaitMs * 1000;
+    while (esp_timer_get_time() < deadline_us) {
+        int64_t jpeg_us = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            jpeg_us = g_jpeg_us;
+        }
+        if (jpeg_us >= request_us) {
+            return;
+        }
+        int remain_ms = (int)((deadline_us - esp_timer_get_time()) / 1000);
+        if (remain_ms <= 0) {
+            return;
+        }
+        if (remain_ms > 400) {
+            remain_ms = 400;
+        }
+        xSemaphoreTake(g_frame_sem, pdMS_TO_TICKS(remain_ms));
+    }
+}
 }  // namespace
 
 MossCameraStream& MossCameraStream::GetInstance() {
@@ -144,9 +180,7 @@ MossCameraStream& MossCameraStream::GetInstance() {
     return instance;
 }
 
-void MossCameraStream::SetSource(LiveJpegSource* source) {
-    source_ = source;
-}
+void MossCameraStream::SetSource(LiveJpegSource* source) { source_ = source; }
 
 void MossCameraStream::Disarm() {
     {
@@ -164,18 +198,10 @@ esp_err_t MossCameraStream::HandleSnapshot(httpd_req_t* req) {
     if (FaceTracker::GetInstance().IsRunning() || VoiceBusy()) {
         return SendCachedOrEmpty(req);
     }
+    const int64_t request_us = esp_timer_get_time();
     Arm(this);
-    bool empty = false;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        empty = g_last_jpeg.empty();
-    }
-    if (empty && g_frame_sem) {
-        xSemaphoreTake(g_frame_sem, pdMS_TO_TICKS(kFirstWaitMs));
-    }
+    WaitForFreshJpeg(request_us);
     return SendCachedOrEmpty(req);
 }
 
-esp_err_t MossCameraStream::HandleStream(httpd_req_t* req) {
-    return HandleSnapshot(req);
-}
+esp_err_t MossCameraStream::HandleStream(httpd_req_t* req) { return HandleSnapshot(req); }

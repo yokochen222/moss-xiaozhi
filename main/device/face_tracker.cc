@@ -305,6 +305,9 @@ void FaceTracker::TaskLoop() {
             continue;
         }
 
+        // Snapshot HUD before the ~600ms detect so a torn later DMA write is not shown.
+        FillPreviewFromFrame(fb);
+
         // esp_camera RGB565 on S3 is typically byte-order BE in the buffer.
         dl::image::img_t img{};
         img.data = fb->buf;
@@ -349,7 +352,6 @@ void FaceTracker::TaskLoop() {
 
         const int frame_w = fb->width;
         const int frame_h = fb->height;
-        FillPreviewFromFrame(fb);
         cam->ReturnTrackingFrame(fb);
         fb = nullptr;
 

@@ -27,6 +27,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_st7735.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <wifi_manager.h>
@@ -106,8 +107,10 @@ public:
     }
 
     bool Capture() override {
-        if (!stream_acquired_) {
+        const bool own_session = !stream_acquired_;
+        if (own_session) {
             FaceTracker::GetInstance().PauseForExternalCameraUse();
+            PauseLcdForDvp();
         }
         bool ok = false;
         {
@@ -123,8 +126,9 @@ public:
                 ok = true;
             }
         }
-        if (!ok && !stream_acquired_) {
+        if (!ok && own_session) {
             FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+            ResumeLcdAfterDvp();
         }
         return ok;
     }
@@ -159,6 +163,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             if (!camera_) {
                 FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+                ResumeLcdAfterDvp();
                 throw std::runtime_error("Camera not started");
             }
             cam = camera_.get();
@@ -174,6 +179,7 @@ public:
             }
             if (!stream_acquired_) {
                 FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+                ResumeLcdAfterDvp();
             }
             return result;
         } catch (...) {
@@ -185,6 +191,7 @@ public:
             }
             if (!stream_acquired_) {
                 FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
+                ResumeLcdAfterDvp();
             }
             throw;
         }
@@ -192,14 +199,15 @@ public:
 
     bool AcquireLiveStream() override {
         FaceTracker::GetInstance().PauseForExternalCameraUse();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (tracking_acquired_) {
-            ReleaseTrackingLocked();
-        }
         if (VoiceBusy()) {
+            std::lock_guard<std::mutex> lock(mutex_);
             stream_refs_++;
             stream_acquired_ = true;
             return true;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (tracking_acquired_) {
+            ReleaseTrackingLocked();
         }
         if (!EnsureStartedLocked(true)) {
             if (stream_refs_ == 0) {
@@ -245,7 +253,17 @@ public:
                 return nullptr;
             }
         }
-        return esp_camera_fb_get();
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            camera_fb_t* fb = esp_camera_fb_get();
+            if (JpegLooksComplete(fb)) {
+                return fb;
+            }
+            if (fb) {
+                ESP_LOGW(TAG, "Drop incomplete JPEG len=%u", (unsigned)fb->len);
+                esp_camera_fb_return(fb);
+            }
+        }
+        return nullptr;
     }
 
     void ReturnJpeg(camera_fb_t* fb) override {
@@ -279,7 +297,8 @@ public:
         // HVGA (480x320): ~2.25x pixels vs QVGA — distant faces were ~24px on 320-wide.
         cfg.frame_size = FRAMESIZE_HVGA;
         cfg.jpeg_quality = 12;
-        cfg.fb_count = 1;
+        // Detect holds a frame ~600ms. fb_count=1 lets DVP overwrite that buffer → tearing stripes.
+        cfg.fb_count = 2;
         cfg.fb_location = CAMERA_FB_IN_PSRAM;
         cfg.grab_mode = CAMERA_GRAB_LATEST;
 
@@ -295,17 +314,29 @@ public:
 
         esp_err_t err = esp_camera_init(&cfg);
         if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Tracking double-buffer init failed: 0x%x, retry fb_count=1", err);
+            cfg.fb_count = 1;
+            err = esp_camera_init(&cfg);
+        }
+        if (err != ESP_OK) {
             ESP_LOGE(TAG, "Tracking esp_camera_init failed: 0x%x", err);
             return false;
         }
         sensor_t* s = esp_camera_sensor_get();
         if (s && s->id.PID == OV2640_PID) {
+            s->set_brightness(s, 0);
+            s->set_contrast(s, 0);
+            s->set_saturation(s, 0);
             s->set_whitebal(s, 1);
             s->set_awb_gain(s, 1);
             s->set_exposure_ctrl(s, 1);
             s->set_aec2(s, 1);
             s->set_gain_ctrl(s, 1);
+            s->set_bpc(s, 1);
+            s->set_wpc(s, 1);
+            s->set_raw_gma(s, 1);
             s->set_lenc(s, 1);
+            s->set_dcw(s, 1);
         }
         tracking_acquired_ = true;
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -394,8 +425,9 @@ private:
         } else {
             ESP_LOGW(TAG, "Vision explain URL not set yet; Capture ok but Explain may fail");
         }
-        // Sensor stays powered; short settle is enough for first JPEG.
+        // OV2640 AEC/AWB lock only after a real continuous stream, not a few fb_get calls.
         vTaskDelay(pdMS_TO_TICKS(200));
+        DrainWarmupFramesLocked();
         return true;
     }
 
@@ -415,6 +447,53 @@ private:
         ESP_LOGI(TAG, "Tracking OV2640 stop (free DVP DMA)");
         esp_camera_deinit();
         tracking_acquired_ = false;
+    }
+
+    static void PauseLcdForDvp() {
+        if (auto* d = Board::GetInstance().GetDisplay()) {
+            d->PauseBackgroundAnimation();
+        }
+    }
+
+    static void ResumeLcdAfterDvp() {
+        if (auto* d = Board::GetInstance().GetDisplay()) {
+            d->ResumeBackgroundAnimation();
+        }
+    }
+
+    static bool JpegLooksComplete(const camera_fb_t* fb) {
+        if (!fb || !fb->buf || fb->len < 128) {
+            return false;
+        }
+        if (fb->buf[0] != 0xFF || fb->buf[1] != 0xD8) {
+            return false;
+        }
+        return fb->buf[fb->len - 2] == 0xFF && fb->buf[fb->len - 1] == 0xD9;
+    }
+
+    void DrainWarmupFramesLocked() {
+        const int64_t t0 = esp_timer_get_time();
+        const int64_t min_us = 2000 * 1000;
+        const int64_t max_us = 4000 * 1000;
+        int n = 0;
+        while (true) {
+            camera_fb_t* fb = esp_camera_fb_get();
+            if (fb) {
+                esp_camera_fb_return(fb);
+                ++n;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            const int64_t elapsed = esp_timer_get_time() - t0;
+            if (elapsed >= min_us && n >= 15) {
+                break;
+            }
+            if (elapsed >= max_us) {
+                break;
+            }
+        }
+        ESP_LOGI(TAG, "JPEG warmup dropped %d frames in %d ms", n,
+                 (int)((esp_timer_get_time() - t0) / 1000));
     }
 
     camera_config_t config_{};
@@ -504,8 +583,8 @@ private:
         config.pixel_format = PIXFORMAT_JPEG;
         config.frame_size = FRAMESIZE_QVGA;
         config.jpeg_quality = 12;
-        // 对话态内部 SRAM 紧张；单帧 + PSRAM fb 降低 DMA 描述符压力
-        config.fb_count = 1;
+        // JPEG 在 PSRAM；双缓冲避免 GrabJpeg 持帧时下一帧撕开
+        config.fb_count = 2;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode = CAMERA_GRAB_LATEST;
 
