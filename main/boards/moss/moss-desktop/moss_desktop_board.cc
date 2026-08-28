@@ -603,10 +603,24 @@ private:
     }
 
     void InitializePowerSaveTimer() {
-        // Keep wake word running. Idle only turns the screen off.
+        // 待命满 60s 只关屏, 唤醒词继续跑. 连接/聆听/说话时停表, 避免对话中熄屏.
         power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
-        power_save_timer_->OnEnterSleepMode([this]() { GetDisplay()->SetPowerSaveMode(true); });
+        power_save_timer_->OnEnterSleepMode([this]() {
+            if (Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+                return;
+            }
+            GetDisplay()->SetPowerSaveMode(true);
+        });
         power_save_timer_->OnExitSleepMode([this]() { GetDisplay()->SetPowerSaveMode(false); });
+        if (panel_ != nullptr && display_ != nullptr) {
+            auto* moss_disp = static_cast<MossSpiLcdDisplay*>(display_);
+            moss_disp->OnConversationKeepAwake([this](bool keep_awake) {
+                if (power_save_timer_ == nullptr) {
+                    return;
+                }
+                power_save_timer_->SetEnabled(!keep_awake);
+            });
+        }
         power_save_timer_->SetEnabled(true);
     }
 

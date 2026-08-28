@@ -126,6 +126,14 @@ bool is_listening_status(const char* s) { return s != nullptr && strstr(s, "聆�
 
 bool is_speaking_status(const char* s) { return s != nullptr && strstr(s, "说话") != nullptr; }
 
+bool is_connecting_status(const char* s) { return s != nullptr && strstr(s, "连接中") != nullptr; }
+
+bool is_standby_status(const char* s) { return s != nullptr && strstr(s, "待命") != nullptr; }
+
+bool is_session_status(const char* s) {
+    return is_listening_status(s) || is_speaking_status(s) || is_connecting_status(s);
+}
+
 }  // namespace
 
 MossSpiLcdDisplay::MossSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io,
@@ -199,6 +207,14 @@ void MossSpiLcdDisplay::SetStatus(const char* status) {
         std::lock_guard<std::mutex> lock(face_ui_mutex_);
         if (face_track_mode_) {
             return;  // HUD owns the panel while tracking.
+        }
+    }
+
+    if (keep_awake_cb_) {
+        if (is_session_status(status)) {
+            keep_awake_cb_(true);
+        } else if (is_standby_status(status)) {
+            keep_awake_cb_(false);
         }
     }
 

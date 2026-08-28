@@ -1,9 +1,10 @@
 #ifndef MOSS_SPI_LCD_DISPLAY_H
 #define MOSS_SPI_LCD_DISPLAY_H
 
-#include "lcd_display.h"
 #include "device/face_tracker.h"
+#include "lcd_display.h"
 
+#include <functional>
 #include <mutex>
 #include <string>
 
@@ -36,6 +37,11 @@ public:
     void PauseBackgroundAnimation() override;
     void ResumeBackgroundAnimation() override;
 
+    // true: 对话中停掉熄屏计时并亮屏; false: 回到待命后重新 60s 计时.
+    void OnConversationKeepAwake(std::function<void(bool keep_awake)> cb) {
+        keep_awake_cb_ = std::move(cb);
+    }
+
     // Face-track UI: stop code scroll and show detection HUD.
     void EnterFaceTrackMode();
     void ExitFaceTrackMode();
@@ -53,6 +59,7 @@ private:
     bool face_track_mode_ = false;
     bool scroll_paused_ = false;
     std::mutex face_ui_mutex_;
+    std::function<void(bool)> keep_awake_cb_;
 
     void StartSplashLoop();
 };
