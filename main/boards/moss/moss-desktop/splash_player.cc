@@ -1,6 +1,8 @@
 #include "splash_player.h"
+#include "application.h"
 #include "audio_scope.h"
 #include "config.h"
+#include "device_state.h"
 #include "eaf_iface.h"
 #include "moss_splash.h"
 
@@ -35,7 +37,7 @@ namespace {
 
 constexpr int kScopeBins = 80;
 constexpr uint32_t kScopeSamplesPerBin = 80;
-constexpr int64_t kScopePlaybackHoldUs = 180000;
+constexpr int64_t kScopePlaybackHoldUs = 60000;
 constexpr int64_t kScopeStaleUs = 500000;
 constexpr uint32_t kScopeAgcFloor = 1800;
 constexpr uint32_t kScopeNoiseInit = 600;
@@ -120,9 +122,13 @@ void audio_scope_feed(AudioScopeSource source, const int16_t* samples, size_t co
     const int src = (source == AudioScopeSource::Playback) ? 1 : 0;
     ScopeChannel& ch = s_scope_ch[src];
     const int step = (channels > 1) ? channels : 1;
+    const bool residual = (source == AudioScopeSource::Capture && step >= 2);
 
     for (size_t i = 0; i < count; i += static_cast<size_t>(step)) {
-        const int32_t x = samples[i];
+        int32_t x = samples[i];
+        if (residual && (i + 1) < count) {
+            x -= samples[i + 1];
+        }
         ch.dc += (x - ch.dc) >> 5;
         int32_t ac = x - ch.dc;
         if (ac < 0) {
@@ -148,13 +154,20 @@ bool audio_scope_copy_envelope(uint8_t* dst, int width) {
     const int64_t now = esp_timer_get_time();
     const int64_t pb_age = now - s_scope_ch[1].last_us.load(std::memory_order_relaxed);
     const int64_t cap_age = now - s_scope_ch[0].last_us.load(std::memory_order_relaxed);
+    const bool capture_live = cap_age >= 0 && cap_age < kScopeStaleUs;
+    const bool playback_live = pb_age >= 0 && pb_age < kScopePlaybackHoldUs;
+    const bool barge_in = Application::GetInstance().IsVoiceDetected();
 
     const ScopeChannel* src = nullptr;
     int64_t age = kScopeStaleUs;
-    if (pb_age >= 0 && pb_age < kScopePlaybackHoldUs) {
+    // VAD / 打断优先跟麦, 否则说话态会一直钉在喇叭包络上.
+    if (barge_in && capture_live) {
+        src = &s_scope_ch[0];
+        age = cap_age;
+    } else if (playback_live) {
         src = &s_scope_ch[1];
         age = pb_age;
-    } else if (cap_age >= 0 && cap_age < kScopeStaleUs) {
+    } else if (capture_live) {
         src = &s_scope_ch[0];
         age = cap_age;
     } else if (pb_age >= 0 && pb_age < kScopeStaleUs) {
@@ -169,7 +182,7 @@ bool audio_scope_copy_envelope(uint8_t* dst, int width) {
 
     scope_map_bins(*src, dst, width);
 
-    if (age > 120000) {
+    if (!barge_in && age > 120000) {
         const int fade = static_cast<int>((age - 120000) / 40000);
         const int den = 4 + (fade > 8 ? 8 : fade);
         for (int x = 0; x < width; ++x) {
@@ -764,6 +777,8 @@ static inline void plot_rgb565(uint16_t* dst, int dst_w, int dst_h, int x, int y
 }
 
 // 右半区音谱线: 沿中线上下对称, 幅度来自 codec PCM 包络.
+static constexpr uint16_t kWaveBargeColor = 0x17B2;  // 与聆听弹窗同色
+
 static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h, int x0, int y0, int w, int h,
                                  int mid_y, uint16_t color) {
     if (w < 4 || h < 6)
@@ -778,6 +793,11 @@ static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h, int x0, in
     uint8_t env[DISPLAY_WIDTH];
     const int n = (w > DISPLAY_WIDTH) ? DISPLAY_WIDTH : w;
     const bool has = audio_scope_copy_envelope(env, n);
+    uint16_t wave_color = color;
+    if (Application::GetInstance().IsVoiceDetected() &&
+        Application::GetInstance().GetDeviceState() == kDeviceStateSpeaking) {
+        wave_color = kWaveBargeColor;
+    }
 
     for (int i = 0; i < w; i++) {
         int e = 0;
@@ -803,7 +823,7 @@ static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h, int x0, in
         if (y2 > y0 + h - 1)
             y2 = y0 + h - 1;
         for (int y = y1; y <= y2; y++) {
-            plot_rgb565(dst, dst_w, dst_h, x, y, color);
+            plot_rgb565(dst, dst_w, dst_h, x, y, wave_color);
         }
     }
 }
