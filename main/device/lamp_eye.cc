@@ -1,5 +1,6 @@
 #include "lamp_eye.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <climits>
 #include "../mcp/utils/pca9685_driver.h"
 
@@ -9,6 +10,7 @@ LampEyeDevice::LampEyeDevice()
     : power_(false),
       breathing_(false),
       pause_(false),
+      brightness_(kDefaultBrightnessPercent),
       breathing_task_handle_(nullptr),
       pwm_mutex_(nullptr) {
     pwm_mutex_ = xSemaphoreCreateMutex();
@@ -48,6 +50,20 @@ LampEyeDevice::~LampEyeDevice() {
     }
 }
 
+uint8_t LampEyeDevice::ClampBrightness(int percent) {
+    if (percent < 1) {
+        return 1;
+    }
+    if (percent > kPwmCeilingPercent) {
+        return kPwmCeilingPercent;
+    }
+    return static_cast<uint8_t>(percent);
+}
+
+uint16_t LampEyeDevice::PeakDuty() const {
+    return static_cast<uint16_t>((static_cast<uint32_t>(brightness_) * MAX_DUTY) / 100);
+}
+
 void LampEyeDevice::SetDuty(int duty) {
     uint16_t d = static_cast<uint16_t>(duty);
     if (d > MAX_DUTY) {
@@ -77,8 +93,8 @@ bool LampEyeDevice::TurnOn() {
         return false;
     }
     power_ = true;
-    SetDuty(MAX_DUTY);
-    ESP_LOGI(TAG, "Eye light turned on");
+    SetDuty(PeakDuty());
+    ESP_LOGI(TAG, "Eye light turned on brightness=%u%%", brightness_);
     return true;
 }
 
@@ -106,7 +122,7 @@ bool LampEyeDevice::StartBreathing() {
             pause_ = false;
             return false;
         }
-        ESP_LOGI(TAG, "Breathing effect started");
+        ESP_LOGI(TAG, "Breathing effect started brightness=%u%%", brightness_);
         return true;
     }
     return true;  // 已经在运行
@@ -164,6 +180,15 @@ bool LampEyeDevice::StopBreathing() {
     return true;  // 已经停止
 }
 
+bool LampEyeDevice::SetBrightness(int percent) {
+    brightness_ = ClampBrightness(percent);
+    if (power_ && !breathing_) {
+        SetDuty(PeakDuty());
+    }
+    ESP_LOGI(TAG, "Eye brightness set to %u%% (ceiling %u%%)", brightness_, kPwmCeilingPercent);
+    return true;
+}
+
 void LampEyeDevice::BreathingTask(void* arg) {
     LampEyeDevice* instance = static_cast<LampEyeDevice*>(arg);
     int direction = 1;
@@ -188,11 +213,11 @@ void LampEyeDevice::BreathingTask(void* arg) {
             continue;
         }
 
-        // 更新duty
-        // Step 50 keeps cycle time close to the old 13-bit LEDC feel at MAX_DUTY=4095.
-        duty += direction * 50;
-        if (duty >= MAX_DUTY) {
-            duty = MAX_DUTY;
+        const int peak = static_cast<int>(instance->PeakDuty());
+        const int step = std::max(1, peak * 50 / static_cast<int>(MAX_DUTY));
+        duty += direction * step;
+        if (duty >= peak) {
+            duty = peak;
             direction = -1;
         } else if (duty <= 0) {
             duty = 0;

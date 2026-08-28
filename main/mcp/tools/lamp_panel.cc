@@ -30,35 +30,38 @@ void LampPanelTool::Register() {
         "使用说明：\n"
         "点亮：\n"
         "- action='turn_on_panel'：仅点亮两盏前面板灯\n"
-        "- action='turn_on_bottom'：仅点亮底灯\n"
+        "- action='turn_on_bottom'：仅点亮底灯（固定 10%）\n"
         "- action='turn_on_all'：同时点亮面板灯(两盏)和底灯\n"
         "熄灭：\n"
         "- action='turn_off_panel'：熄灭两盏前面板灯\n"
         "- action='turn_off_bottom'：熄灭底灯\n"
         "- action='turn_off_all'：熄灭全部三盏灯\n"
+        "- action='set_brightness'：设置面板灯亮度 1-40（默认 20，底灯不可调）\n"
         "- action='get_status'：查询面板灯/底灯当前状态\n"
         "\n"
-        "注意：本工具控制 PCA9685 通道 ch13/ch14/ch15（前面板灯 x2 + 底灯）。\n"
-        "      与流水灯 (ch8-ch12) 在硬件层面完全独立、互不影响：\n"
-        "      无论流水灯是否在运行，本工具对面板/底灯的开关都会原样生效；\n"
-        "      反之，本工具也不会打断流水灯正在进行的动画。\n",
-        PropertyList({Property("action", kPropertyTypeString)}),
+        "注意：本工具控制 PCA9685 通道 ch13/ch14/ch15（前面板灯 x2 + 底灯，PWM 调光）。\n"
+        "      面板灯默认 20%，上限 40%；底灯点亮固定 10%。\n"
+        "      与流水灯 (ch8-ch12) 在硬件层面完全独立、互不影响。\n",
+        PropertyList({Property("action", kPropertyTypeString),
+                      Property("brightness", kPropertyTypeInteger, 20, 1, 40)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();
 
             if (action == "turn_on_panel") {
                 if (lamp_panel_device_.TurnOnPanelLeds()) {
-                    return "前面板灯(两盏)已点亮";
+                    return "前面板灯(两盏)已点亮，亮度 " +
+                           std::to_string(lamp_panel_device_.GetBrightness()) + "%";
                 }
                 return "点亮前面板灯失败";
             } else if (action == "turn_on_bottom") {
                 if (lamp_panel_device_.TurnOnBottomLed()) {
-                    return "底灯已点亮";
+                    return "底灯已点亮（固定 10%）";
                 }
                 return "点亮底灯失败";
             } else if (action == "turn_on_all") {
                 if (lamp_panel_device_.TurnOnAll()) {
-                    return "前面板灯(两盏)与底灯已全部点亮";
+                    return "前面板灯(两盏)与底灯已全部点亮，面板 " +
+                           std::to_string(lamp_panel_device_.GetBrightness()) + "%，底灯 10%";
                 }
                 return "点亮全部面板灯/底灯失败";
             } else if (action == "turn_off_panel") {
@@ -76,14 +79,24 @@ void LampPanelTool::Register() {
                     return "前面板灯(两盏)与底灯已全部熄灭";
                 }
                 return "熄灭全部面板灯/底灯失败";
+            } else if (action == "set_brightness") {
+                auto brightness = properties["brightness"].value<int>();
+                if (lamp_panel_device_.SetBrightness(brightness)) {
+                    return "面板灯亮度已设为 " +
+                           std::to_string(lamp_panel_device_.GetBrightness()) + "%（上限 40%）";
+                }
+                return "设置面板灯亮度失败";
             } else if (action == "get_status") {
                 std::string status = "MOSS 面板灯/底灯状态:\n";
                 status += "  面板灯1: " +
                           std::string(lamp_panel_device_.IsPanelLed1On() ? "开启" : "关闭") + "\n";
                 status += "  面板灯2: " +
                           std::string(lamp_panel_device_.IsPanelLed2On() ? "开启" : "关闭") + "\n";
+                status += "  面板亮度: " + std::to_string(lamp_panel_device_.GetBrightness()) +
+                          "% (上限 40%)\n";
                 status += "  底灯:    " +
-                          std::string(lamp_panel_device_.IsBottomLedOn() ? "开启" : "关闭") + "\n";
+                          std::string(lamp_panel_device_.IsBottomLedOn() ? "开启" : "关闭") +
+                          " (固定 10%)\n";
                 status +=
                     "硬件: PCA9685 (ch13=面板灯1, ch14=面板灯2, ch15=底灯)；与流水灯 (ch8-ch12) "
                     "通道独立、互不影响。";
@@ -91,7 +104,8 @@ void LampPanelTool::Register() {
             } else {
                 return "未知动作: " + action +
                        "\n支持的动作: turn_on_panel, turn_on_bottom, turn_on_all,"
-                       "\n              turn_off_panel, turn_off_bottom, turn_off_all, get_status";
+                       "\n              turn_off_panel, turn_off_bottom, turn_off_all, "
+                       "set_brightness, get_status";
             }
         });
 }

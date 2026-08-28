@@ -4,7 +4,8 @@
 
 #define TAG "LampBarDevice"
 
-LampBarDevice::LampBarDevice() : power_(false), flowing_(false), flow_task_(nullptr) {}
+LampBarDevice::LampBarDevice()
+    : power_(false), flowing_(false), brightness_(kDefaultBrightnessPercent), flow_task_(nullptr) {}
 
 LampBarDevice::~LampBarDevice() {
     if (flow_task_ != nullptr) {
@@ -14,10 +15,25 @@ LampBarDevice::~LampBarDevice() {
     }
 }
 
+uint8_t LampBarDevice::ClampBrightness(int percent) {
+    if (percent < 1) {
+        return 1;
+    }
+    if (percent > kPwmCeilingPercent) {
+        return kPwmCeilingPercent;
+    }
+    return static_cast<uint8_t>(percent);
+}
+
+uint16_t LampBarDevice::OnDuty() const {
+    return static_cast<uint16_t>((static_cast<uint32_t>(brightness_) * MAX_DUTY) / 100);
+}
+
 void LampBarDevice::ApplyPattern(uint8_t mask5) {
     auto& pca = Pca9685::GetInstance();
+    const uint16_t on_duty = OnDuty();
     for (int i = 0; i < LED_COUNT; ++i) {
-        pca.SetDigital(CH_FLOW_BASE + i, (mask5 >> i) & 0x1);
+        pca.SetDuty(CH_FLOW_BASE + i, ((mask5 >> i) & 0x1) ? on_duty : 0);
     }
 }
 
@@ -38,7 +54,7 @@ bool LampBarDevice::StartFlow() {
             power_ = false;
             return false;
         }
-        ESP_LOGI(TAG, "Flow effect started");
+        ESP_LOGI(TAG, "Flow effect started brightness=%u%%", brightness_);
     }
     return true;
 }
@@ -63,6 +79,12 @@ bool LampBarDevice::StopFlow() {
         ESP_LOGI(TAG, "Flow effect stopped");
         return true;
     }
+    return true;
+}
+
+bool LampBarDevice::SetBrightness(int percent) {
+    brightness_ = ClampBrightness(percent);
+    ESP_LOGI(TAG, "Flow brightness set to %u%% (ceiling %u%%)", brightness_, kPwmCeilingPercent);
     return true;
 }
 
@@ -105,24 +127,19 @@ void LampBarDevice::FlowTask(void* arg) {
     LampBarDevice* instance = static_cast<LampBarDevice*>(arg);
 
     while (instance->flowing_) {
-        // 流水灯效果1: 两端亮，中间暗
-        instance->ApplyPattern(0b10001);  // LED0和LED4亮
+        instance->ApplyPattern(0b10001);
         vTaskDelay(pdMS_TO_TICKS(110));
 
-        // 流水灯效果2: 交替亮
-        instance->ApplyPattern(0b01010);  // LED1和LED3亮
+        instance->ApplyPattern(0b01010);
         vTaskDelay(pdMS_TO_TICKS(100));
 
-        // 流水灯效果3: 中间亮
-        instance->ApplyPattern(0b00110);  // LED2和LED3亮
+        instance->ApplyPattern(0b00110);
         vTaskDelay(pdMS_TO_TICKS(90));
 
-        // 流水灯效果4: 交叉亮
-        instance->ApplyPattern(0b10110);  // LED0, LED2, LED3亮
+        instance->ApplyPattern(0b10110);
         vTaskDelay(pdMS_TO_TICKS(100));
 
-        // 流水灯效果5: 两端亮
-        instance->ApplyPattern(0b10001);  // LED0和LED4亮
+        instance->ApplyPattern(0b10001);
         vTaskDelay(pdMS_TO_TICKS(130));
     }
 

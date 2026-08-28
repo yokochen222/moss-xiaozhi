@@ -30,16 +30,19 @@ void LampBarTool::Register() {
         "流水灯控制：\n"
         "- action='start_flow'：开启流水灯效果\n"
         "- action='stop_flow'：关闭流水灯效果\n"
+        "- action='set_brightness'：设置亮度 1-40（默认 20）\n"
         "系统控制：\n"
         "- action='get_status'：获取流水灯当前状态信息\n"
         "- action='reset_driver'：关闭流水灯通道（PCA9685 ch8-12）\n"
         "- action='force_restart'：强制重启流水灯系统\n",
-        PropertyList({Property("action", kPropertyTypeString)}),
+        PropertyList({Property("action", kPropertyTypeString),
+                      Property("brightness", kPropertyTypeInteger, 20, 1, 40)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();
             if (action == "start_flow") {
                 if (lamp_bar_device_.StartFlow()) {
-                    return "流水灯效果已开启";
+                    return "流水灯效果已开启，亮度 " +
+                           std::to_string(lamp_bar_device_.GetBrightness()) + "%";
                 } else {
                     return "启动流水灯效果失败";
                 }
@@ -49,6 +52,13 @@ void LampBarTool::Register() {
                 } else {
                     return "停止流水灯效果失败";
                 }
+            } else if (action == "set_brightness") {
+                auto brightness = properties["brightness"].value<int>();
+                if (lamp_bar_device_.SetBrightness(brightness)) {
+                    return "流水灯亮度已设为 " + std::to_string(lamp_bar_device_.GetBrightness()) +
+                           "%（上限 40%）";
+                }
+                return "设置流水灯亮度失败";
             } else if (action == "get_status") {
                 std::string status = "MOSS灯光系统状态:\n";
                 status += "流水灯:\n";
@@ -57,6 +67,8 @@ void LampBarTool::Register() {
                 status +=
                     "  流水效果: " + std::string(lamp_bar_device_.IsFlowing() ? "运行中" : "停止") +
                     "\n";
+                status += "  亮度: " + std::to_string(lamp_bar_device_.GetBrightness()) +
+                          "% (上限 40%)\n";
                 status += "硬件: 使用PCA9685控制 (ch8-ch12: 流水灯)";
                 return status;
             } else if (action == "reset_driver") {
@@ -73,8 +85,8 @@ void LampBarTool::Register() {
                 }
             } else {
                 return "未知动作: " + action +
-                       "\n支持的动作: start_flow, stop_flow, get_status, reset_driver, "
-                       "force_restart";
+                       "\n支持的动作: start_flow, stop_flow, set_brightness, get_status, "
+                       "reset_driver, force_restart";
             }
         });
 }
