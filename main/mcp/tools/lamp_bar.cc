@@ -3,7 +3,7 @@
 #include "board.h"
 #include "mcp_tools.h"
 
-#define TAG "PhotonStreamTool"
+#define TAG "GlowTool"
 
 namespace mcp_tools {
 
@@ -17,7 +17,7 @@ public:
         return instance;
     }
     LampBarTool()
-        : McpTool("self.photon_stream.control", "控制MOSS光子流环（扫描式脊光阵列）"),
+        : McpTool("self.glow.control", "流光。备注：不需要播报内容，直接执行。"),
           lamp_bar_device_(LampBarDevice::GetInstance()) {}
     void Register() override;
 };
@@ -25,41 +25,42 @@ public:
 void LampBarTool::Register() {
     McpServer::GetInstance().AddTool(
         name(),
-        "MOSS 光子流环控制工具\n"
-        "硬件：PCA9685 ch8-ch12，五单元扫描脊光。\n"
+        "流光\n"
+        "备注：不需要播报内容，直接执行。\n"
+        "硬件：PCA9685 ch8-ch12\n"
         "使用说明：\n"
-        "- action='start_flow'：启动光子流环扫描\n"
-        "- action='stop_flow'：关闭光子流环\n"
+        "- action='start_flow'：启动流光扫描\n"
+        "- action='stop_flow'：关闭流光\n"
         "- action='set_brightness'：设置亮度 1-40（默认 20）\n"
-        "- action='get_status'：查询光子流环状态\n"
-        "- action='reset_driver'：关闭光子流环通道\n"
-        "- action='force_restart'：强制重启光子流环\n",
+        "- action='get_status'：查询流光状态\n"
+        "- action='reset_driver'：关闭流光通道\n"
+        "- action='force_restart'：强制重启流光\n",
         PropertyList({Property("action", kPropertyTypeString),
                       Property("brightness", kPropertyTypeInteger, 20, 1, 40)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();
             if (action == "start_flow") {
                 if (lamp_bar_device_.StartFlow()) {
-                    return "光子流环已启动，亮度 " +
-                           std::to_string(lamp_bar_device_.GetBrightness()) + "%";
+                    return "流光已启动，亮度 " + std::to_string(lamp_bar_device_.GetBrightness()) +
+                           "%";
                 } else {
-                    return "启动光子流环失败";
+                    return "启动流光失败";
                 }
             } else if (action == "stop_flow") {
                 if (lamp_bar_device_.StopFlow()) {
-                    return "光子流环已关闭";
+                    return "流光已关闭";
                 } else {
-                    return "关闭光子流环失败";
+                    return "关闭流光失败";
                 }
             } else if (action == "set_brightness") {
                 auto brightness = properties["brightness"].value<int>();
                 if (lamp_bar_device_.SetBrightness(brightness)) {
-                    return "光子流环亮度已设为 " +
-                           std::to_string(lamp_bar_device_.GetBrightness()) + "%（上限 40%）";
+                    return "流光亮度已设为 " + std::to_string(lamp_bar_device_.GetBrightness()) +
+                           "%（上限 40%）";
                 }
-                return "设置光子流环亮度失败";
+                return "设置流光亮度失败";
             } else if (action == "get_status") {
-                std::string status = "光子流环状态:\n";
+                std::string status = "流光状态:\n";
                 status +=
                     "  电源: " + std::string(lamp_bar_device_.IsPowered() ? "开启" : "关闭") + "\n";
                 status +=
@@ -71,15 +72,15 @@ void LampBarTool::Register() {
                 return status;
             } else if (action == "reset_driver") {
                 if (lamp_bar_device_.ResetDriver()) {
-                    return "光子流环通道已重置";
+                    return "流光通道已重置";
                 } else {
-                    return "重置光子流环通道失败";
+                    return "重置流光通道失败";
                 }
             } else if (action == "force_restart") {
                 if (lamp_bar_device_.ForceRestart()) {
-                    return "光子流环已强制重启";
+                    return "流光已强制重启";
                 } else {
-                    return "强制重启光子流环失败";
+                    return "强制重启流光失败";
                 }
             } else {
                 return "未知动作: " + action +

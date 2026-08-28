@@ -2,7 +2,7 @@
 #include <esp_log.h>
 #include "mcp_tools.h"
 
-#define TAG "OpticDriveTool"
+#define TAG "GazeTool"
 
 namespace mcp_tools {
 
@@ -16,8 +16,7 @@ public:
         return instance;
     }
     EyeMotorTool()
-        : McpTool("self.optic_drive.control",
-                  "控制MOSS视界驱动器，用于眼部电机正转、反转、调速和停止"),
+        : McpTool("self.gaze.control", "视枢。备注：不需要播报内容，直接执行。"),
           eye_motor_device_(EyeMotorDevice::GetInstance()) {}
     void Register() override;
 };
@@ -25,14 +24,15 @@ public:
 void EyeMotorTool::Register() {
     McpServer::GetInstance().AddTool(
         name(),
-        "MOSS 视界驱动器控制工具\n"
+        "视枢\n"
+        "备注：不需要播报内容，直接执行。\n"
         "硬件：PCA9685 AIN2=ch3, AIN1=ch4, PWMA=ch5；驱动芯片 TB6612FNG\n"
         "使用说明：\n"
         "- action='start'：默认预设，正转 8 秒再反转 8 秒，循环\n"
-        "- action='start_forward'：视界驱动器持续正转，默认全速\n"
-        "- action='start_backward'：视界驱动器持续反转，默认全速\n"
-        "- action='stop'：停止视界驱动器\n"
-        "- action='get_status'：获取视界驱动器状态\n"
+        "- action='start_forward'：视枢持续正转，默认全速\n"
+        "- action='start_backward'：视枢持续反转，默认全速\n"
+        "- action='stop'：停止视枢\n"
+        "- action='get_status'：获取视枢状态\n"
         "- action='set_speed'：调整当前转速（需先启动）\n",
         std::vector<Property>{Property("action", kPropertyTypeString),
                               Property("speed", kPropertyTypeInteger, 100, 1, 100)},
@@ -42,31 +42,31 @@ void EyeMotorTool::Register() {
 
             if (action == "start" || action == "oscillate") {
                 if (eye_motor_device_.StartOscillate(speed)) {
-                    return "视界驱动器已按预设运行: 正转8秒 / 反转8秒, 速度: " +
-                           std::to_string(speed) + "%";
+                    return "视枢已按预设运行: 正转8秒 / 反转8秒, 速度: " + std::to_string(speed) +
+                           "%";
                 } else {
-                    return "启动视界驱动器预设失败";
+                    return "启动视枢预设失败";
                 }
             } else if (action == "start_forward") {
                 if (eye_motor_device_.StartForward(speed)) {
-                    return "视界驱动器已正转, 速度: " + std::to_string(speed) + "%";
+                    return "视枢已正转, 速度: " + std::to_string(speed) + "%";
                 } else {
-                    return "启动视界驱动器正转失败";
+                    return "启动视枢正转失败";
                 }
             } else if (action == "start_backward") {
                 if (eye_motor_device_.StartBackward(speed)) {
-                    return "视界驱动器已反转, 速度: " + std::to_string(speed) + "%";
+                    return "视枢已反转, 速度: " + std::to_string(speed) + "%";
                 } else {
-                    return "启动视界驱动器反转失败";
+                    return "启动视枢反转失败";
                 }
             } else if (action == "stop") {
                 if (eye_motor_device_.Stop()) {
-                    return "视界驱动器已停止";
+                    return "视枢已停止";
                 } else {
-                    return "停止视界驱动器失败";
+                    return "停止视枢失败";
                 }
             } else if (action == "get_status") {
-                std::string status = "视界驱动器状态:\n";
+                std::string status = "视枢状态:\n";
                 status += "硬件: PCA9685 AIN2=ch3, AIN1=ch4, PWMA=ch5\n";
                 status += "驱动芯片: TB6612FNG\n";
                 status += "运行状态: " +
@@ -85,9 +85,9 @@ void EyeMotorTool::Register() {
                 return status;
             } else if (action == "set_speed") {
                 if (eye_motor_device_.SetSpeed(speed)) {
-                    return "视界驱动器速度已调整为: " + std::to_string(speed) + "%";
+                    return "视枢速度已调整为: " + std::to_string(speed) + "%";
                 } else {
-                    return "调整速度失败，视界驱动器可能未启动";
+                    return "调整速度失败，视枢可能未启动";
                 }
             } else {
                 return "未知动作: " + action +

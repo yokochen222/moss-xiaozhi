@@ -21,7 +21,7 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
   - XCLK=5 PCLK=7 VSYNC=3 HREF=46；D0..D7=16/18/8/17/15/6/4/9
   - SCCB 复用 I2C IO1/IO2；PWDN=PCA9685 ch2（低电平工作，上电保持）
 - **按键**：BOOT（GPIO0）
-- **PCA9685**：视界驱动器 ch3–5、虹膜谐振灯 ch6、光子流环 ch8–12、前舷信标/暗舷锚灯 ch13–15
+- **PCA9685**：视枢 ch3–5、瞳光 ch6、流光 ch8–12、舷灯/锚灯 ch13–15
 - **双轴云台**：74HC595（SER=21, RCK=47, SCK=48）→ 2×ULN2003 → 24BYJ-48；MCP `self.gimbal.control`
   - 停转/上电强制线圈关断，避免常通发烫
 - **红外**：GPIO17/18 已给 DVP，当前 IR UART 禁用（引脚 NC）
