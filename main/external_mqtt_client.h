@@ -26,6 +26,15 @@ public:
 private:
     void HandleMessage(const std::string& topic, const std::string& payload);
     void HandleTypedMessage(cJSON* root);
+    void HandleIrLearn(const std::string& request_id);
+    void HandleIrTest(const std::string& request_id, cJSON* payload);
+    void HandleDevicesGet(const std::string& request_id);
+    void HandleDevicePut(const std::string& request_id, cJSON* payload);
+    void HandleDeviceDelete(const std::string& request_id, cJSON* payload);
+    void HandleCommandPut(const std::string& request_id, cJSON* payload);
+    void HandleCommandDelete(const std::string& request_id, cJSON* payload);
+    void HandleExportGet(const std::string& request_id);
+    void HandleImport(const std::string& request_id, cJSON* payload);
     void HandleHwControl(const std::string& request_id, cJSON* payload);
     void HandleDeviceConfigGet(const std::string& request_id);
     void HandleDeviceConfigSet(const std::string& request_id, cJSON* payload);

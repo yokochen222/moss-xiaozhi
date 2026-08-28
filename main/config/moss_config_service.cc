@@ -1,12 +1,16 @@
 #include "moss_config_service.h"
 #include "api/api.h"
+#include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
+#include "device/infrared.h"
+#include "device/ir_catalog.h"
 #include "ext_mqtt_config.h"
 #include "product.h"
 
 #include <cJSON.h>
 #include <wifi_manager.h>
 
+#include <algorithm>
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_timer.h>
@@ -74,6 +78,26 @@ void MossConfigService::OnNetworkConnected() {
     }
     StartMdns();
 
+    IrCatalog::GetInstance().Initialize();
+    SeedIrCatalogFromBuiltin();
+    InfraredDevice::GetInstance().Start();
+
+    api_methods::ir::IrDataManager::GetInstance().SetOnReceived([](const std::string& data) {
+        std::string code = IrCatalog::NormalizeCode(data);
+        const size_t preview = std::min(code.size(), static_cast<size_t>(160));
+        ESP_LOGI(TAG, "IR received (%u bytes): %.*s", static_cast<unsigned>(code.size()),
+                 static_cast<int>(preview), code.c_str());
+        if (code.empty() || code.rfind("xx", 0) == 0 || code.find(',') == std::string::npos ||
+            (code.find("len=") == std::string::npos && code.find("#len") == std::string::npos)) {
+            ESP_LOGW(TAG, "IR RX ignored (incomplete waveform, waiting for len=)");
+            return;
+        }
+        cJSON* payload = cJSON_CreateObject();
+        cJSON_AddStringToObject(payload, "code", code.c_str());
+        MossConfigService::GetInstance().PublishUp("ir.learned", "", payload);
+        cJSON_Delete(payload);
+    });
+
     auto config = ExtMqttSettings::Load();
     if (!config.bound || config.broker.empty()) {
         ESP_LOGI(TAG, "Unbound: entering LAN bind mode");
@@ -116,13 +140,12 @@ void MossConfigService::OnMqttDisconnected() {}
 
 void MossConfigService::AnnounceOnline() {
     cJSON* payload = cJSON_CreateObject();
-    cJSON_AddStringToObject(payload, "product", MossProduct::kId);
+    MossProduct::AddIdentity(payload);
     cJSON_AddStringToObject(payload, "hostname", hostname_.c_str());
     const std::string ip = WifiManager::GetInstance().GetIpAddress();
     if (!ip.empty()) {
         cJSON_AddStringToObject(payload, "ip", ip.c_str());
     }
-    cJSON_AddBoolToObject(payload, "onboard_camera", true);
     if (!PublishUp("device.online", "", payload)) {
         ESP_LOGW(TAG, "device.online publish failed");
     } else {

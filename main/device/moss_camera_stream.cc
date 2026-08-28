@@ -10,6 +10,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -19,7 +20,7 @@ namespace {
 // Keep DVP running like a live stream so AEC/AWB stay locked between snapshots.
 constexpr int kIdleUs = 20 * 1000 * 1000;
 constexpr int kGrabPeriodMs = 180;
-constexpr int kFirstWaitMs = 6000;
+constexpr int kFirstWaitMs = 800;
 constexpr int kSkipAfterStart = 4;
 
 std::mutex g_mu;
@@ -31,6 +32,7 @@ int64_t g_touch_us = 0;
 int64_t g_jpeg_us = 0;
 bool g_held = false;
 int g_skip_after_start = 0;
+std::atomic<int> g_snap_wait{0};
 
 bool VoiceBusy() {
     const auto state = Application::GetInstance().GetDeviceState();
@@ -203,9 +205,24 @@ esp_err_t MossCameraStream::HandleSnapshot(httpd_req_t* req) {
     if (FaceTracker::GetInstance().IsRunning() || VoiceBusy()) {
         return SendCachedOrEmpty(req);
     }
-    const int64_t request_us = esp_timer_get_time();
+
+    bool have = false;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        have = !g_last_jpeg.empty();
+    }
     Arm(this);
-    WaitForFreshJpeg(request_us);
+    // Cached JPEG: return immediately so httpd sockets are not held for seconds.
+    if (have) {
+        return SendCachedOrEmpty(req);
+    }
+    if (g_snap_wait.exchange(1) != 0) {
+        return SendCachedOrEmpty(req);
+    }
+    struct WaitGuard {
+        ~WaitGuard() { g_snap_wait.store(0); }
+    } wait_guard;
+    WaitForFreshJpeg(esp_timer_get_time());
     return SendCachedOrEmpty(req);
 }
 

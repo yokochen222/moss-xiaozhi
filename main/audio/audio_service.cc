@@ -372,11 +372,8 @@ void AudioService::AudioOutputTask() {
         if (notify_drained && callbacks_.on_playback_drained) {
             callbacks_.on_playback_drained();
         }
-#if CONFIG_BOARD_TYPE_MOSS_DESKTOP
-        if (notify_drained) {
-            MossDesktopReleasePlayback(codec_);
-        }
-#endif
+        // Keep ES8311/PA open across Opus frames. Closing on every drain reopens
+        // I2S+PCA9685 ~3 times/s, which starves SRAM and freezes the board.
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
@@ -829,9 +826,8 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     }
     if (codec_->output_enabled()) {
 #if CONFIG_BOARD_TYPE_MOSS_DESKTOP
-        // moss-desktop: close ES8311/PA whenever playback queues are idle, even in
-        // duplex listening — open output only around actual PCM writes.
-        if (output_elapsed > 200 && IsPlaybackIdle()) {
+        // Hold PA ~1s after the last PCM so TTS gaps do not thrash I2S/PCA9685.
+        if (output_elapsed > 800 && IsPlaybackIdle()) {
             MossDesktopReleasePlayback(codec_);
         }
 #else

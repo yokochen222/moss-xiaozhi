@@ -1,9 +1,10 @@
 # ESP-IDF Partition Table (moss-desktop + esp-dl face track)
-# App needs ~5.2MB; carve from assets (still ~5.1MB left, current assets ~1.7MB).
+# App ~5.4MB; assets shrunk 256KB to add IR catalog SPIFFS (assets still ~4.9MB).
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,    0x4000,
 otadata,  data, ota,     0xd000,    0x2000,
 phy_init, data, phy,     0xf000,    0x1000,
 ota_0,    app,  ota_0,   0x20000,   0x560000,
 ota_1,    app,  ota_1,   ,          0x560000,
-assets,   data, spiffs,  ,          0x520000,
+storage,  data, spiffs,  ,          0x40000,
+assets,   data, spiffs,  ,          0x4E0000,

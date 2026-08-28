@@ -1,6 +1,8 @@
 #include "ir_data_manager.h"
 #include <esp_log.h>
 #include <algorithm>
+#include <functional>
+#include <mutex>
 
 #define TAG "IrDataManager"
 
@@ -13,20 +15,31 @@ IrDataManager& IrDataManager::GetInstance() {
 }
 
 void IrDataManager::AddIrReceivedData(const std::string& data) {
-    std::lock_guard<std::mutex> lock(ir_data_mutex_);
-    
+    std::unique_lock<std::mutex> lock(ir_data_mutex_);
+
     // 去除换行符和回车符
     std::string clean_data = data;
     clean_data.erase(std::remove(clean_data.begin(), clean_data.end(), '\n'), clean_data.end());
     clean_data.erase(std::remove(clean_data.begin(), clean_data.end(), '\r'), clean_data.end());
-    
+
     // 限制存储的数据条数，避免内存溢出
     const size_t max_data_count = 1;
     if (ir_received_data_.size() >= max_data_count) {
         ir_received_data_.erase(ir_received_data_.begin());
     }
-    
+
     ir_received_data_.push_back(clean_data);
+    ESP_LOGI(TAG, "Stored IR data (%u bytes)", static_cast<unsigned>(clean_data.size()));
+    auto callback = on_received_;
+    lock.unlock();
+    if (callback) {
+        callback(clean_data);
+    }
+}
+
+void IrDataManager::SetOnReceived(std::function<void(const std::string&)> callback) {
+    std::lock_guard<std::mutex> lock(ir_data_mutex_);
+    on_received_ = std::move(callback);
 }
 
 std::vector<std::string> IrDataManager::GetIrReceivedData() {
@@ -40,5 +53,5 @@ void IrDataManager::ClearIrReceivedData() {
     ESP_LOGI(TAG, "Cleared IR received data");
 }
 
-} // namespace ir
-} // namespace api_methods
+}  // namespace ir
+}  // namespace api_methods

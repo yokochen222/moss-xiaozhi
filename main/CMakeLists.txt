@@ -298,6 +298,7 @@ set(MOSS_EMOTE_ASSETS "")
 if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
     list(APPEND SOURCES
         "device/infrared.cc"
+        "device/ir_catalog.cc"
         "device/lamp_bar.cc"
         "device/lamp_panel.cc"
         "device/lamp_eye.cc"
@@ -327,7 +328,7 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
     )
-    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server mdns espressif2022__esp_emote_gfx)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server spiffs mdns espressif2022__esp_emote_gfx)
     file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
 endif()
 

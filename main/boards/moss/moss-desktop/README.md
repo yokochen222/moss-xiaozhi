@@ -24,7 +24,7 @@ MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开
 - **PCA9685**：视枢 ch3–5、瞳光 ch6、流光 ch8–12、舷灯/锚灯 ch13–15
 - **双轴云台**：74HC595（SER=21, RCK=47, SCK=48）→ 2×ULN2003 → 24BYJ-48；MCP `self.gimbal.control`
   - 停转/上电强制线圈关断，避免常通发烫
-- **红外**：GPIO17/18 已给 DVP，当前 IR UART 禁用（引脚 NC）
+- **红外**：UART2 TX=GPIO10 RX=GPIO11（GPIO17/18 给 OV2640 DVP）；码表存在 `storage` SPIFFS
 - **外部 MQTT 文本唤醒**：`ExternalMqttClient` 订阅 `codesuccess` → 打开音频通道并 `SendTextChat`
 
 ## 构建方法

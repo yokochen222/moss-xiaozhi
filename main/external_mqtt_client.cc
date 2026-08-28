@@ -1,10 +1,14 @@
 #include "external_mqtt_client.h"
+#include "api/api.h"
+#include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
 #include "board.h"
 #include "config/device_config.h"
 #include "config/moss_config_service.h"
 #include "device/eye_motor.h"
 #include "device/face_tracker.h"
+#include "device/infrared.h"
+#include "device/ir_catalog.h"
 #include "device/lamp_bar.h"
 #include "device/lamp_eye.h"
 #include "device/lamp_panel.h"
@@ -383,8 +387,166 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         PublishAck("bind.ack", id, true, "cleared");
         return;
     }
-    if (type.rfind("ir.", 0) == 0) {
-        PublishAck("ir.error", id, false, "infrared not available on this board");
+    if (type == "ir.learn") {
+        HandleIrLearn(id);
+        return;
+    }
+    if (type == "ir.test") {
+        HandleIrTest(id, payload);
+        return;
+    }
+    if (type == "ir.devices.get") {
+        HandleDevicesGet(id);
+        return;
+    }
+    if (type == "ir.device.put") {
+        HandleDevicePut(id, payload);
+        return;
+    }
+    if (type == "ir.device.delete") {
+        HandleDeviceDelete(id, payload);
+        return;
+    }
+    if (type == "ir.command.put") {
+        HandleCommandPut(id, payload);
+        return;
+    }
+    if (type == "ir.command.delete") {
+        HandleCommandDelete(id, payload);
+        return;
+    }
+    if (type == "ir.export.get") {
+        HandleExportGet(id);
+        return;
+    }
+    if (type == "ir.import") {
+        HandleImport(id, payload);
+        return;
+    }
+}
+
+void ExternalMqttClient::HandleIrLearn(const std::string& request_id) {
+    ApiServer::GetInstance().ClearIrReceivedData();
+    bool ok = InfraredDevice::GetInstance().StartLearn();
+    PublishAck("ir.ack", request_id, ok, ok ? "learning" : "learn failed");
+}
+
+void ExternalMqttClient::HandleIrTest(const std::string& request_id, cJSON* payload) {
+    std::string code = payload ? JsonString(payload, "code") : "";
+    const std::string device_id = payload ? JsonString(payload, "device_id") : "";
+    const std::string command_id = payload ? JsonString(payload, "id") : "";
+    if (code.empty() && (!device_id.empty() || !command_id.empty())) {
+        code = IrCatalog::GetInstance().FindCode(device_id, command_id);
+        ESP_LOGI(TAG, "ir.test lookup device=%s cmd=%s found=%d", device_id.c_str(),
+                 command_id.c_str(), !code.empty());
+    }
+    if (code.empty()) {
+        ESP_LOGW(TAG, "ir.test missing code device=%s cmd=%s", device_id.c_str(),
+                 command_id.c_str());
+        PublishAck("ir.error", request_id, false, "missing code");
+        return;
+    }
+    ESP_LOGI(TAG, "ir.test send code_len=%u", (unsigned)code.size());
+    bool ok = InfraredDevice::GetInstance().SendIrCommand(IrCatalog::UartPayload(code));
+    PublishAck("ir.ack", request_id, ok, ok ? "sent" : "send failed");
+}
+
+void ExternalMqttClient::HandleDevicesGet(const std::string& request_id) {
+    std::string json = IrCatalog::GetInstance().MetadataJson();
+    cJSON* parsed = cJSON_Parse(json.c_str());
+    PublishUp("ir.devices", request_id, parsed);
+    cJSON_Delete(parsed);
+}
+
+void ExternalMqttClient::HandleDevicePut(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    IrAppliance appliance;
+    appliance.id = JsonString(payload, "id");
+    appliance.name = JsonString(payload, "name");
+    appliance.type = JsonString(payload, "type");
+    if (appliance.type.empty()) {
+        appliance.type = "custom";
+    }
+    auto status = IrCatalog::GetInstance().UpsertAppliance(appliance, true);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "saved");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleDeviceDelete(const std::string& request_id, cJSON* payload) {
+    std::string id = payload ? JsonString(payload, "id") : "";
+    auto status = IrCatalog::GetInstance().DeleteAppliance(id);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "deleted");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleCommandPut(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    std::string appliance_id = JsonString(payload, "device_id");
+    IrCommand command;
+    command.id = JsonString(payload, "id");
+    command.name = JsonString(payload, "name");
+    command.code = JsonString(payload, "code");
+    auto status = IrCatalog::GetInstance().UpsertCommand(appliance_id, command);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "saved");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleCommandDelete(const std::string& request_id, cJSON* payload) {
+    std::string appliance_id = payload ? JsonString(payload, "device_id") : "";
+    std::string id = payload ? JsonString(payload, "id") : "";
+    auto status = IrCatalog::GetInstance().DeleteCommand(appliance_id, id);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "deleted");
+    } else {
+        PublishAck("ir.error", request_id, false, IrCatalog::StatusMessage(status));
+    }
+}
+
+void ExternalMqttClient::HandleExportGet(const std::string& request_id) {
+    std::string json = IrCatalog::GetInstance().ExportJson();
+    cJSON* parsed = cJSON_Parse(json.c_str());
+    PublishUp("ir.export", request_id, parsed);
+    cJSON_Delete(parsed);
+}
+
+void ExternalMqttClient::HandleImport(const std::string& request_id, cJSON* payload) {
+    if (!payload) {
+        PublishAck("ir.error", request_id, false, "missing payload");
+        return;
+    }
+    char* printed = cJSON_PrintUnformatted(payload);
+    std::string json = printed ? printed : "{}";
+    if (printed) {
+        cJSON_free(printed);
+    }
+    bool replace = true;
+    cJSON* mode = cJSON_GetObjectItem(payload, "mode");
+    if (cJSON_IsString(mode) && mode->valuestring && strcmp(mode->valuestring, "merge") == 0) {
+        replace = false;
+    }
+    auto status = IrCatalog::GetInstance().ImportCatalog(json, replace);
+    if (status == IrCatalogStatus::kOk) {
+        PublishAck("ir.ack", request_id, true, "imported");
+    } else {
+        const char* message = status == IrCatalogStatus::kInvalid
+                                  ? IrCatalog::GetInstance().LastErrorMessage()
+                                  : IrCatalog::StatusMessage(status);
+        PublishAck("ir.error", request_id, false, message);
     }
 }
 

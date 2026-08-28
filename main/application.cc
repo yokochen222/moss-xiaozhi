@@ -760,7 +760,12 @@ void Application::Alert(const char* status, const char* message, const char* emo
     display->SetEmotion(emotion);
     display->SetChatMessage("system", message);
     if (!sound.empty()) {
-        audio_service_.PlaySound(sound);
+        static int64_t last_sound_us = 0;
+        const int64_t now = esp_timer_get_time();
+        if (now - last_sound_us >= 2000000) {
+            last_sound_us = now;
+            audio_service_.PlaySound(sound);
+        }
     }
 }
 

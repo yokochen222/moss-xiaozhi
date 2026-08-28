@@ -37,8 +37,9 @@ bool ApiServer::Start(int port) {
     config.max_resp_headers = 16;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
-    config.recv_wait_timeout = 30;
-    config.send_wait_timeout = 30;
+    config.keep_alive_enable = false;
+    config.recv_wait_timeout = 4;
+    config.send_wait_timeout = 4;
     config.stack_size = 12288;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -69,6 +70,15 @@ bool ApiServer::Start(int port) {
     add("/face_track/status", HTTP_GET, api_methods::camera::HandleFaceTrack);
     add("/ir/send", HTTP_POST, api_methods::ir::HandleIrSend);
     add("/ir/read", HTTP_GET, api_methods::ir::HandleIrRead);
+    add("/ir/learn", HTTP_POST, api_methods::ir::HandleIrLearn);
+    add("/ir/test", HTTP_POST, api_methods::ir::HandleIrTest);
+    add("/ir/devices", HTTP_GET, api_methods::ir::HandleIrDevicesGet);
+    add("/ir/device", HTTP_PUT, api_methods::ir::HandleIrDevicePut);
+    add("/ir/device/delete", HTTP_POST, api_methods::ir::HandleIrDeviceDelete);
+    add("/ir/command", HTTP_PUT, api_methods::ir::HandleIrCommandPut);
+    add("/ir/command/delete", HTTP_POST, api_methods::ir::HandleIrCommandDelete);
+    add("/ir/export", HTTP_GET, api_methods::ir::HandleIrExport);
+    add("/ir/import", HTTP_POST, api_methods::ir::HandleIrImport);
     add("/*", HTTP_OPTIONS, http_util::HandleOptions);
 
     is_running_ = true;
