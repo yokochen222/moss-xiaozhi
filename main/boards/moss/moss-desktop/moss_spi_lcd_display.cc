@@ -140,6 +140,7 @@ MossSpiLcdDisplay::MossSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io,
     (void)swap_xy;
     panel_ = panel;
 
+    moss_splash::set_lcd_panel_io(panel_io);
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
     // 启动一次性 splash (start.eaf), 它会直接画 panel.
@@ -165,6 +166,7 @@ MossSpiLcdDisplay::MossSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io,
 
 MossSpiLcdDisplay::~MossSpiLcdDisplay() {
     moss_splash::stop_code_scroll_loop();
+    moss_splash::wait_code_scroll_stopped(800);
     if (splash_out_buf_ != nullptr) {
         free(splash_out_buf_);
         splash_out_buf_ = nullptr;
@@ -175,10 +177,6 @@ MossSpiLcdDisplay::~MossSpiLcdDisplay() {
 void MossSpiLcdDisplay::StartSplashLoop() {
     if (panel_ == nullptr || splash_out_buf_ == nullptr) {
         ESP_LOGE(TAG, "StartSplashLoop skipped: panel or out_buf is null");
-        return;
-    }
-    if (moss_splash::is_code_scroll_running()) {
-        ESP_LOGW(TAG, "Code scroll already running");
         return;
     }
 
@@ -271,14 +269,17 @@ void MossSpiLcdDisplay::SetPowerSaveMode(bool on) {
             }
             if (!scroll_paused_) {
                 ESP_LOGI(TAG, "Pause code scroll for screen off");
-                moss_splash::stop_code_scroll_loop();
-                moss_splash::wait_code_scroll_stopped(200);
-                scroll_paused_ = true;
+                moss_splash::pause_code_scroll_loop();
             }
+            scroll_paused_ = true;
         }
-        SetScreenOn(false);
         if (auto* backlight = Board::GetInstance().GetBacklight()) {
             backlight->SetBrightness(0);
+        }
+        if (moss_splash::wait_code_scroll_idle(400)) {
+            SetScreenOn(false);
+        } else {
+            ESP_LOGW(TAG, "LCD bus busy after pause, skip panel disp_off");
         }
         return;
     }
@@ -306,12 +307,7 @@ void MossSpiLcdDisplay::SetScreenOn(bool on) {
         return;
     }
     screen_on_ = on;
-    if (panel_ != nullptr) {
-        esp_err_t err = esp_lcd_panel_disp_on_off(panel_, on);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "disp_on_off(%d) failed: %s", on, esp_err_to_name(err));
-        }
-    }
+    moss_splash::panel_set_disp_on_off(panel_, on);
     ESP_LOGI(TAG, "Screen %s", on ? "ON" : "OFF");
 }
 
@@ -321,58 +317,81 @@ void MossSpiLcdDisplay::DismissDialog() {
 }
 
 void MossSpiLcdDisplay::PauseBackgroundAnimation() {
-    std::lock_guard<std::mutex> lock(face_ui_mutex_);
-    if (scroll_paused_ || face_track_mode_) {
+    {
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (scroll_paused_ || face_track_mode_) {
+            scroll_paused_ = true;
+            return;
+        }
+        ESP_LOGI(TAG, "Pause code scroll for camera preview");
+        moss_splash::pause_code_scroll_loop();
         scroll_paused_ = true;
-        return;
     }
-    ESP_LOGI(TAG, "Pause code scroll for camera preview");
-    moss_splash::stop_code_scroll_loop();
-    moss_splash::wait_code_scroll_stopped(200);
-    scroll_paused_ = true;
+    moss_splash::wait_code_scroll_idle(400);
 }
 
 void MossSpiLcdDisplay::ResumeBackgroundAnimation() {
-    std::lock_guard<std::mutex> lock(face_ui_mutex_);
-    if (!scroll_paused_) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (!scroll_paused_) {
+            return;
+        }
+        scroll_paused_ = false;
+        if (face_track_mode_) {
+            return;
+        }
+        ESP_LOGI(TAG, "Resume code scroll");
     }
-    scroll_paused_ = false;
-    if (face_track_mode_) {
-        return;
-    }
-    ESP_LOGI(TAG, "Resume code scroll");
     StartSplashLoop();
+    std::lock_guard<std::mutex> lock(face_ui_mutex_);
+    if (scroll_paused_ || face_track_mode_) {
+        moss_splash::pause_code_scroll_loop();
+    }
 }
 
 void MossSpiLcdDisplay::EnterFaceTrackMode() {
+    {
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (face_track_mode_) {
+            return;
+        }
+        ESP_LOGI(TAG, "Enter face-track UI (pause code scroll)");
+        moss_splash::pause_code_scroll_loop();
+        moss_splash::set_dialog_state(&s_dialog, false, "", kDialogColor,
+                                      moss_splash::kPriorityNone);
+        face_track_mode_ = true;
+    }
+    moss_splash::wait_code_scroll_idle(400);
     std::lock_guard<std::mutex> lock(face_ui_mutex_);
-    if (face_track_mode_) {
+    if (!face_track_mode_ || panel_ == nullptr || splash_out_buf_ == nullptr) {
         return;
     }
-    ESP_LOGI(TAG, "Enter face-track UI (stop code scroll)");
-    moss_splash::stop_code_scroll_loop();
-    moss_splash::wait_code_scroll_stopped(1500);
-    moss_splash::set_dialog_state(&s_dialog, false, "", kDialogColor, moss_splash::kPriorityNone);
-    face_track_mode_ = true;
-    if (panel_ && splash_out_buf_) {
-        moss_splash::draw_face_track_hud(panel_, splash_out_buf_, width_, height_, false, 0, 0, 0,
-                                         0, 0, 0, 0, 0, 0, 320, 240, 0, false, nullptr, 0, 0);
-    }
+    moss_splash::draw_face_track_hud(panel_, splash_out_buf_, width_, height_, false, 0, 0, 0, 0, 0,
+                                     0, 0, 0, 0, 320, 240, 0, false, nullptr, 0, 0);
 }
 
 void MossSpiLcdDisplay::ExitFaceTrackMode() {
-    std::lock_guard<std::mutex> lock(face_ui_mutex_);
-    if (!face_track_mode_) {
-        return;
+    bool restart_scroll = false;
+    {
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (!face_track_mode_) {
+            return;
+        }
+        face_track_mode_ = false;
+        if (scroll_paused_) {
+            ESP_LOGI(TAG, "Exit face-track UI (scroll stays paused for preview)");
+            return;
+        }
+        ESP_LOGI(TAG, "Exit face-track UI (resume code scroll)");
+        restart_scroll = true;
     }
-    face_track_mode_ = false;
-    if (scroll_paused_) {
-        ESP_LOGI(TAG, "Exit face-track UI (scroll stays paused for preview)");
-        return;
+    if (restart_scroll) {
+        StartSplashLoop();
+        std::lock_guard<std::mutex> lock(face_ui_mutex_);
+        if (scroll_paused_ || face_track_mode_) {
+            moss_splash::pause_code_scroll_loop();
+        }
     }
-    ESP_LOGI(TAG, "Exit face-track UI (restart code scroll)");
-    StartSplashLoop();
 }
 
 void MossSpiLcdDisplay::UpdateFaceTrackOverlay(const FaceTrackerStatus& status) {

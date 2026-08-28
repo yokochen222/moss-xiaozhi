@@ -49,7 +49,7 @@ bool LampPanelDevice::TurnOffAll() {
     bottom_led_on_ = false;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "面板灯与底灯全部熄灭");
+    ESP_LOGI(TAG, "前舷信标与暗舷锚灯全部熄灭");
     return true;
 }
 
@@ -58,7 +58,7 @@ bool LampPanelDevice::TurnOnPanelLeds() {
     panel_led_2_on_ = true;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "前面板灯已点亮 brightness=%u%%", panel_brightness_);
+    ESP_LOGI(TAG, "前舷信标已点亮 brightness=%u%%", panel_brightness_);
     return true;
 }
 
@@ -67,7 +67,7 @@ bool LampPanelDevice::TurnOffPanelLeds() {
     panel_led_2_on_ = false;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "前面板灯已熄灭");
+    ESP_LOGI(TAG, "前舷信标已熄灭");
     return true;
 }
 
@@ -75,7 +75,7 @@ bool LampPanelDevice::TurnOnBottomLed() {
     bottom_led_on_ = true;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "底灯已点亮 fixed=%u%%", kBottomFixedPwmPercent);
+    ESP_LOGI(TAG, "暗舷锚灯已点亮 fixed=%u%%", kBottomFixedPwmPercent);
     return true;
 }
 
@@ -83,7 +83,7 @@ bool LampPanelDevice::TurnOffBottomLed() {
     bottom_led_on_ = false;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "底灯已熄灭");
+    ESP_LOGI(TAG, "暗舷锚灯已熄灭");
     return true;
 }
 
@@ -93,7 +93,7 @@ bool LampPanelDevice::TurnOnAll() {
     bottom_led_on_ = true;
     if (!ApplyOutputs())
         return false;
-    ESP_LOGI(TAG, "面板灯与底灯全部点亮 panel=%u%% bottom=%u%%", panel_brightness_,
+    ESP_LOGI(TAG, "前舷信标与暗舷锚灯全部点亮 panel=%u%% bottom=%u%%", panel_brightness_,
              kBottomFixedPwmPercent);
     return true;
 }

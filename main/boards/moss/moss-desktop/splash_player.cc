@@ -3,17 +3,22 @@
 #include "eaf_iface.h"
 #include "moss_splash.h"
 
+#include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_io.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 #include <lvgl.h>
 
@@ -44,27 +49,48 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h, int box_x, int 
                             uint8_t style, int64_t now_us);
 static void copy_dialog_snapshot(const struct DialogState* src, struct DialogState* dst);
 
-// PSRAM 全帧走 SPI 时驱动会在内部 SRAM 分配等长 DMA bounce；对话态 free DMA 不足会失败。
-// 按行块刷屏，把 bounce 压到数 KB。
-static void DrawPanelBitmapChunked(esp_lcd_panel_handle_t panel, int x0, int y0, int x1, int y1,
-                                   const uint16_t* color) {
-    const int w = x1 - x0;
-    const int h = y1 - y0;
-    if (panel == nullptr || color == nullptr || w <= 0 || h <= 0) {
+static volatile bool s_abort_lcd_draw = false;
+static volatile bool s_pause_requested = false;
+static esp_lcd_panel_io_handle_t s_lcd_io = nullptr;
+static std::mutex s_lcd_bus_mutex;
+
+static constexpr int kLcdBounceRows = DISPLAY_LCD_BOUNCE_ROWS;
+alignas(32) static DRAM_DMA_ALIGNED_ATTR uint16_t s_lcd_bounce[DISPLAY_WIDTH * kLcdBounceRows];
+static_assert(sizeof(s_lcd_bounce) <= DISPLAY_SPI_MAX_TRANSFER,
+              "LCD bounce exceeds SPI max transfer");
+
+static void LcdWaitIdle() {
+    if (s_lcd_io == nullptr) {
         return;
     }
-    constexpr int kRowsPerChunk = 4;
-    for (int row = 0; row < h; row += kRowsPerChunk) {
-        const int rows = std::min(kRowsPerChunk, h - row);
+    (void)esp_lcd_panel_io_tx_param(s_lcd_io, -1, nullptr, 0);
+}
+
+void set_lcd_panel_io(esp_lcd_panel_io_handle_t io) { s_lcd_io = io; }
+
+// PSRAM 帧先拷到内部 DMA bounce 再刷, SPI 驱动不再现场 malloc.
+static void DrawPanelBitmapChunked(esp_lcd_panel_handle_t panel, int x0, int y0, int x1, int y1,
+                                   const uint16_t* color, bool allow_abort) {
+    const int w = x1 - x0;
+    const int h = y1 - y0;
+    if (panel == nullptr || color == nullptr || w <= 0 || h <= 0 || w > DISPLAY_WIDTH) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_lcd_bus_mutex);
+    for (int row = 0; row < h; row += kLcdBounceRows) {
+        if (allow_abort && (s_abort_lcd_draw || s_pause_requested)) {
+            LcdWaitIdle();
+            return;
+        }
+        const int rows = std::min(kLcdBounceRows, h - row);
+        std::memcpy(s_lcd_bounce, color + row * w, (size_t)rows * (size_t)w * sizeof(uint16_t));
         esp_err_t err =
-            esp_lcd_panel_draw_bitmap(panel, x0, y0 + row, x1, y0 + row + rows, color + row * w);
+            esp_lcd_panel_draw_bitmap(panel, x0, y0 + row, x1, y0 + row + rows, s_lcd_bounce);
+        LcdWaitIdle();
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "draw_bitmap chunk y=%d h=%d failed: %s", y0 + row, rows,
                      esp_err_to_name(err));
             return;
-        }
-        if ((row & 7) == 0) {
-            taskYIELD();
         }
     }
 }
@@ -154,11 +180,12 @@ public:
     }
 
     static void start_loop_task(const LoopConfig& cfg) {
+        s_stop_requested = false;
+        s_pause_requested = false;
+        s_abort_lcd_draw = false;
         if (s_task != nullptr) {
-            ESP_LOGW(TAG, "CodeScrollRenderer task already running");
             return;
         }
-        s_stop_requested = false;
 
         LoopCtx* ctx = new LoopCtx{};
         ctx->cfg = cfg;
@@ -168,15 +195,34 @@ public:
         ctx->out_buf2 = nullptr;
         ctx->cur_buf_idx = 0;
 
-        BaseType_t ok = xTaskCreate(loop_task, "code_scroll", 8192, ctx, 3, &s_task);
+        s_task_caps = true;
+        BaseType_t ok = xTaskCreateWithCaps(loop_task, "code_scroll", 8192, ctx, 3, &s_task,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ok != pdPASS) {
+            s_task_caps = false;
+            ok = xTaskCreate(loop_task, "code_scroll", 8192, ctx, 3, &s_task);
+        }
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "Failed to create code_scroll task");
             delete ctx;
             s_task = nullptr;
+            return;
         }
+        ESP_LOGI(TAG, "CodeScroll task started (stack %s, bounce=%u dma=%d)",
+                 s_task_caps ? "PSRAM" : "internal", (unsigned)sizeof(s_lcd_bounce),
+                 (int)esp_ptr_dma_capable(s_lcd_bounce));
     }
 
-    static void stop_loop() { s_stop_requested = true; }
+    static void stop_loop() {
+        s_stop_requested = true;
+        s_pause_requested = false;
+        s_abort_lcd_draw = true;
+    }
+
+    static void pause_loop() {
+        s_pause_requested = true;
+        s_abort_lcd_draw = true;
+    }
 
     static bool is_running() { return s_task != nullptr; }
 
@@ -185,7 +231,23 @@ public:
         for (int i = 0; i < slices && s_task != nullptr; ++i) {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        return s_task == nullptr;
+        if (s_task == nullptr) {
+            s_abort_lcd_draw = false;
+            return true;
+        }
+        return false;
+    }
+
+    static bool wait_idle(int timeout_ms) {
+        const int slices = std::max(1, timeout_ms / 20);
+        for (int i = 0; i < slices; ++i) {
+            if (s_lcd_bus_mutex.try_lock()) {
+                s_lcd_bus_mutex.unlock();
+                return true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        return false;
     }
 
 private:
@@ -201,6 +263,7 @@ private:
 
     static volatile bool s_stop_requested;
     static TaskHandle_t s_task;
+    static bool s_task_caps;
 
     // 预设代码内容 (C 代码片段)
     static constexpr const char* CODE_CONTENT =
@@ -297,8 +360,14 @@ private:
             ESP_LOGE(TAG, "CodeScroll: no lines parsed");
             if (buf1)
                 free(buf1);
+            s_abort_lcd_draw = false;
+            s_pause_requested = false;
             s_task = nullptr;
-            vTaskDelete(nullptr);
+            if (s_task_caps) {
+                vTaskDeleteWithCaps(nullptr);
+            } else {
+                vTaskDelete(nullptr);
+            }
             return;
         }
 
@@ -317,6 +386,11 @@ private:
         DialogState dialog_snap{};
 
         while (!s_stop_requested) {
+            if (s_pause_requested) {
+                vTaskDelay(pdMS_TO_TICKS(40));
+                continue;
+            }
+
             int64_t now_us = esp_timer_get_time();
 
             // === 1. 逐字推进 (受 CHARS_PER_TICK 和 TICK_INTERVAL_MS 控制) ===
@@ -420,7 +494,7 @@ private:
                     }
 
                     // === 5. 发送刚画完的帧，再切到另一块缓冲画下一帧 ===
-                    DrawPanelBitmapChunked(cfg.panel, 0, 0, pw, ph, render_buf);
+                    DrawPanelBitmapChunked(cfg.panel, 0, 0, pw, ph, render_buf, true);
                     if (dual) {
                         cur_buf = 1 - cur_buf;
                     }
@@ -437,8 +511,14 @@ private:
         // cleanup
         if (buf1)
             free(buf1);
+        s_abort_lcd_draw = false;
+        s_pause_requested = false;
         s_task = nullptr;
-        vTaskDelete(nullptr);
+        if (s_task_caps) {
+            vTaskDeleteWithCaps(nullptr);
+        } else {
+            vTaskDelete(nullptr);
+        }
     }
 
     // 解析代码文本为行数组
@@ -481,6 +561,7 @@ private:
 
 volatile bool CodeScrollRenderer::s_stop_requested = false;
 TaskHandle_t CodeScrollRenderer::s_task = nullptr;
+bool CodeScrollRenderer::s_task_caps = false;
 
 // 启动代码滚动 (导出为 API)
 void start_code_scroll_loop(const LoopConfig& cfg) {
@@ -494,10 +575,25 @@ void start_code_scroll_loop(const LoopConfig& cfg) {
 
 void stop_code_scroll_loop() { CodeScrollRenderer::stop_loop(); }
 
+void pause_code_scroll_loop() { CodeScrollRenderer::pause_loop(); }
+
 bool is_code_scroll_running() { return CodeScrollRenderer::is_running(); }
 
 bool wait_code_scroll_stopped(int timeout_ms) {
     return CodeScrollRenderer::wait_stopped(timeout_ms);
+}
+
+bool wait_code_scroll_idle(int timeout_ms) { return CodeScrollRenderer::wait_idle(timeout_ms); }
+
+void panel_set_disp_on_off(esp_lcd_panel_handle_t panel, bool on) {
+    if (panel == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_lcd_bus_mutex);
+    esp_err_t err = esp_lcd_panel_disp_on_off(panel, on);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "disp_on_off(%d) failed: %s", on, esp_err_to_name(err));
+    }
 }
 
 // ============ 科技终端弹窗渲染 (含 ASCII + CJK 文字) ============
@@ -1266,7 +1362,7 @@ void play_splash(esp_lcd_panel_handle_t panel, const uint8_t* bin_base, size_t b
             continue;
         }
         build_centered(frame_buf, frame_w, frame_h, out_buf, panel_w, panel_h);
-        DrawPanelBitmapChunked(panel, 0, 0, panel_w, panel_h, out_buf);
+        DrawPanelBitmapChunked(panel, 0, 0, panel_w, panel_h, out_buf, false);
 
         int64_t t_now = esp_timer_get_time();
         int64_t total_elapsed_ms = (t_now - t_start) / 1000;
@@ -1387,7 +1483,7 @@ void draw_face_track_hud(esp_lcd_panel_handle_t panel, uint16_t* buf, int panel_
     text_shadow(2, 34, line2, kCyan);
     text_shadow(2, 46, line3, kGray);
 
-    DrawPanelBitmapChunked(panel, 0, 0, panel_w, panel_h, buf);
+    DrawPanelBitmapChunked(panel, 0, 0, panel_w, panel_h, buf, false);
 }
 
 void dismiss_dialog(DialogState* state) {

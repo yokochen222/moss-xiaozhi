@@ -14,9 +14,9 @@ mcp/
     ├── system_info_tool.cc  # 系统信息工具
     ├── test_tool.cc         # 测试工具
     ├── network_tool.cc      # 网络工具
-    └── lamp_eye.cc          # 眼部灯光控制工具
-    ├── lamp_bar.cc           # 流水灯控制工具
-    ├── lamp_panel.cc         # 面板灯/底灯控制工具
+    └── lamp_eye.cc          # 虹膜谐振灯
+    ├── lamp_bar.cc           # 光子流环
+    ├── lamp_panel.cc         # 前舷信标 / 暗舷锚灯
 ```
 
 ## 设计特点
@@ -71,10 +71,10 @@ DECLARE_MCP_TOOL(YourTool);
 
 ## 现有工具
 
-- **眼部灯光工具** (`self.lamp_eye.control`) - PCA9685 ch6 眼部灯光
-- **流水灯工具** (`self.lamp_bar.control`) - PCA9685 ch8–12 流水灯
-- **面板灯/底灯工具** (`self.lamp_panel.control`) - PCA9685 ch13–15 面板/底灯
-- **眼电机工具** (`self.eye_motor.control`) - PCA9685 ch3–5 + TB6612 眼电机
+- **虹膜谐振灯** (`self.iris_resonator.control`) - PCA9685 ch6
+- **光子流环** (`self.photon_stream.control`) - PCA9685 ch8–12
+- **前舷信标 / 暗舷锚灯** (`self.bow_beacon.control`) - PCA9685 ch13–15
+- **视界驱动器** (`self.optic_drive.control`) - PCA9685 ch3–5 + TB6612
 - **云台控制工具** (`self.gimbal.control`) - 74HC595 + ULN2003 双轴步进云台
 - **红外工具** (`self.infrared.*`) - 红外收发
 
@@ -84,10 +84,10 @@ DECLARE_MCP_TOOL(YourTool);
 |-------------|------|
 | PCA LED0 | LCD 背光 |
 | PCA LED1 | NS4150B 功放使能 |
-| PCA LED3–5 | 眼电机 TB6612（AIN2/AIN1/PWMA） |
-| PCA LED6 | 眼部呼吸灯 |
-| PCA LED8–12 | 流水灯 |
-| PCA LED13–15 | 面板灯 / 底灯 |
+| PCA LED3–5 | 视界驱动器 TB6612（AIN2/AIN1/PWMA） |
+| PCA LED6 | 虹膜谐振灯 |
+| PCA LED8–12 | 光子流环 |
+| PCA LED13–15 | 前舷信标 / 暗舷锚灯 |
 | 74HC595 SER/RCK/SCK = 21/47/48 | 双轴步进云台 |
 
 ## 优势对比

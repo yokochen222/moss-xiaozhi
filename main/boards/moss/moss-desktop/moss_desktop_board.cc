@@ -502,7 +502,7 @@ private:
         buscfg.sclk_io_num = DISPLAY_SPI_SCK_PIN;
         buscfg.quadwp_io_num = GPIO_NUM_NC;
         buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
+        buscfg.max_transfer_sz = DISPLAY_SPI_MAX_TRANSFER;
         ESP_ERROR_CHECK(spi_bus_initialize(DISPLAY_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
 
@@ -517,7 +517,7 @@ private:
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
         io_config.spi_mode = 0;
         io_config.pclk_hz = DISPLAY_SPI_CLOCK_HZ;
-        io_config.trans_queue_depth = 2;
+        io_config.trans_queue_depth = 1;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(DISPLAY_SPI_HOST, &io_config, &panel_io_));
