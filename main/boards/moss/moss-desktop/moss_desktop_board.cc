@@ -1,5 +1,6 @@
 #include "application.h"
 #include "assets/lang_config.h"
+#include "audio_scope.h"
 #include "backlight.h"
 #include "button.h"
 #include "codecs/box_audio_codec.h"
@@ -34,6 +35,27 @@
 #include <stdexcept>
 
 #define TAG "MossDesktopBoard"
+
+// 在 codec 读写之后抽 PCM 给信号弹窗. 不占用 I2S, 不改采样.
+class MossDesktopAudioCodec : public BoxAudioCodec {
+public:
+    using BoxAudioCodec::BoxAudioCodec;
+
+    void OutputData(std::vector<int16_t>& data) override {
+        BoxAudioCodec::OutputData(data);
+        moss_splash::audio_scope_feed(moss_splash::AudioScopeSource::Playback, data.data(),
+                                      data.size(), output_channels());
+    }
+
+    bool InputData(std::vector<int16_t>& data) override {
+        const bool ok = BoxAudioCodec::InputData(data);
+        if (ok) {
+            moss_splash::audio_scope_feed(moss_splash::AudioScopeSource::Capture, data.data(),
+                                          data.size(), input_channels());
+        }
+        return ok;
+    }
+};
 
 // LCD_BL → PCA9685 LED0（高有效 / PWM 调光）
 class Pca9685Backlight : public Backlight {
@@ -657,7 +679,7 @@ public:
             i2c_master_bus_reset(i2c_bus_);
             vTaskDelay(pdMS_TO_TICKS(20));
         }
-        static BoxAudioCodec audio_codec(
+        static MossDesktopAudioCodec audio_codec(
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,

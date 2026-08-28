@@ -1,4 +1,5 @@
 #include "splash_player.h"
+#include "audio_scope.h"
 #include "config.h"
 #include "eaf_iface.h"
 #include "moss_splash.h"
@@ -15,6 +16,7 @@
 #include "freertos/task.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +30,154 @@ LV_FONT_DECLARE(font_puhui_basic_14_1);
 static const lv_font_t* s_font = &font_puhui_basic_14_1;
 
 namespace moss_splash {
+
+namespace {
+
+constexpr int kScopeBins = 80;
+constexpr uint32_t kScopeSamplesPerBin = 80;
+constexpr int64_t kScopePlaybackHoldUs = 180000;
+constexpr int64_t kScopeStaleUs = 500000;
+constexpr uint32_t kScopeAgcFloor = 1800;
+constexpr uint32_t kScopeNoiseInit = 600;
+constexpr uint32_t kScopeGateBias = 280;
+
+struct ScopeChannel {
+    uint8_t bins[kScopeBins]{};
+    std::atomic<uint32_t> write_idx{0};
+    std::atomic<int64_t> last_us{0};
+    uint32_t acc_peak = 0;
+    uint32_t acc_n = 0;
+    int32_t dc = 0;
+    uint32_t agc = 8000;
+    uint32_t noise = kScopeNoiseInit;
+};
+
+std::atomic<bool> s_scope_enabled{false};
+ScopeChannel s_scope_ch[2];
+
+void scope_commit_bin(ScopeChannel& ch, uint32_t peak) {
+    if (peak < (ch.noise * 2u) + 50u) {
+        ch.noise = (ch.noise * 31u + peak) >> 5;
+        if (ch.noise < 80u) {
+            ch.noise = 80u;
+        }
+    }
+
+    const uint32_t gate = ch.noise * 3u + kScopeGateBias;
+    if (peak < gate) {
+        peak = 0;
+    }
+
+    if (peak > ch.agc) {
+        ch.agc = peak;
+    } else {
+        ch.agc -= ch.agc >> 6;
+    }
+    if (ch.agc < kScopeAgcFloor) {
+        ch.agc = kScopeAgcFloor;
+    }
+
+    uint32_t v = 0;
+    if (peak > 0) {
+        v = (peak * 255u) / ch.agc;
+        if (v > 255u) {
+            v = 255u;
+        }
+    }
+
+    const uint32_t idx = ch.write_idx.load(std::memory_order_relaxed);
+    ch.bins[idx % kScopeBins] = static_cast<uint8_t>(v);
+    ch.write_idx.store(idx + 1u, std::memory_order_release);
+    ch.last_us.store(esp_timer_get_time(), std::memory_order_relaxed);
+}
+
+void scope_map_bins(const ScopeChannel& ch, uint8_t* dst, int width) {
+    const uint32_t w = ch.write_idx.load(std::memory_order_acquire);
+    const int filled = (w >= static_cast<uint32_t>(kScopeBins)) ? kScopeBins : static_cast<int>(w);
+    if (filled <= 0) {
+        std::memset(dst, 0, static_cast<size_t>(width));
+        return;
+    }
+
+    const uint32_t origin = (w >= static_cast<uint32_t>(kScopeBins)) ? (w % kScopeBins) : 0u;
+    for (int x = 0; x < width; ++x) {
+        const int b = (x * filled) / width;
+        dst[x] = ch.bins[(origin + static_cast<uint32_t>(b)) % kScopeBins];
+    }
+}
+
+}  // namespace
+
+void audio_scope_set_enabled(bool enabled) {
+    s_scope_enabled.store(enabled, std::memory_order_release);
+}
+
+void audio_scope_feed(AudioScopeSource source, const int16_t* samples, size_t count, int channels) {
+    if (!s_scope_enabled.load(std::memory_order_relaxed) || samples == nullptr || count == 0) {
+        return;
+    }
+
+    const int src = (source == AudioScopeSource::Playback) ? 1 : 0;
+    ScopeChannel& ch = s_scope_ch[src];
+    const int step = (channels > 1) ? channels : 1;
+
+    for (size_t i = 0; i < count; i += static_cast<size_t>(step)) {
+        const int32_t x = samples[i];
+        ch.dc += (x - ch.dc) >> 5;
+        int32_t ac = x - ch.dc;
+        if (ac < 0) {
+            ac = -ac;
+        }
+        const uint32_t mag = static_cast<uint32_t>(ac);
+        if (mag > ch.acc_peak) {
+            ch.acc_peak = mag;
+        }
+        if (++ch.acc_n >= kScopeSamplesPerBin) {
+            scope_commit_bin(ch, ch.acc_peak);
+            ch.acc_peak = 0;
+            ch.acc_n = 0;
+        }
+    }
+}
+
+bool audio_scope_copy_envelope(uint8_t* dst, int width) {
+    if (dst == nullptr || width <= 0) {
+        return false;
+    }
+
+    const int64_t now = esp_timer_get_time();
+    const int64_t pb_age = now - s_scope_ch[1].last_us.load(std::memory_order_relaxed);
+    const int64_t cap_age = now - s_scope_ch[0].last_us.load(std::memory_order_relaxed);
+
+    const ScopeChannel* src = nullptr;
+    int64_t age = kScopeStaleUs;
+    if (pb_age >= 0 && pb_age < kScopePlaybackHoldUs) {
+        src = &s_scope_ch[1];
+        age = pb_age;
+    } else if (cap_age >= 0 && cap_age < kScopeStaleUs) {
+        src = &s_scope_ch[0];
+        age = cap_age;
+    } else if (pb_age >= 0 && pb_age < kScopeStaleUs) {
+        src = &s_scope_ch[1];
+        age = pb_age;
+    }
+
+    if (src == nullptr) {
+        std::memset(dst, 0, static_cast<size_t>(width));
+        return false;
+    }
+
+    scope_map_bins(*src, dst, width);
+
+    if (age > 120000) {
+        const int fade = static_cast<int>((age - 120000) / 40000);
+        const int den = 4 + (fade > 8 ? 8 : fade);
+        for (int x = 0; x < width; ++x) {
+            dst[x] = static_cast<uint8_t>((static_cast<int>(dst[x]) * 4) / den);
+        }
+    }
+    return true;
+}
 
 // ============ 代码无限滚动渲染器 (替代 emote-code EAF) ============
 
@@ -613,16 +763,9 @@ static inline void plot_rgb565(uint16_t* dst, int dst_w, int dst_h, int x, int y
     dst[y * dst_w + x] = swap_rgb565(c);
 }
 
-static uint32_t uhash(uint32_t x) {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    return x;
-}
-
-// 右半区音谱线: 沿中线上下对称的密刺波形 (不读麦克风, 时间驱动包络).
+// 右半区音谱线: 沿中线上下对称, 幅度来自 codec PCM 包络.
 static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h, int x0, int y0, int w, int h,
-                                 int mid_y, uint16_t color, uint32_t t) {
+                                 int mid_y, uint16_t color) {
     if (w < 4 || h < 6)
         return;
     int max_amp = mid_y - y0;
@@ -632,34 +775,25 @@ static void draw_signal_waveform(uint16_t* dst, int dst_w, int dst_h, int x0, in
     if (max_amp < 2)
         max_amp = 2;
 
+    uint8_t env[DISPLAY_WIDTH];
+    const int n = (w > DISPLAY_WIDTH) ? DISPLAY_WIDTH : w;
+    const bool has = audio_scope_copy_envelope(env, n);
+
     for (int i = 0; i < w; i++) {
-        int env = 0;
-        int period = w;
-        int offset = (int)((t / 2) % (uint32_t)period);
-        for (int k = 0; k < 6; k++) {
-            int cx = (k * period / 6 + offset) % period;
-            int dist = i - cx;
-            if (dist < 0)
-                dist = -dist;
-            int wrap = period - dist;
-            if (wrap < dist)
-                dist = wrap;
-            int radius = 4 + (k % 3) * 2;
-            if (dist >= radius)
-                continue;
-            int bump = (max_amp * (radius - dist) * (72 + k * 7)) / (radius * 100);
-            if (bump > env)
-                env = bump;
+        int e = 0;
+        if (has) {
+            int ei = i * n / w;
+            int e0 = env[ei];
+            int e1 = env[(ei + 1 < n) ? (ei + 1) : ei];
+            e = (e0 * 3 + e1) >> 2;
         }
 
-        uint32_t n = uhash((uint32_t)i * 131u + t * 7u);
-        int jagged = 28 + (int)(n % 100);
-        int floor_n = 1 + (int)((n >> 8) % 3);
-        int amp = floor_n + env * jagged / 128;
-        if (amp > max_amp)
-            amp = max_amp;
-        if (amp < 1)
-            amp = 1;
+        int amp = 0;
+        if (e > 2) {
+            amp = 1 + (max_amp * e) / 255;
+            if (amp > max_amp)
+                amp = max_amp;
+        }
 
         int x = x0 + i;
         int y1 = mid_y - amp;
@@ -708,6 +842,7 @@ static void fill_signal_bg(uint16_t* dst, int dst_w, int dst_h, int box_x, int b
 static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h, int box_x, int box_y, int box_w,
                             int box_h, uint16_t color, const char* title, const char* body,
                             uint8_t style, int64_t now_us) {
+    (void)now_us;
     static constexpr uint16_t kFrame = 0xFFFF;
     static constexpr uint16_t kInner = 0x632C;
     static constexpr uint16_t kCorner = 0xFFFF;
@@ -863,8 +998,7 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h, int box_x, int 
         int ww = box_x + box_w - 8 - wx;
         int wh = box_h - 8;
         if (ww > 4 && wh > 4) {
-            uint32_t t = (uint32_t)(now_us / 8000);
-            draw_signal_waveform(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y, color, t);
+            draw_signal_waveform(dst, dst_w, dst_h, wx, wy, ww, wh, mid_y, color);
         }
         return;
     }
@@ -1276,6 +1410,7 @@ void set_dialog_state(DialogState* state, bool active, const char* title, uint16
         state->body[i] = '\0';
     }
     portEXIT_CRITICAL(&s_dialog_spinlock);
+    audio_scope_set_enabled(active && style == kDialogStyleSignal);
 }
 
 void play_splash(esp_lcd_panel_handle_t panel, const uint8_t* bin_base, size_t bin_size,
@@ -1497,6 +1632,7 @@ void dismiss_dialog(DialogState* state) {
     state->style = kDialogStyleDefault;
     state->show_until_tick = 0;
     portEXIT_CRITICAL(&s_dialog_spinlock);
+    audio_scope_set_enabled(false);
 }
 
 }  // namespace moss_splash

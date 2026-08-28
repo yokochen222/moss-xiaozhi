@@ -4,7 +4,8 @@
 
 MOSS 桌面助手固件身份（`type`/`name` = `moss-desktop`）。显示与开机动画对齐
 `bread-compact-wifi-096lcd`：0.96 寸 ST7735S（160×80）+ 嵌入 `emote-assets.bin` 开机 splash，
-随后代码滚动背景替代原 LVGL UI。
+随后代码滚动背景替代原 LVGL UI。聆听/说话时的「检测信号」弹窗右侧示波器跟 codec 已有 PCM
+包络走（麦/喇叭各一条无锁环，不另开 I2S），弹窗关闭即停算。
 
 ## 硬件资源
 

@@ -29,7 +29,7 @@ static constexpr uint8_t kPriorityError = 4;    // 错误/失败
 
 // 弹窗布局
 static constexpr uint8_t kDialogStyleDefault = 0;  // 标题 (+ 可选正文)
-static constexpr uint8_t kDialogStyleSignal = 1;   // 左文字 + 右固定波动音谱线
+static constexpr uint8_t kDialogStyleSignal = 1;   // 左文字 + 右音频包络示波器
 
 const int DIALOG_TITLE_MAX = sizeof(DialogState::title) - 1;
 const int DIALOG_BODY_MAX = sizeof(DialogState::body) - 1;
