@@ -179,6 +179,15 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         self.assertIn("JpegFarOverBudget", self.cam)
         self.assertIn("image_to_jpeg", self.cam)
         self.assertIn("Drop short RGB565", self.cam)
+        encode = self.cam[
+            self.cam.find("bool Esp32Camera::EncodeAndParkJpeg") : self.cam.find(
+                "bool Esp32Camera::SetHMirror"
+            )
+        ]
+        self.assertIn("StopDvp()", encode)
+        self.assertLess(encode.find("StopDvp()"), encode.find("image_to_jpeg"))
+        rgb_copy = encode[encode.find("memcpy(rgb, current_fb_->buf") :]
+        self.assertNotIn("esp_camera_fb_return(current_fb_)", rgb_copy)
 
     def test_esp32_camera_drops_truncated_jpeg(self):
         self.assertIn("Drop truncated JPEG", self.cam)

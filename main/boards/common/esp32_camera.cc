@@ -8,14 +8,17 @@
 #include <cstring>
 
 #include "board.h"
+#include "device/moss_jpeg_still.h"
 #include "display.h"
 #include "esp32_camera.h"
 #include "esp_timer.h"
 #include "jpg/image_to_jpeg.h"
-#include "device/moss_jpeg_still.h"
 #include "lvgl_display.h"
 #include "mcp_server.h"
 #include "system_info.h"
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "Esp32Camera"
 
@@ -69,21 +72,27 @@ Esp32Camera::Esp32Camera(const camera_config_t& config) {
     streaming_on_ = true;
 }
 
-Esp32Camera::~Esp32Camera() {
-    if (current_fb_ && streaming_on_) {
-        esp_camera_fb_return(current_fb_);
+void Esp32Camera::StopDvp() {
+    if (!streaming_on_) {
         current_fb_ = nullptr;
+        return;
     }
+    // Do not fb_return: with fb_count=1 the driver immediately DMA-writes the
+    // same PSRAM frame. Freeing it in cam_deinit then hits a cache/heap fault.
+    current_fb_ = nullptr;
+    vTaskDelay(pdMS_TO_TICKS(30));
+    esp_camera_deinit();
+    streaming_on_ = false;
+}
+
+Esp32Camera::~Esp32Camera() {
     if (encode_buf_) {
         heap_caps_free(encode_buf_);
         encode_buf_ = nullptr;
         encode_buf_size_ = 0;
         jpeg_parked_len_ = 0;
     }
-    if (streaming_on_) {
-        esp_camera_deinit();
-        streaming_on_ = false;
-    }
+    StopDvp();
 }
 
 void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token) {
@@ -147,8 +156,7 @@ bool Esp32Camera::Capture() {
                 continue;
             }
 #ifdef CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE
-            if (current_fb_->len * 100 >=
-                (size_t)CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE * 90) {
+            if (current_fb_->len * 100 >= (size_t)CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE * 90) {
                 ESP_LOGW(TAG, "Drop truncated JPEG len=%u cap=%d", (unsigned)current_fb_->len,
                          CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE);
                 continue;
@@ -207,8 +215,7 @@ bool Esp32Camera::Capture() {
         }
     } else if (current_fb_->format == PIXFORMAT_JPEG) {
         // JPEG format preview usually requires decoding, skip preview display for now, just log
-        ESP_LOGW(TAG, "JPEG capture success, len=%u, preview skipped",
-                 (unsigned)current_fb_->len);
+        ESP_LOGW(TAG, "JPEG capture success, len=%u, preview skipped", (unsigned)current_fb_->len);
     }
 
     ESP_LOGI(TAG, "Captured frame: %dx%d, len=%u, format=%d", current_fb_->width,
@@ -295,9 +302,8 @@ bool Esp32Camera::ReleaseSensorKeepJpeg() {
     encode_buf_size_ = len;
     memcpy(encode_buf_, current_fb_->buf, len);
     jpeg_parked_len_ = len;
-    esp_camera_fb_return(current_fb_);
-    current_fb_ = nullptr;
-    ESP_LOGI(TAG, "JPEG parked len=%u (DVP release deferred)", (unsigned)len);
+    StopDvp();
+    ESP_LOGI(TAG, "JPEG parked len=%u (DVP stopped)", (unsigned)len);
     return true;
 }
 
@@ -359,8 +365,8 @@ static uint8_t* DownsampleRgb565X2(uint8_t* src, uint16_t& w, uint16_t& h) {
         return src;
     }
     const size_t dst_len = static_cast<size_t>(dst_w) * static_cast<size_t>(dst_h) * 2;
-    uint8_t* dst = static_cast<uint8_t*>(
-        heap_caps_malloc(dst_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    uint8_t* dst =
+        static_cast<uint8_t*>(heap_caps_malloc(dst_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (dst == nullptr) {
         return src;
     }
@@ -418,8 +424,7 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
     }
     memcpy(rgb, current_fb_->buf, src_len);
     SwapRgb565BeToLe(rgb, src_len);
-    esp_camera_fb_return(current_fb_);
-    current_fb_ = nullptr;
+    StopDvp();
 
     uint16_t enc_w = w;
     uint16_t enc_h = h;
@@ -432,9 +437,8 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
     while (true) {
         uint8_t* out = nullptr;
         size_t out_len = 0;
-        const bool enc_ok =
-            image_to_jpeg(rgb, enc_len, enc_w, enc_h, V4L2_PIX_FMT_RGB565,
-                          static_cast<uint8_t>(quality), &out, &out_len);
+        const bool enc_ok = image_to_jpeg(rgb, enc_len, enc_w, enc_h, V4L2_PIX_FMT_RGB565,
+                                          static_cast<uint8_t>(quality), &out, &out_len);
         if (!enc_ok || out == nullptr || out_len == 0) {
             ESP_LOGE(TAG, "SW JPEG encode failed quality=%d", quality);
             if (out) {
@@ -491,7 +495,8 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
         encode_buf_ = nullptr;
         encode_buf_size_ = 0;
     }
-    encode_buf_ = static_cast<uint8_t*>(heap_caps_malloc(jpeg_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    encode_buf_ =
+        static_cast<uint8_t*>(heap_caps_malloc(jpeg_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (encode_buf_ == nullptr) {
         free(jpeg);
         jpeg_parked_len_ = 0;
@@ -502,8 +507,8 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
     free(jpeg);
     encode_buf_size_ = jpeg_len;
     jpeg_parked_len_ = jpeg_len;
-    ESP_LOGI(TAG, "SW JPEG parked %dx%d len=%u quality=%d (DVP release deferred)", (int)enc_w,
-             (int)enc_h, (unsigned)jpeg_len, used_q);
+    ESP_LOGI(TAG, "SW JPEG parked %dx%d len=%u quality=%d (DVP stopped)", (int)enc_w, (int)enc_h,
+             (unsigned)jpeg_len, used_q);
     return true;
 }
 
@@ -673,68 +678,67 @@ std::string Esp32Camera::Explain(const std::string& question) {
     }
 
     encoder_thread_ = std::thread([this, jpeg_queue]() {
-            int64_t start_time = esp_timer_get_time();
-            uint16_t w = current_fb_->width;
-            uint16_t h = current_fb_->height;
-            v4l2_pix_fmt_t enc_fmt;
-            switch (current_fb_->format) {
-                case PIXFORMAT_RGB565:
-                    enc_fmt = V4L2_PIX_FMT_RGB565;
-                    break;
-                case PIXFORMAT_YUV422:
-                    enc_fmt = V4L2_PIX_FMT_YUYV;
-                    break;
-                case PIXFORMAT_YUV420:
-                    enc_fmt = V4L2_PIX_FMT_YUV420;
-                    break;
-                case PIXFORMAT_GRAYSCALE:
-                    enc_fmt = V4L2_PIX_FMT_GREY;
-                    break;
-                case PIXFORMAT_RGB888:
-                    enc_fmt = V4L2_PIX_FMT_RGB24;
-                    break;
-                default:
-                    ESP_LOGE(TAG, "Unsupported pixel format: %d", current_fb_->format);
-                    return;
-            }
+        int64_t start_time = esp_timer_get_time();
+        uint16_t w = current_fb_->width;
+        uint16_t h = current_fb_->height;
+        v4l2_pix_fmt_t enc_fmt;
+        switch (current_fb_->format) {
+            case PIXFORMAT_RGB565:
+                enc_fmt = V4L2_PIX_FMT_RGB565;
+                break;
+            case PIXFORMAT_YUV422:
+                enc_fmt = V4L2_PIX_FMT_YUYV;
+                break;
+            case PIXFORMAT_YUV420:
+                enc_fmt = V4L2_PIX_FMT_YUV420;
+                break;
+            case PIXFORMAT_GRAYSCALE:
+                enc_fmt = V4L2_PIX_FMT_GREY;
+                break;
+            case PIXFORMAT_RGB888:
+                enc_fmt = V4L2_PIX_FMT_RGB24;
+                break;
+            default:
+                ESP_LOGE(TAG, "Unsupported pixel format: %d", current_fb_->format);
+                return;
+        }
 
-            uint8_t* jpeg_src_buf = current_fb_->buf;
-            size_t jpeg_src_len = current_fb_->len;
-            if (current_fb_->format == PIXFORMAT_RGB565 && encode_buf_ != nullptr) {
-                jpeg_src_buf = encode_buf_;
-                jpeg_src_len = encode_buf_size_;
-            }
+        uint8_t* jpeg_src_buf = current_fb_->buf;
+        size_t jpeg_src_len = current_fb_->len;
+        if (current_fb_->format == PIXFORMAT_RGB565 && encode_buf_ != nullptr) {
+            jpeg_src_buf = encode_buf_;
+            jpeg_src_len = encode_buf_size_;
+        }
 
-            bool ok = image_to_jpeg_cb(
-                jpeg_src_buf, jpeg_src_len, w, h, enc_fmt, 80,
-                [](void* arg, size_t index, const void* data, size_t len) -> size_t {
-                    auto q = static_cast<QueueHandle_t>(arg);
-                    JpegChunk chunk = {.data = nullptr, .len = len};
-                    if (index == 0 && data != nullptr && len > 0) {
-                        chunk.data = (uint8_t*)heap_caps_aligned_alloc(
-                            16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                        if (chunk.data == nullptr) {
-                            ESP_LOGE(TAG, "Failed to allocate %u bytes for JPEG chunk",
-                                     (unsigned)len);
-                            chunk.len = 0;
-                        } else {
-                            memcpy(chunk.data, data, len);
-                        }
-                    } else {
+        bool ok = image_to_jpeg_cb(
+            jpeg_src_buf, jpeg_src_len, w, h, enc_fmt, 80,
+            [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+                auto q = static_cast<QueueHandle_t>(arg);
+                JpegChunk chunk = {.data = nullptr, .len = len};
+                if (index == 0 && data != nullptr && len > 0) {
+                    chunk.data = (uint8_t*)heap_caps_aligned_alloc(
+                        16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (chunk.data == nullptr) {
+                        ESP_LOGE(TAG, "Failed to allocate %u bytes for JPEG chunk", (unsigned)len);
                         chunk.len = 0;
+                    } else {
+                        memcpy(chunk.data, data, len);
                     }
-                    xQueueSend(q, &chunk, portMAX_DELAY);
-                    return len;
-                },
-                jpeg_queue);
+                } else {
+                    chunk.len = 0;
+                }
+                xQueueSend(q, &chunk, portMAX_DELAY);
+                return len;
+            },
+            jpeg_queue);
 
-            if (!ok) {
-                JpegChunk err_chunk = {.data = nullptr, .len = 0};
-                xQueueSend(jpeg_queue, &err_chunk, portMAX_DELAY);
-            }
-            int64_t end_time = esp_timer_get_time();
-            ESP_LOGI(TAG, "JPEG encoding time: %ld ms", (long)((end_time - start_time) / 1000));
-        });
+        if (!ok) {
+            JpegChunk err_chunk = {.data = nullptr, .len = 0};
+            xQueueSend(jpeg_queue, &err_chunk, portMAX_DELAY);
+        }
+        int64_t end_time = esp_timer_get_time();
+        ESP_LOGI(TAG, "JPEG encoding time: %ld ms", (long)((end_time - start_time) / 1000));
+    });
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);
