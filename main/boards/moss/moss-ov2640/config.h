@@ -6,13 +6,12 @@
 #include <driver/uart.h>
 #include <esp_lcd_panel_vendor.h>
 
+#include "moss_shared_audio.h"
+
 #define AUDIO_INPUT_SAMPLE_RATE 24000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
 
 #define AUDIO_INPUT_REFERENCE true
-
-// ES7210 MIC1 模拟增益（dB）。唤醒偏钝就加大，误唤醒/破音就减小。
-#define AUDIO_CODEC_INPUT_GAIN 37.5f
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_38
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_13

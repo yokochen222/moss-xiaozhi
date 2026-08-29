@@ -316,11 +316,14 @@ if(CONFIG_BOARD_FAMILY_MOSS)
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"
         "api/methods/config/config_handlers.cc"
+        "api/methods/hw/hw_handlers.cc"
+        "api/methods/chat/chat_handlers.cc"
         "config/ext_mqtt_config.cc"
         "config/moss_config_service.cc"
+        "config/moss_chat_log.cc"
+        "config/moss_hw.cc"
         "config/device_config.cc"
         "config/product.cc"
-        "external_mqtt_client.cc"
         "mcp/tools/lamp_panel.cc"
         "mcp/tools/lamp_eye.cc"
         "mcp/tools/lamp_bar.cc"
@@ -350,6 +353,7 @@ if(CONFIG_BOARD_FAMILY_MOSS)
         )
     endif()
     list(APPEND INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/moss
         ${CMAKE_CURRENT_SOURCE_DIR}/device
         ${CMAKE_CURRENT_SOURCE_DIR}/api
         ${CMAKE_CURRENT_SOURCE_DIR}/api/methods

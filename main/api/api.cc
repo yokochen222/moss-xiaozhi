@@ -3,6 +3,8 @@
 #include "methods/config/config_handlers.h"
 #include "methods/ir/ir_handlers.h"
 #include "methods/ir/ir_data_manager.h"
+#include "methods/hw/hw_handlers.h"
+#include "methods/chat/chat_handlers.h"
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
 #include "methods/camera/camera_handlers.h"
 #endif
@@ -72,6 +74,11 @@ bool ApiServer::Start(int port) {
     add("/ir/command/delete", HTTP_POST, api_methods::ir::HandleIrCommandDelete);
     add("/ir/export", HTTP_GET, api_methods::ir::HandleIrExport);
     add("/ir/import", HTTP_POST, api_methods::ir::HandleIrImport);
+    add("/hw", HTTP_GET, api_methods::hw::HandleHw);
+    add("/hw", HTTP_POST, api_methods::hw::HandleHw);
+    add("/chat/wake", HTTP_POST, api_methods::chat::HandleChatWake);
+    add("/chat/say", HTTP_POST, api_methods::chat::HandleChatSay);
+    add("/chat/sync", HTTP_GET, api_methods::chat::HandleChatSync);
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
     add("/camera/stream", HTTP_GET, api_methods::camera::HandleStream);
     add("/camera/snapshot", HTTP_GET, api_methods::camera::HandleSnapshot);

@@ -43,6 +43,14 @@ void Backlight::RestoreBrightness() {
     SetBrightness(saved_brightness);
 }
 
+uint8_t Backlight::SavedBrightness() const {
+    Settings settings("display");
+    int saved = settings.GetInt("brightness", 75);
+    if (saved <= 0) saved = 75;
+    if (saved > 100) saved = 100;
+    return static_cast<uint8_t>(saved);
+}
+
 void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
     if (brightness > 100) {
         brightness = 100;

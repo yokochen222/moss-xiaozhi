@@ -2,25 +2,20 @@
 #include "api/api.h"
 #include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
+#include "config/moss_chat_log.h"
 #include "config/product.h"
 #include "device/infrared.h"
 #include "device/ir_catalog.h"
 #include "ext_mqtt_config.h"
+#include "system_info.h"
 
-#include <cJSON.h>
-
+#include <esp_app_desc.h>
 #include <esp_log.h>
-#include <esp_netif.h>
-#include <esp_timer.h>
 #include <mdns.h>
 #include <algorithm>
 #include <wifi_manager.h>
 
 #define TAG "MossConfig"
-
-namespace {
-constexpr int kHelloTimeoutUs = 30 * 1000 * 1000;
-}
 
 MossConfigService& MossConfigService::GetInstance() {
     static MossConfigService instance;
@@ -29,21 +24,9 @@ MossConfigService& MossConfigService::GetInstance() {
 
 MossConfigService::MossConfigService() {
     hostname_ = "moss-" + ExtMqttSettings::MacSuffix();
-    esp_timer_create_args_t args = {
-        .callback = HelloTimeoutCallback,
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "bind_hello",
-        .skip_unhandled_events = true,
-    };
-    esp_timer_create(&args, reinterpret_cast<esp_timer_handle_t*>(&hello_timer_));
 }
 
 MossConfigService::~MossConfigService() {
-    if (hello_timer_) {
-        esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
-        esp_timer_delete(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
-    }
     StopMdns();
 }
 
@@ -53,23 +36,20 @@ std::string MossConfigService::InstanceName() const {
     return "MOSS-" + ExtMqttSettings::MacSuffix();
 }
 
+void MossConfigService::CacheIdentity() {
+    cached_mac_ = SystemInfo::GetMacAddress();
+    auto mqtt = ExtMqttSettings::Load();
+    cached_client_id_ = ExtMqttSettings::DefaultClientId();
+    cached_display_name_ = mqtt.display_name;
+    const esp_app_desc_t* app = esp_app_get_description();
+    cached_version_ = app ? app->version : "";
+}
+
 void MossConfigService::OnNetworkConnected() {
     Application::GetInstance().RegisterChatRelayCallback(
         [](const std::string& event, const std::string& role, const std::string& text,
            const std::string& state) {
-            cJSON* payload = cJSON_CreateObject();
-            if (!role.empty()) {
-                cJSON_AddStringToObject(payload, "role", role.c_str());
-            }
-            if (!text.empty()) {
-                cJSON_AddStringToObject(payload, "text", text.c_str());
-            }
-            if (!state.empty()) {
-                cJSON_AddStringToObject(payload, "state", state.c_str());
-            }
-            const char* type = event == "message" ? "chat.message" : "chat.state";
-            MossConfigService::GetInstance().PublishUp(type, "", payload);
-            cJSON_Delete(payload);
+            MossChatLog::GetInstance().OnRelay(event, role, text, state);
         });
 
     IrCatalog::GetInstance().Initialize();
@@ -79,38 +59,20 @@ void MossConfigService::OnNetworkConnected() {
     api_methods::ir::IrDataManager::GetInstance().SetOnReceived([](const std::string& data) {
         std::string code = IrCatalog::NormalizeCode(data);
         const size_t preview = std::min(code.size(), static_cast<size_t>(160));
-        ESP_LOGI(TAG, "IR received (%u bytes): %.*s", static_cast<unsigned>(code.size()),
-                 static_cast<int>(preview), code.c_str());
+        ESP_LOGI(TAG, "IR received (%u bytes): %.*s", (unsigned)code.size(), (int)preview,
+                 code.c_str());
         if (code.empty() || code.rfind("xx", 0) == 0 || code.find(',') == std::string::npos ||
             (code.find("len=") == std::string::npos && code.find("#len") == std::string::npos)) {
             ESP_LOGW(TAG, "IR RX ignored (incomplete waveform, waiting for len=)");
             return;
         }
-        cJSON* payload = cJSON_CreateObject();
-        cJSON_AddStringToObject(payload, "code", code.c_str());
-        MossConfigService::GetInstance().PublishUp("ir.learned", "", payload);
-        cJSON_Delete(payload);
     });
 
-    auto config = ExtMqttSettings::Load();
-#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
-    // Onboard MJPEG is served on :5500. Keep HTTP/mDNS even after MQTT bind.
     StartLanServices();
-#endif
-    if (!config.bound || config.broker.empty()) {
-        ESP_LOGI(TAG, "Unbound: entering LAN bind mode");
-        EnterBindMode();
-        return;
-    }
-#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
-    ESP_LOGI(TAG, "Bound: MQTT up, HTTP/mDNS kept for camera");
-#else
-    ESP_LOGI(TAG, "Bound: starting external MQTT, HTTP stays off until retries fail");
-#endif
-    mqtt_client_.Start();
 }
 
 void MossConfigService::StartLanServices() {
+    CacheIdentity();
     if (!ApiServer::GetInstance().IsRunning()) {
         ApiServer::GetInstance().Start(5500);
     }
@@ -123,81 +85,8 @@ void MossConfigService::EnterBindMode() {
 }
 
 void MossConfigService::LeaveBindMode() {
-    awaiting_hello_ = false;
-    if (hello_timer_) {
-        esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
-    }
-#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
     StartLanServices();
     bind_mode_ = false;
-    ESP_LOGI(TAG, "Left bind mode, HTTP/mDNS kept for camera");
-#else
-    if (!bind_mode_ && !ApiServer::GetInstance().IsRunning() && !mdns_started_) {
-        return;
-    }
-    if (ApiServer::GetInstance().IsRunning()) {
-        ApiServer::GetInstance().Stop();
-    }
-    StopMdns();
-    bind_mode_ = false;
-    ESP_LOGI(TAG, "Left bind mode, HTTP/mDNS stopped");
-#endif
-}
-
-void MossConfigService::OnMqttConnected() {
-    mqtt_client_.ResetFailCount();
-    Application::GetInstance().Schedule([]() { MossConfigService::GetInstance().AnnounceOnline(); });
-    if (awaiting_hello_ && hello_timer_) {
-        esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
-        esp_timer_start_once(reinterpret_cast<esp_timer_handle_t>(hello_timer_), kHelloTimeoutUs);
-        ESP_LOGI(TAG, "MQTT up, waiting for bind.hello before closing HTTP");
-    }
-}
-
-void MossConfigService::OnMqttDisconnected() {
-    // Reconnect is handled inside ExternalMqttClient.
-}
-
-void MossConfigService::AnnounceOnline() {
-    cJSON* payload = cJSON_CreateObject();
-    MossProduct::AddIdentity(payload);
-    cJSON_AddStringToObject(payload, "name", BOARD_TYPE);
-    cJSON_AddStringToObject(payload, "hostname", hostname_.c_str());
-    const std::string ip = WifiManager::GetInstance().GetIpAddress();
-    if (!ip.empty()) {
-        cJSON_AddStringToObject(payload, "ip", ip.c_str());
-    }
-    if (!PublishUp("device.online", "", payload)) {
-        ESP_LOGW(TAG, "device.online publish failed");
-    } else {
-        ESP_LOGI(TAG, "device.online board=%s ip=%s", BOARD_TYPE, ip.c_str());
-    }
-    cJSON_Delete(payload);
-}
-
-void MossConfigService::OnBindHello() {
-    if (!awaiting_hello_ && !bind_mode_) {
-        return;
-    }
-    ESP_LOGI(TAG, "bind.hello received");
-    LeaveBindMode();
-}
-
-void MossConfigService::OnBindClear() {
-    ExtMqttSettings::ClearBound();
-    mqtt_client_.Stop();
-    EnterBindMode();
-}
-
-void MossConfigService::OnConfigSavedStartMqtt() {
-    awaiting_hello_ = true;
-    EnterBindMode();
-    mqtt_client_.Reload();
-}
-
-bool MossConfigService::PublishUp(const std::string& type, const std::string& request_id,
-                                  cJSON* payload) {
-    return mqtt_client_.PublishUp(type, request_id, payload);
 }
 
 void MossConfigService::StartMdns() {
@@ -233,11 +122,4 @@ void MossConfigService::StopMdns() {
     mdns_service_remove("_moss-http", "_tcp");
     mdns_free();
     mdns_started_ = false;
-}
-
-void MossConfigService::HelloTimeoutCallback(void* arg) {
-    auto* self = static_cast<MossConfigService*>(arg);
-    if (self->awaiting_hello_) {
-        ESP_LOGW(TAG, "No bind.hello in 30s, keeping HTTP bind mode");
-    }
 }

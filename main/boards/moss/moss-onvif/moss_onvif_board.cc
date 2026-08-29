@@ -18,6 +18,8 @@
 #include <esp_lcd_st7735.h>
 #include <driver/spi_common.h>
 #include <driver/i2c_master.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <wifi_manager.h>
 
 #define TAG "MossOnvifBoard"
@@ -202,15 +204,21 @@ public:
     }
 
     AudioCodec* GetAudioCodec() override {
-        static BoxAudioCodec audio_codec(
-            i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE,
-            AUDIO_CODEC_INPUT_GAIN,
-            AUDIO_CODEC_REFERENCE_CHANNEL,
-            AUDIO_CODEC_REFERENCE_GAIN);
-        return &audio_codec;
+        static BoxAudioCodec* codec = nullptr;
+        if (codec == nullptr) {
+            if (i2c_bus_) {
+                i2c_master_bus_reset(i2c_bus_);
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            static BoxAudioCodec audio_codec(
+                i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE, AUDIO_I2S_GPIO_MCLK,
+                AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
+                AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
+                AUDIO_INPUT_REFERENCE, AUDIO_CODEC_INPUT_GAIN, AUDIO_CODEC_REFERENCE_CHANNEL,
+                AUDIO_CODEC_REFERENCE_GAIN);
+            codec = &audio_codec;
+        }
+        return codec;
     }
 
     Display* GetDisplay() override { return display_; }

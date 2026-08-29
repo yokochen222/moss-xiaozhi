@@ -36,6 +36,11 @@ class MossBoardIdentityTests(unittest.TestCase):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", append)
 
+    def test_both_boards_enable_device_aec(self):
+        for leaf in ("moss-onvif", "moss-ov2640"):
+            append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
+            self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
+
     def test_partition_tables_differ(self):
         onvif = ROOT / "partitions/moss-desktop-16m.csv"
         ov2640 = ROOT / "partitions/v2/16m_moss_desktop.csv"
@@ -46,6 +51,42 @@ class MossBoardIdentityTests(unittest.TestCase):
         ov_cfg = "\n".join(self._config("moss/moss-ov2640")["builds"][0]["sdkconfig_append"])
         self.assertIn("partitions/moss-desktop-16m.csv", onvif_cfg)
         self.assertIn("partitions/v2/16m_moss_desktop.csv", ov_cfg)
+
+    def test_wake_and_mic_defaults_are_shared(self):
+        shared = (ROOT / "main/boards/moss/moss_shared_audio.h").read_text(encoding="utf-8")
+        self.assertIn("#define AUDIO_CODEC_INPUT_GAIN 37.5f", shared)
+        self.assertIn("#define AUDIO_CODEC_REFERENCE_GAIN 30.0f", shared)
+        self.assertIn("#define AUDIO_CODEC_REFERENCE_CHANNEL 2", shared)
+        for leaf in ("moss-onvif", "moss-ov2640"):
+            header = (ROOT / "main/boards" / f"moss/{leaf}" / "config.h").read_text(encoding="utf-8")
+            self.assertIn('#include "moss_shared_audio.h"', header)
+            self.assertNotIn("#define AUDIO_CODEC_INPUT_GAIN", header)
+            self.assertNotIn("#define AUDIO_CODEC_REFERENCE_GAIN", header)
+            append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
+            self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20", append)
+            self.assertIn('CONFIG_CUSTOM_WAKE_WORD="mo si"', append)
+            self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
+
+    def test_both_boards_pass_shared_codec_gains_not_zero_reference(self):
+        onvif = (ROOT / "main/boards/moss/moss-onvif/moss_onvif_board.cc").read_text(encoding="utf-8")
+        ov2640 = (ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc").read_text(encoding="utf-8")
+        for src in (onvif, ov2640):
+            self.assertIn("AUDIO_CODEC_INPUT_GAIN", src)
+            self.assertIn("AUDIO_CODEC_REFERENCE_CHANNEL", src)
+            self.assertIn("AUDIO_CODEC_REFERENCE_GAIN", src)
+        self.assertNotIn("AUDIO_CODEC_INPUT_GAIN, 2, 0.0f", ov2640)
+
+    def test_apply_wake_word_does_not_touch_codec_volume(self):
+        src = (ROOT / "main/audio/wake_words/custom_wake_word.cc").read_text(encoding="utf-8")
+        start = src.find("bool CustomWakeWord::ApplyConfig")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("bool CustomWakeWord::", start + 1)]
+        if not body.strip():
+            body = src[start:]
+        self.assertIn("SaveStoredConfig", body)
+        self.assertIn("set_det_threshold", body)
+        self.assertNotIn("SetOutputVolume", body)
+        self.assertNotIn("input_gain", body)
 
 
 class MossCmakeSourceIsolationTests(unittest.TestCase):
@@ -76,6 +117,7 @@ class MossCmakeSourceIsolationTests(unittest.TestCase):
         self.assertNotIn("mcp/tools/*.cc", family)
         self.assertIn("config/product.cc", family)
         self.assertIn("mcp/tools/yunxiangji.cc", family)
+        self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/moss", family)
         self.assertNotIn("74hc595_driver.cc", family)
         self.assertNotIn("pca9685_driver.cc", family)
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp/*.cc", self.cmake)
@@ -140,4 +182,185 @@ class BoxAudioCodecTests(unittest.TestCase):
         self.assertNotIn("ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_", body)
         self.assertIn("retry", body)
         self.assertIn("ESP_ERROR_CHECK_WITHOUT_ABORT", body)
+
+
+class MossLanControlPlaneTests(unittest.TestCase):
+    def test_cmake_has_lan_control_sources_and_no_desktop_mqtt_client(self):
+        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
+        for source in (
+            "api/methods/hw/hw_handlers.cc",
+            "api/methods/chat/chat_handlers.cc",
+            "config/moss_chat_log.cc",
+            "config/moss_hw.cc",
+        ):
+            self.assertIn(source, cmake)
+        self.assertNotIn("external_mqtt_client.cc", cmake)
+
+    def test_leave_bind_mode_keeps_http(self):
+        src = (ROOT / "main/config/moss_config_service.cc").read_text(encoding="utf-8")
+        start = src.find("void MossConfigService::LeaveBindMode")
+        self.assertGreater(start, 0)
+        end = src.find("void MossConfigService::StartMdns", start)
+        body = src[start:end]
+        self.assertIn("StartLanServices()", body)
+        self.assertNotIn("Stop(", body)
+        self.assertNotIn("StopMdns", body)
+
+    def test_health_exposes_voice_and_chat_seq_from_ram(self):
+        src = (ROOT / "main/api/methods/config/config_handlers.cc").read_text(encoding="utf-8")
+        start = src.find("esp_err_t HandleHealth")
+        end = src.find("esp_err_t HandleMqttGet", start)
+        body = src[start:end]
+        self.assertIn("voice", body)
+        self.assertIn("chat_seq", body)
+        self.assertIn("CachedMac()", body)
+        self.assertIn("MossChatLog::GetInstance().Seq()", body)
+        self.assertNotIn("ExtMqttSettings::Load()", body)
+
+    def test_chat_and_hw_routes_registered(self):
+        src = (ROOT / "main/api/api.cc").read_text(encoding="utf-8")
+        self.assertIn('add("/hw", HTTP_GET', src)
+        self.assertIn('add("/hw", HTTP_POST', src)
+        self.assertIn('add("/chat/wake", HTTP_POST', src)
+        self.assertIn('add("/chat/say", HTTP_POST', src)
+        self.assertIn('add("/chat/sync", HTTP_GET', src)
+        self.assertIn("max_uri_handlers = 32", src)
+        self.assertIn("max_open_sockets = 7", src)
+
+
+class MossOnvifControlSurfaceTests(unittest.TestCase):
+    def test_onvif_shares_hw_chat_ir_and_does_not_register_camera(self):
+        src = (ROOT / "main/api/api.cc").read_text(encoding="utf-8")
+        start_fn = src.find("bool ApiServer::Start")
+        self.assertGreater(start_fn, 0)
+        start = src[start_fn:]
+        cam_if = start.find("#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640")
+        self.assertGreater(cam_if, 0)
+        shared = start[:cam_if]
+        ov2640 = start[cam_if:]
+        for route in (
+            '"/health"',
+            '"/config/device"',
+            '"/ir/devices"',
+            '"/ir/send"',
+            '"/hw"',
+            '"/chat/wake"',
+            '"/chat/say"',
+            '"/chat/sync"',
+        ):
+            self.assertIn(route, shared, route)
+        for route in ("/camera/stream", "/gimbal/control", "/face_track/control"):
+            self.assertNotIn(route, shared, route)
+            self.assertIn(route, ov2640, route)
+
+    def test_idle_wake_reports_connecting_not_stale_idle(self):
+        src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")
+        start = src.find("esp_err_t HandleChatWake")
+        body = src[start : src.find("esp_err_t HandleChatSay", start)]
+        self.assertIn('reported = "connecting"', body)
+        self.assertIn("kDeviceStateIdle", body)
+        self.assertIn("RequestChatWake", body)
+
+    def test_device_config_brightness_uses_saved_not_idle_zero(self):
+        src = (ROOT / "main/config/device_config.cc").read_text(encoding="utf-8")
+        self.assertIn("SavedBrightness()", src)
+        self.assertNotIn("backlight->brightness()", src)
+        header = (ROOT / "main/boards/common/backlight.h").read_text(encoding="utf-8")
+        self.assertIn("SavedBrightness() const", header)
+
+    def test_device_config_exposes_press_to_talk_and_aec(self):
+        src = (ROOT / "main/config/device_config.cc").read_text(encoding="utf-8")
+        self.assertIn("press_to_talk", src)
+        self.assertIn("local_aec_supported", src)
+        self.assertIn("kNvsPressToTalk", src)
+
+    def test_press_to_talk_button_reads_nvs_not_stale_member(self):
+        src = (ROOT / "main/boards/common/press_to_talk_mcp_tool.cc").read_text(encoding="utf-8")
+        start = src.find("bool PressToTalkMcpTool::IsPressToTalkEnabled")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("\n}", start) + 2]
+        self.assertIn('GetInt("press_to_talk"', body)
+        self.assertNotIn("return press_to_talk_enabled_;", body)
+
+    def test_hw_apply_covers_onvif_peripherals(self):
+        src = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
+        for device in ('"eye"', '"bar"', '"panel"', '"bottom"', '"motor"', '"all"'):
+            self.assertIn(device, src, device)
+        self.assertIn('result.message = "unknown device"', src)
+
+
+class MossBargeInTests(unittest.TestCase):
+    def test_realtime_tts_holds_uplink_instead_of_sending_echo(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        start = src.find("if (bits & MAIN_EVENT_SEND_AUDIO)")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("if (bits & MAIN_EVENT_WAKE_WORD_DETECTED)", start)]
+        speaking = body[body.find("kDeviceStateSpeaking") : body.find("#else")]
+        self.assertIn("HoldSpeakingUplink()", speaking)
+        self.assertIn("UpdateSpeakingBargeIn()", speaking)
+        self.assertNotIn("SendUplinkFromQueue();", speaking)
+
+    def test_vad_during_tts_uses_near_end_energy_not_vad_alone(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        start = src.find("if (bits & MAIN_EVENT_VAD_CHANGE)")
+        self.assertGreater(start, 0)
+        vad = src[start : src.find("if (bits & MAIN_EVENT_VAD_INTERRUPT_CONFIRM)", start)]
+        self.assertIn("UpdateSpeakingBargeIn()", vad)
+        self.assertNotIn("MaybeStartVadInterruptTimer(true)", vad)
+
+        update = src[
+            src.find("void Application::UpdateSpeakingBargeIn") : src.find(
+                "void Application::MaybeStartVadInterruptTimer"
+            )
+        ]
+        self.assertIn("IsLikelyNearEndSpeech()", update)
+        self.assertIn("vad_interrupt_armed_", update)
+        self.assertIn("180 * 1000", update)
+
+    def test_speaking_start_records_guard_clock_and_echo_profile(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        speaking = src[
+            src.find("case kDeviceStateSpeaking:") : src.find("case kDeviceStateWifiConfiguring:")
+        ]
+        self.assertIn("speaking_started_us_ = esp_timer_get_time()", speaking)
+        self.assertIn("ResetEchoProfile()", speaking)
+
+    def test_aec_on_does_not_skip_barge_in_confirm(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        confirm = src[
+            src.find("void Application::HandleVadInterruptConfirm") : src.find(
+                "void Application::HoldSpeakingUplink"
+            )
+        ]
+        self.assertIn("AbortSpeaking", confirm)
+        self.assertIn("IsLikelyNearEndSpeech()", confirm)
+        self.assertNotIn("IsVadBargeInEnabled()", confirm)
+        start_timer = src[
+            src.find("void Application::MaybeStartVadInterruptTimer") : src.find(
+                "void Application::HandleVadInterruptConfirm"
+            )
+        ]
+        self.assertNotIn("IsVadBargeInEnabled()", start_timer)
+        self.assertIn("IsLikelyNearEndSpeech()", start_timer)
+        self.assertIn("kVadInterruptGuardUs = 900 * 1000", start_timer)
+
+    def test_hold_uplink_drops_echo_without_near_end_energy(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        hold = src[
+            src.find("void Application::HoldSpeakingUplink") : src.find(
+                "void Application::FlushBargeInHold"
+            )
+        ]
+        self.assertIn("IsLikelyNearEndSpeech()", hold)
+
+    def test_audio_service_learns_echo_floor_before_barge_in(self):
+        header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
+        src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        self.assertIn("IsLikelyNearEndSpeech()", header)
+        self.assertIn("ResetEchoProfile()", header)
+        self.assertIn("echo_learn_frames_", header)
+        self.assertIn("NotePlaybackPcm", src)
+        self.assertIn("NoteResidualPcm", src)
+        self.assertIn("kEchoLearnFrames", src)
+        self.assertIn("vTaskDelay(pdMS_TO_TICKS(10))", src)
 

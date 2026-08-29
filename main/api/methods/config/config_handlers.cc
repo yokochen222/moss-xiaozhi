@@ -4,12 +4,12 @@
 #include "config/device_config.h"
 #include "config/product.h"
 #include "config/ext_mqtt_config.h"
+#include "config/moss_chat_log.h"
 #include "config/moss_config_service.h"
-#include "system_info.h"
+#include "device_state_machine.h"
 
 #include <cJSON.h>
 #include <chrono>
-#include <esp_app_desc.h>
 #include <functional>
 #include <future>
 #include <wifi_manager.h>
@@ -40,19 +40,23 @@ DeviceConfigResponse RunOnMainThread(std::function<DeviceConfigResponse()> task)
 }  // namespace
 
 esp_err_t HandleHealth(httpd_req_t* req) {
-    auto mqtt = ExtMqttSettings::Load();
+    auto& cfg = MossConfigService::GetInstance();
     cJSON* obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "status", "ok");
     cJSON_AddStringToObject(obj, "name", BOARD_TYPE);
     MossProduct::AddIdentity(obj);
-    cJSON_AddStringToObject(obj, "hostname", MossConfigService::GetInstance().Hostname().c_str());
-    cJSON_AddStringToObject(obj, "instance", MossConfigService::GetInstance().InstanceName().c_str());
+    cJSON_AddStringToObject(obj, "hostname", cfg.Hostname().c_str());
+    cJSON_AddStringToObject(obj, "instance", cfg.InstanceName().c_str());
     cJSON_AddStringToObject(obj, "ip", WifiManager::GetInstance().GetIpAddress().c_str());
-    cJSON_AddStringToObject(obj, "mac", SystemInfo::GetMacAddress().c_str());
-    const esp_app_desc_t* app = esp_app_get_description();
-    cJSON_AddStringToObject(obj, "version", app ? app->version : "");
-    cJSON_AddBoolToObject(obj, "bound", mqtt.bound);
-    cJSON_AddStringToObject(obj, "display_name", mqtt.display_name.c_str());
+    cJSON_AddStringToObject(obj, "mac", cfg.CachedMac().c_str());
+    cJSON_AddStringToObject(obj, "client_id", cfg.CachedClientId().c_str());
+    cJSON_AddStringToObject(obj, "version", cfg.CachedVersion().c_str());
+    cJSON_AddBoolToObject(obj, "bound", true);
+    cJSON_AddStringToObject(obj, "display_name", cfg.CachedDisplayName().c_str());
+    cJSON_AddStringToObject(
+        obj, "voice",
+        DeviceStateMachine::GetStateName(Application::GetInstance().GetDeviceState()));
+    cJSON_AddNumberToObject(obj, "chat_seq", MossChatLog::GetInstance().Seq());
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{}";
@@ -129,11 +133,11 @@ esp_err_t HandleMqttPut(httpd_req_t* req) {
 
     ExtMqttSettings::ApplyTopicDefaults(next);
     ExtMqttSettings::Save(next);
-    MossConfigService::GetInstance().OnConfigSavedStartMqtt();
+    MossConfigService::GetInstance().CacheIdentity();
 
     cJSON* resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "status", "ok");
-    cJSON_AddStringToObject(resp, "message", "saved, connecting cloud channel");
+    cJSON_AddStringToObject(resp, "message", "saved");
     char* printed = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
     std::string out = printed ? printed : "{\"status\":\"ok\"}";

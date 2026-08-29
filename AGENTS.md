@@ -48,6 +48,8 @@ When adding a board or variant, update every relevant link in that chain. Includ
 
 This fork ships two MOSS boards: `moss/moss-onvif` and `moss/moss-ov2640`. Shared desktop-client code is gated by `CONFIG_BOARD_FAMILY_MOSS`. Camera/gimbal/face-track sources compile only for `CONFIG_BOARD_TYPE_MOSS_OV2640`. Do not OTA across their partition tables; first flash uses `erase-flash`. Desktop routing uses the firmware `board` field (`moss-onvif` / `moss-ov2640`), not `product=moss-xiaozhi`.
 
+**Board diff for agents (read before changing either board):** [`docs/moss-boards.md`](docs/moss-boards.md). Aside from gimbal and the onboard camera, user-facing behavior and analog wake/mic defaults must stay identical. Mic gain and AEC reference live in `main/boards/moss/moss_shared_audio.h` — do not fork them in a board `config.h`.
+
 ## Commands
 
 Source the intended ESP-IDF environment first:
@@ -91,6 +93,7 @@ The build script changes local `sdkconfig` and build state. Do not assume the bu
 ## Authoritative Documentation
 
 - Overview and SDK policy: `README.md`
+- **MOSS two-board diff (Agent):** `docs/moss-boards.md`
 - SDK compatibility: `docs/esp-idf-6-migration.md`
 - Board guide: `docs/custom-board.md`
 - Audio design: `main/audio/README.md`

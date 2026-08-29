@@ -173,6 +173,7 @@ private:
     std::deque<std::unique_ptr<AudioStreamPacket>> barge_in_hold_;
     esp_timer_handle_t vad_interrupt_timer_ = nullptr;
     void CancelVadInterruptTimer();
+    void UpdateSpeakingBargeIn();
     void MaybeStartVadInterruptTimer(bool unarmed_path = false);
     void HandleVadInterruptConfirm();
     void HoldSpeakingUplink();

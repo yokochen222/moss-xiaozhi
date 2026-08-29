@@ -8,7 +8,7 @@ GIMBAL_CC = ROOT / "main/device/stepper_gimbal.cc"
 GIMBAL_H = ROOT / "main/device/stepper_gimbal.h"
 OV2640_595 = ROOT / "main/boards/moss/moss-ov2640/drivers/74hc595_driver.cc"
 ONVIF_595 = ROOT / "main/boards/moss/moss-onvif/drivers/74hc595_driver.cc"
-MQTT_CC = ROOT / "main/external_mqtt_client.cc"
+CAMERA_CC = ROOT / "main/api/methods/camera/camera_handlers.cc"
 BOARD_CC = ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc"
 
 
@@ -93,20 +93,16 @@ class GimbalDriverWiringTests(unittest.TestCase):
         self.assertIn("0x1F", text)
         self.assertIn("0xE0", text)
 
-    def test_mqtt_gimbal_runs_inline_and_stop_idles(self):
-        text = MQTT_CC.read_text(encoding="utf-8")
-        self.assertIn("HandleGimbalControl", text)
-        self.assertIn('type == "gimbal.control"', text)
-        gimbal_block = text[text.find("gimbal.control") : text.find("face_track.control")]
-        self.assertIn("HandleGimbalControl(id, payload)", gimbal_block)
-        self.assertNotIn("Application::GetInstance().Schedule", gimbal_block)
+    def test_http_gimbal_runs_inline_and_stop_idles(self):
+        text = CAMERA_CC.read_text(encoding="utf-8")
+        self.assertIn("HandleGimbal", text)
+        self.assertNotIn("Application::GetInstance().Schedule", text)
         self.assertIn("gimbal.Idle()", text)
-        self.assertIn("follow task failed", text)
-        self.assertIn('action == "move"', text)
+        self.assertIn("SetFollowRates", text)
+        self.assertIn("action == \"move\"", text)
         self.assertIn("invalid direction", text)
         self.assertIn("gimbal.Move", text)
         self.assertIn("StepMode::Half, 4", text)
-        self.assertIn("4, StepMode::Half", text)
 
     def test_step_delay_is_not_sliced_to_1ms(self):
         header = GIMBAL_H.read_text(encoding="utf-8")

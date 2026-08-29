@@ -198,7 +198,7 @@ cJSON* BuildJson() {
 
     auto* screen = cJSON_CreateObject();
     if (auto* backlight = board.GetBacklight()) {
-        cJSON_AddNumberToObject(screen, "brightness", backlight->brightness());
+        cJSON_AddNumberToObject(screen, "brightness", backlight->SavedBrightness());
     }
 #ifdef HAVE_LVGL
     if (auto* display = board.GetDisplay(); display && display->GetTheme()) {

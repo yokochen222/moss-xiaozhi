@@ -1,7 +1,9 @@
 #include "audio_service.h"
 #include "audio_codec.h"
-#include <esp_log.h>
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <esp_log.h>
 #include "sdkconfig.h"
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -87,6 +89,7 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_engine_ = std::make_unique<LiteAudioEngine>();
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
+        NoteResidualPcm(data.data(), data.size());
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
     audio_engine_->OnVadStateChange([this](bool speaking) {
@@ -346,9 +349,12 @@ void AudioService::AudioOutputTask() {
             MossDesktopPreparePlayback(codec_);
 #else
             codec_->EnableOutput(true);
+            // Match ov2640: let NS4150B / analog path settle before the first PCM.
+            vTaskDelay(pdMS_TO_TICKS(10));
 #endif
         }
 
+        NotePlaybackPcm(task->pcm.data(), task->pcm.size());
         codec_->OutputData(task->pcm);
 
         /* Update the last output time */
@@ -722,6 +728,111 @@ void AudioService::EnableAudioTesting(bool enable) {
     }
 }
 
+namespace {
+constexpr int kEchoFloorInit = 250;
+constexpr int kQuietPlayback = 45;
+constexpr int kMinNearEndAbs = 200;
+constexpr int kPauseNearEndAbs = 260;
+constexpr int kPlaybackStaleUs = 80 * 1000;
+constexpr int kEchoLearnFrames = 16;  // ~1s of 60ms AFE frames during TTS onset
+}  // namespace
+
+int AudioService::PcmMeanAbs(const int16_t* data, size_t samples) {
+    if (data == nullptr || samples == 0) {
+        return 0;
+    }
+    uint64_t sum = 0;
+    for (size_t i = 0; i < samples; ++i) {
+        int v = data[i];
+        sum += static_cast<uint64_t>(v < 0 ? -v : v);
+    }
+    return static_cast<int>(sum / samples);
+}
+
+int AudioService::EffectivePlaybackLevel() const {
+    const int64_t last = last_playback_us_.load(std::memory_order_relaxed);
+    if (last <= 0) {
+        return 0;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (now - last > kPlaybackStaleUs) {
+        return 0;
+    }
+    return playback_level_.load(std::memory_order_relaxed);
+}
+
+int AudioService::PlaybackLevel() const { return EffectivePlaybackLevel(); }
+
+int AudioService::ResidualLevel() const { return residual_level_.load(std::memory_order_relaxed); }
+
+void AudioService::ResetEchoProfile() {
+    playback_level_.store(0, std::memory_order_relaxed);
+    residual_level_.store(0, std::memory_order_relaxed);
+    echo_floor_.store(kEchoFloorInit, std::memory_order_relaxed);
+    echo_learn_frames_.store(kEchoLearnFrames, std::memory_order_relaxed);
+    last_playback_us_.store(0, std::memory_order_relaxed);
+}
+
+void AudioService::NotePlaybackPcm(const int16_t* data, size_t samples) {
+    const int level = PcmMeanAbs(data, samples);
+    const int prev = playback_level_.load(std::memory_order_relaxed);
+    playback_level_.store((prev * 3 + level) / 4, std::memory_order_relaxed);
+    last_playback_us_.store(esp_timer_get_time(), std::memory_order_relaxed);
+}
+
+void AudioService::AdaptEchoFloor(int playback, int residual) {
+    if (playback < kQuietPlayback) {
+        return;
+    }
+    int floor = echo_floor_.load(std::memory_order_relaxed);
+    int learn = echo_learn_frames_.load(std::memory_order_relaxed);
+    if (learn > 0) {
+        // TTS onset: AEC has not converged. Track peak residual as the echo floor
+        // so a loud PA cannot look like barge-in after the start guard.
+        echo_learn_frames_.store(learn - 1, std::memory_order_relaxed);
+        if (residual > floor) {
+            floor = residual;
+        }
+        echo_floor_.store(std::max(floor, kEchoFloorInit), std::memory_order_relaxed);
+        return;
+    }
+    if (residual > floor + floor) {
+        return;
+    }
+    if (residual >= floor) {
+        floor = (floor * 7 + residual) / 8;
+    } else {
+        floor = (floor * 3 + residual) / 4;
+    }
+    if (floor < 40) {
+        floor = 40;
+    }
+    echo_floor_.store(floor, std::memory_order_relaxed);
+}
+
+void AudioService::NoteResidualPcm(const int16_t* data, size_t samples) {
+    const int level = PcmMeanAbs(data, samples);
+    const int prev = residual_level_.load(std::memory_order_relaxed);
+    const int ema = (prev * 2 + level) / 3;
+    residual_level_.store(ema, std::memory_order_relaxed);
+    AdaptEchoFloor(EffectivePlaybackLevel(), ema);
+}
+
+bool AudioService::IsLikelyNearEndSpeech() const {
+    const int residual = residual_level_.load(std::memory_order_relaxed);
+    if (residual < kMinNearEndAbs) {
+        return false;
+    }
+    const int playback = EffectivePlaybackLevel();
+    if (playback < kQuietPlayback) {
+        return residual >= kPauseNearEndAbs;
+    }
+    const int floor = echo_floor_.load(std::memory_order_relaxed);
+    // Need ~6 dB above the learned echo floor while TTS is actually playing.
+    const int need = floor + std::max(floor / 2, 160);
+    return residual >= need;
+}
+
 void AudioService::EnableDeviceAec(bool enable) {
     ESP_LOGI(TAG, "%s device AEC", enable ? "Enabling" : "Disabling");
     device_aec_enabled_ = enable;
@@ -743,6 +854,7 @@ void AudioService::PlaySound(const std::string_view& ogg) {
         MossDesktopPreparePlayback(codec_);
 #else
         codec_->EnableOutput(true);
+        vTaskDelay(pdMS_TO_TICKS(10));
 #endif
     }
 

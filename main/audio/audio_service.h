@@ -117,6 +117,12 @@ public:
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
     bool IsVoiceDetected() const { return voice_detected_; }
+    // True when post-AEC mic energy is clearly above the learned TTS echo floor.
+    // Used so speaker leak cannot barge-in; VAD alone is not enough on loud PA boards.
+    bool IsLikelyNearEndSpeech() const;
+    void ResetEchoProfile();
+    int PlaybackLevel() const;
+    int ResidualLevel() const;
     bool IsIdle();
     bool IsPlaybackIdle();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
@@ -187,6 +193,11 @@ private:
 
     bool audio_engine_initialized_ = false;
     bool voice_detected_ = false;
+    std::atomic<int> playback_level_{0};
+    std::atomic<int> residual_level_{0};
+    std::atomic<int> echo_floor_{250};
+    std::atomic<int> echo_learn_frames_{0};
+    std::atomic<int64_t> last_playback_us_{0};
 #if CONFIG_USE_DEVICE_AEC
     bool device_aec_enabled_ = true;
 #else
@@ -208,6 +219,11 @@ private:
     void CheckAndUpdateAudioPowerState();
     bool IsPlaybackDrainedLocked() const;
     bool MarkPlaybackDrainedLocked();
+    static int PcmMeanAbs(const int16_t* data, size_t samples);
+    int EffectivePlaybackLevel() const;
+    void NotePlaybackPcm(const int16_t* data, size_t samples);
+    void NoteResidualPcm(const int16_t* data, size_t samples);
+    void AdaptEchoFloor(int playback, int residual);
 };
 
 #endif

@@ -3,6 +3,9 @@
 板载 OV2640 DVP 摄像头的 MOSS 桌面助手板。固件身份：`type`/`name`/`board` = `moss-ov2640`。
 moss-desktop 按该板名走局域网 `:5500/camera`、云台与人脸追踪。
 
+与 `moss-onvif` 的差异（仅云台/摄像头/布线/分区；唤醒与 MIC 必须一致）见
+**[docs/moss-boards.md](../../../../docs/moss-boards.md)**。
+
 ## 硬件资源
 
 - **主控**：ESP32-S3

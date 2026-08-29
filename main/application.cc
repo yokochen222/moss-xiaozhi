@@ -273,7 +273,8 @@ void Application::Run() {
             if (state == kDeviceStateSpeaking) {
 #if CONFIG_ENABLE_VAD_INTERRUPT
                 if (listening_mode_ == kListeningModeRealtime) {
-                    SendUplinkFromQueue();
+                    HoldSpeakingUplink();
+                    UpdateSpeakingBargeIn();
                 } else {
                     while (audio_service_.PopPacketFromSendQueue())
                         ;
@@ -303,6 +304,12 @@ void Application::Run() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            if (GetDeviceState() == kDeviceStateSpeaking &&
+                listening_mode_ == kListeningModeRealtime) {
+                UpdateSpeakingBargeIn();
+            }
+#endif
         }
 
 #if CONFIG_ENABLE_VAD_INTERRUPT
@@ -655,7 +662,11 @@ void Application::InitializeProtocol() {
                     audio_service_.ResetDecoder();
                     if (auto* codec = Board::GetInstance().GetAudioCodec();
                         codec != nullptr && !codec->output_enabled()) {
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
                         MossDesktopPreparePlayback(codec);
+#else
+                        codec->EnableOutput(true);
+#endif
                     }
                     SetDeviceState(kDeviceStateSpeaking);
                 });
@@ -696,7 +707,11 @@ void Application::InitializeProtocol() {
                         }
                         if (auto* codec = Board::GetInstance().GetAudioCodec();
                             codec != nullptr && !codec->output_enabled()) {
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
                             MossDesktopPreparePlayback(codec);
+#else
+                            codec->EnableOutput(true);
+#endif
                         }
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
@@ -1113,6 +1128,11 @@ void Application::HandleStateChangedEvent() {
         }
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
+#if CONFIG_ENABLE_VAD_INTERRUPT
+            speaking_started_us_ = esp_timer_get_time();
+            last_tts_sentence_us_ = speaking_started_us_;
+            audio_service_.ResetEchoProfile();
+#endif
 
             if (listening_mode_ != kListeningModeRealtime) {
                 // Half duplex (local AEC off): mute uplink during TTS. Do not arm
@@ -1145,15 +1165,46 @@ void Application::CancelVadInterruptTimer() {
     }
 }
 
-void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
-    if (IsVadBargeInEnabled()) {
+void Application::UpdateSpeakingBargeIn() {
+    if (GetDeviceState() != kDeviceStateSpeaking ||
+        listening_mode_ != kListeningModeRealtime) {
         return;
     }
-    constexpr int64_t kVadInterruptGuardUs = 500 * 1000;
+
+    const bool speech = audio_service_.IsVoiceDetected();
+    const bool near_end = audio_service_.IsLikelyNearEndSpeech();
+    const int64_t now = esp_timer_get_time();
+
+    if (!speech) {
+        CancelVadInterruptTimer();
+        if (vad_silence_started_us_ == 0) {
+            vad_silence_started_us_ = now;
+        }
+        // A real barge-in usually starts after a pause. Echo from a loud PA
+        // keeps VAD in SPEECH the whole TTS, so this arm never latches.
+        if (now - vad_silence_started_us_ >= 180 * 1000) {
+            vad_interrupt_armed_ = true;
+        }
+        return;
+    }
+
+    vad_silence_started_us_ = 0;
+    if (!near_end) {
+        CancelVadInterruptTimer();
+        return;
+    }
+    MaybeStartVadInterruptTimer(!vad_interrupt_armed_);
+}
+
+void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
+    constexpr int64_t kVadInterruptGuardUs = 900 * 1000;
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
     if (audio_service_.IsPlaybackIdle()) {
+        return;
+    }
+    if (!audio_service_.IsLikelyNearEndSpeech()) {
         return;
     }
     if (vad_interrupt_timer_ == nullptr) {
@@ -1169,8 +1220,8 @@ void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
         extra_guard_us = kVadInterruptGuardUs - elapsed;
     }
 
-    // Echo spikes often follow a new TTS sentence; defer confirm briefly.
-    constexpr int64_t kPostTtsSentenceGuardUs = 350 * 1000;
+    // Echo spikes often follow a new TTS sentence; AEC also re-adapts here.
+    constexpr int64_t kPostTtsSentenceGuardUs = 450 * 1000;
     const int64_t since_sentence_us = esp_timer_get_time() - last_tts_sentence_us_;
     if (since_sentence_us < kPostTtsSentenceGuardUs) {
         extra_guard_us = std::max(extra_guard_us, kPostTtsSentenceGuardUs - since_sentence_us);
@@ -1182,30 +1233,33 @@ void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
     }
 
     // Armed: user spoke after a pause. Unarmed: talking over ongoing TTS.
-    int64_t sustain_ms = unarmed_path ? 520 : 420;
+    int64_t sustain_ms = unarmed_path ? 850 : 380;
     if (volume >= 80) {
-        sustain_ms = unarmed_path ? 720 : 580;
+        sustain_ms = unarmed_path ? 1050 : 480;
     } else if (volume >= 60) {
-        sustain_ms = unarmed_path ? 620 : 500;
+        sustain_ms = unarmed_path ? 950 : 420;
     }
 
-    ESP_LOGI(TAG, "VAD barge-in candidate (%s, vol=%d), confirming in %d ms",
-             unarmed_path ? "overlap" : "armed", volume,
-             (int)(sustain_ms + extra_guard_us / 1000));
+    ESP_LOGI(TAG, "VAD barge-in candidate (%s, vol=%d pb=%d res=%d), confirming in %d ms",
+             unarmed_path ? "overlap" : "armed", volume, audio_service_.PlaybackLevel(),
+             audio_service_.ResidualLevel(), (int)(sustain_ms + extra_guard_us / 1000));
     esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000 + extra_guard_us);
 }
 
 void Application::HandleVadInterruptConfirm() {
-    if (IsVadBargeInEnabled()) {
-        return;
-    }
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
     if (!audio_service_.IsVoiceDetected() || audio_service_.IsPlaybackIdle()) {
         return;
     }
-    ESP_LOGI(TAG, "VAD barge-in confirmed");
+    if (!audio_service_.IsLikelyNearEndSpeech()) {
+        ESP_LOGI(TAG, "VAD barge-in dropped (echo: pb=%d res=%d)", audio_service_.PlaybackLevel(),
+                 audio_service_.ResidualLevel());
+        return;
+    }
+    ESP_LOGI(TAG, "VAD barge-in confirmed (pb=%d res=%d)", audio_service_.PlaybackLevel(),
+             audio_service_.ResidualLevel());
     AbortSpeaking(kAbortReasonVadInterrupt);
     // Stop TTS immediately; keep send-queue pre-roll for ASR onset.
     audio_service_.ResetDecoder();
@@ -1214,11 +1268,13 @@ void Application::HandleVadInterruptConfirm() {
 }
 
 void Application::HoldSpeakingUplink() {
-    // Keep recent near-end frames locally. Echo-only (VAD silent) is dropped
-    // so a normal TTS stop cannot be ASR'd as the user.
+    // Keep recent near-end frames locally. Echo-only is dropped so a normal
+    // TTS stop cannot be ASR'd as the user.
     constexpr size_t kBargeInHoldMaxPackets = 34;
+    const bool near_end =
+        audio_service_.IsVoiceDetected() && audio_service_.IsLikelyNearEndSpeech();
     while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-        if (!audio_service_.IsVoiceDetected()) {
+        if (!near_end) {
             continue;
         }
         barge_in_hold_.push_back(std::move(packet));

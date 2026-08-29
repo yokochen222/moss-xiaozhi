@@ -29,7 +29,9 @@ void PressToTalkMcpTool::Initialize() {
 }
 
 bool PressToTalkMcpTool::IsPressToTalkEnabled() const {
-    return press_to_talk_enabled_;
+    // Always read NVS so GET/PUT /config/device takes effect without reboot.
+    Settings settings("vendor");
+    return settings.GetInt("press_to_talk", 0) != 0;
 }
 
 ReturnValue PressToTalkMcpTool::HandleSetPressToTalk(const PropertyList& properties) {

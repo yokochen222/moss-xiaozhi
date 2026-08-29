@@ -14,6 +14,7 @@ public:
 
     void RestoreBrightness();
     void SetBrightness(uint8_t brightness, bool permanent = false);
+    uint8_t SavedBrightness() const;
     inline uint8_t brightness() const { return brightness_; }
 
 protected:
