@@ -1,5 +1,6 @@
 #include "face_tracker.h"
 
+#include "application.h"
 #include "device/stepper_gimbal.h"
 #include "human_face_detect.hpp"
 #include "sdkconfig.h"
@@ -73,23 +74,49 @@ bool FaceTracker::PauseForExternalCameraUse() {
     return true;
 }
 
+static bool VoicePipelineBusy() {
+    const auto state = Application::GetInstance().GetDeviceState();
+    return state == kDeviceStateSpeaking || state == kDeviceStateConnecting;
+}
+
+bool FaceTracker::ResumeTrackingCameraLocked() {
+    if (camera_ && !camera_->AcquireTracking()) {
+        ESP_LOGE(TAG, "Failed to re-acquire camera after photo; stopping tracker");
+        stop_requested_ = true;
+        paused_ = false;
+        status_.paused = false;
+        return false;
+    }
+    paused_ = false;
+    status_.paused = false;
+    ESP_LOGI(TAG, "Resumed after external camera use");
+    return true;
+}
+
 void FaceTracker::ResumeAfterExternalCameraUse() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!resume_after_photo_ || !running_) {
         resume_after_photo_ = false;
         return;
     }
-    resume_after_photo_ = false;
-    if (camera_ && !camera_->AcquireTracking()) {
-        ESP_LOGE(TAG, "Failed to re-acquire camera after photo; stopping tracker");
-        stop_requested_ = true;
-        paused_ = false;
-        status_.paused = false;
+    if (VoicePipelineBusy()) {
+        ESP_LOGI(TAG, "Defer face-track resume until voice idle");
         return;
     }
-    paused_ = false;
-    status_.paused = false;
-    ESP_LOGI(TAG, "Resumed after external camera use");
+    resume_after_photo_ = false;
+    ResumeTrackingCameraLocked();
+}
+
+void FaceTracker::TryResumeAfterVoiceIdle() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!resume_after_photo_ || !running_ || !paused_) {
+        return;
+    }
+    if (VoicePipelineBusy()) {
+        return;
+    }
+    resume_after_photo_ = false;
+    ResumeTrackingCameraLocked();
 }
 
 bool FaceTracker::EnsureDetector() {
@@ -465,9 +492,6 @@ void FaceTracker::TaskLoop() {
     bool caps = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (camera_ && camera_->IsTrackingAcquired()) {
-            camera_->ReleaseTracking();
-        }
         ReleaseDetector();
         ReleasePreviewBuffer();
         ReleaseDetectBuffer();
@@ -590,10 +614,12 @@ bool FaceTracker::Start() {
 
 bool FaceTracker::Stop() {
     UiHook stop_ui;
+    FaceTrackCamera* cam = nullptr;
     bool was_running = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stop_ui = on_stop_ui_;
+        cam = camera_;
         was_running = running_;
         if (running_) {
             stop_requested_ = true;
@@ -603,11 +629,23 @@ bool FaceTracker::Stop() {
     }
     if (was_running) {
         StepperGimbalDevice::GetInstance().Stop();
+        for (int i = 0; i < 80; ++i) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (!frame_in_flight_) {
+                    break;
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(25));
+        }
         for (int i = 0; i < 100 && IsRunning(); ++i) {
             vTaskDelay(pdMS_TO_TICKS(50));
         }
         if (IsRunning()) {
             ESP_LOGW(TAG, "Track task did not exit in time");
+        }
+        if (cam && cam->IsTrackingAcquired()) {
+            cam->ReleaseTracking();
         }
     }
     if (stop_ui) {

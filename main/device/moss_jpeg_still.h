@@ -17,6 +17,10 @@ constexpr int kAeSettleMinMs = 1200;
 constexpr int kAeSettleMaxMs = 2400;
 constexpr int kAeSettleMinFrames = 12;
 constexpr int kStableStreak = 4;
+constexpr int kVoiceAeSettleMinMs = 500;
+constexpr int kVoiceAeSettleMaxMs = 1400;
+constexpr int kVoiceAeSettleMinFrames = 6;
+constexpr int kVoiceStableStreak = 3;
 constexpr int kStillSettleFrameDelayMs = 33;
 constexpr int kLenStablePct = 8;
 constexpr int kMinCompleteJpegBytes = 128;
@@ -86,7 +90,8 @@ struct SettleState {
 
 enum class SettleEvent { Progress, Ready, Failed };
 
-inline SettleEvent OnFrame(SettleState& st, bool complete, size_t len, int elapsed_ms) {
+inline SettleEvent OnFrameWithPolicy(SettleState& st, bool complete, size_t len, int elapsed_ms,
+                                     int min_ms, int max_ms, int min_frames, int stable_streak) {
     st.frames++;
     if (complete) {
         if (LenStable(st.last_len, len)) {
@@ -99,14 +104,23 @@ inline SettleEvent OnFrame(SettleState& st, bool complete, size_t len, int elaps
         st.streak = 0;
     }
 
-    if (elapsed_ms >= kAeSettleMinMs && st.frames >= kAeSettleMinFrames &&
-        st.streak >= kStableStreak) {
+    if (elapsed_ms >= min_ms && st.frames >= min_frames && st.streak >= stable_streak) {
         return SettleEvent::Ready;
     }
-    if (elapsed_ms >= kAeSettleMaxMs) {
+    if (elapsed_ms >= max_ms) {
         return (st.last_len > 0 && st.streak >= 2) ? SettleEvent::Ready : SettleEvent::Failed;
     }
     return SettleEvent::Progress;
+}
+
+inline SettleEvent OnFrame(SettleState& st, bool complete, size_t len, int elapsed_ms) {
+    return OnFrameWithPolicy(st, complete, len, elapsed_ms, kAeSettleMinMs, kAeSettleMaxMs,
+                             kAeSettleMinFrames, kStableStreak);
+}
+
+inline SettleEvent OnFrameVoice(SettleState& st, bool complete, size_t len, int elapsed_ms) {
+    return OnFrameWithPolicy(st, complete, len, elapsed_ms, kVoiceAeSettleMinMs, kVoiceAeSettleMaxMs,
+                             kVoiceAeSettleMinFrames, kVoiceStableStreak);
 }
 
 }  // namespace moss_jpeg_still

@@ -1,5 +1,6 @@
 #include "application.h"
 #include "assets/lang_config.h"
+#include "audio_codec.h"
 #include "audio_scope.h"
 #include "backlight.h"
 #include "button.h"
@@ -37,6 +38,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 
 #define TAG "MossOv2640Board"
 
@@ -129,17 +131,14 @@ public:
                 ok = false;
             } else {
                 ok = true;
-                if (own_session && camera_->IsInitialized() && !camera_->ReleaseSensorKeepJpeg()) {
-                    ESP_LOGW(TAG, "Park JPEG failed; keep DVP until Explain");
+                if (own_session) {
+                    ResumeLcdAfterDvp();
                 }
             }
         }
         if (own_session) {
             if (!ok) {
                 FaceTracker::GetInstance().ResumeAfterExternalCameraUse();
-                ResumeLcdAfterDvp();
-            } else if (camera_ && !camera_->IsInitialized()) {
-                // JPEG parked, DVP free. Keep tracker paused until Explain.
                 ResumeLcdAfterDvp();
             }
         }
@@ -171,17 +170,36 @@ public:
     }
 
     std::string Explain(const std::string& question) override {
-        Esp32Camera* cam = nullptr;
+        std::vector<uint8_t> parked;
+        std::string explain_url;
+        std::string explain_token;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!camera_) {
+            if (!explain_jpeg_.empty()) {
+                parked.swap(explain_jpeg_);
+                explain_url = explain_url_;
+                explain_token = explain_token_;
+            } else if (!camera_) {
                 throw std::runtime_error("Camera not started");
             }
-            cam = camera_.get();
         }
 
         try {
-            std::string result = cam->Explain(question);
+            std::string result;
+            if (!parked.empty()) {
+                result = Esp32Camera::ExplainJpegUpload(explain_url, explain_token, parked.data(),
+                                                        parked.size(), question);
+            } else {
+                Esp32Camera* cam = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    cam = camera_.get();
+                }
+                if (!cam) {
+                    throw std::runtime_error("Camera not started");
+                }
+                result = cam->Explain(question);
+            }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (!stream_acquired_) {
@@ -194,6 +212,7 @@ public:
         } catch (...) {
             {
                 std::lock_guard<std::mutex> lock(mutex_);
+                explain_jpeg_.clear();
                 if (!stream_acquired_) {
                     ReleaseLocked();
                 }
@@ -372,7 +391,17 @@ public:
                 return nullptr;
             }
         }
-        return esp_camera_fb_get();
+        camera_fb_t* fb = esp_camera_fb_get();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!tracking_acquired_) {
+                if (fb) {
+                    esp_camera_fb_return(fb);
+                }
+                return nullptr;
+            }
+        }
+        return fb;
     }
 
     void ReturnTrackingFrame(camera_fb_t* fb) override {
@@ -412,9 +441,22 @@ private:
             cfg.fb_location = CAMERA_FB_IN_PSRAM;
             cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
             cfg.xclk_freq_hz = moss_jpeg_still::kStillXclkHz;
-            const framesize_t still_sizes[] = {FRAMESIZE_SXGA, FRAMESIZE_SVGA, FRAMESIZE_VGA};
+            const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+            const bool compact = VoiceBusy() || largest_dma < 16384;
+            const framesize_t still_sizes_compact[] = {FRAMESIZE_QVGA, FRAMESIZE_HVGA};
+            const framesize_t still_sizes_full[] = {FRAMESIZE_SXGA, FRAMESIZE_SVGA, FRAMESIZE_VGA};
+            const framesize_t* still_sizes =
+                compact ? still_sizes_compact : still_sizes_full;
+            const size_t still_count =
+                compact ? sizeof(still_sizes_compact) / sizeof(still_sizes_compact[0])
+                        : sizeof(still_sizes_full) / sizeof(still_sizes_full[0]);
+            if (compact) {
+                cfg.fb_count = 1;
+                ESP_LOGI(TAG, "Still capture compact mode (voice=%d largest_dma=%u)",
+                         VoiceBusy() ? 1 : 0, (unsigned)largest_dma);
+            }
             bool inited = false;
-            for (size_t i = 0; i < sizeof(still_sizes) / sizeof(still_sizes[0]); ++i) {
+            for (size_t i = 0; i < still_count; ++i) {
                 if (i > 0) {
                     camera_.reset();
                     PulseDvpReset();
@@ -446,7 +488,7 @@ private:
             } else {
                 ESP_LOGW(TAG, "Vision explain URL not set yet; Capture ok but Explain may fail");
             }
-            vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(VoiceBusy() ? 400 : 200));
             DrainWarmupFramesLocked(false);
             return true;
         }
@@ -496,9 +538,17 @@ private:
         if (!tracking_acquired_) {
             return;
         }
-        ESP_LOGI(TAG, "Tracking OV2640 stop (free DVP DMA)");
-        esp_camera_deinit();
         tracking_acquired_ = false;
+        ESP_LOGI(TAG, "Tracking OV2640 stop (free DVP DMA)");
+        for (int i = 0; i < 8; ++i) {
+            camera_fb_t* fb = esp_camera_fb_get();
+            if (!fb) {
+                break;
+            }
+            esp_camera_fb_return(fb);
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        esp_camera_deinit();
         PulseDvpReset();
     }
 
@@ -580,17 +630,27 @@ private:
     }
 
     bool CaptureJpegUnderBudgetLocked() {
-        DiscardPostSettleFramesLocked(3);
-        if (!camera_->Capture()) {
+        DiscardPostSettleFramesLocked(1);
+        if (!camera_->CaptureExplainStill()) {
             return false;
         }
         if (!camera_->EncodeAndParkJpeg(static_cast<size_t>(moss_jpeg_still::kExplainJpegMaxBytes))) {
             ESP_LOGE(TAG, "SW JPEG encode/park failed");
             return false;
         }
-        ESP_LOGI(TAG, "Explain JPEG %u bytes (budget=%d)",
-                 (unsigned)camera_->CapturedJpegLen(), moss_jpeg_still::kExplainJpegMaxBytes);
-        return moss_jpeg_still::WithinBudget(camera_->CapturedJpegLen());
+        if (!camera_->ExportParkedJpeg(explain_jpeg_)) {
+            ESP_LOGE(TAG, "Export parked JPEG failed");
+            return false;
+        }
+        ESP_LOGI(TAG, "Explain JPEG %u bytes (budget=%d)", (unsigned)explain_jpeg_.size(),
+                 moss_jpeg_still::kExplainJpegMaxBytes);
+        if (!moss_jpeg_still::WithinBudget(explain_jpeg_.size())) {
+            explain_jpeg_.clear();
+            return false;
+        }
+        camera_.reset();
+        PulseDvpReset();
+        return true;
     }
 
     void DrainStillSettleLocked() {
@@ -616,7 +676,9 @@ private:
             } else {
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
-            const auto ev = moss_jpeg_still::OnFrame(st, complete, len, elapsed_ms);
+            const auto ev = VoiceBusy()
+                                ? moss_jpeg_still::OnFrameVoice(st, complete, len, elapsed_ms)
+                                : moss_jpeg_still::OnFrame(st, complete, len, elapsed_ms);
             if (ev == moss_jpeg_still::SettleEvent::Ready) {
                 ESP_LOGI(TAG, "JPEG settled frames=%d streak=%d len=%u ms=%d", st.frames, st.streak,
                          (unsigned)st.last_len, elapsed_ms);
@@ -677,6 +739,7 @@ private:
 
     camera_config_t config_{};
     std::unique_ptr<Esp32Camera> camera_;
+    std::vector<uint8_t> explain_jpeg_;
     std::string explain_url_;
     std::string explain_token_;
     mutable std::mutex mutex_;

@@ -217,32 +217,99 @@ bool Esp32Camera::Capture() {
     return true;
 }
 
+bool Esp32Camera::CaptureExplainStill() {
+    jpeg_parked_len_ = 0;
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
+
+    if (!streaming_on_) {
+        return false;
+    }
+
+    constexpr int warmup = 2;
+    constexpr int max_attempts = 8;
+    int got_warmup = 0;
+    if (current_fb_) {
+        esp_camera_fb_return(current_fb_);
+        current_fb_ = nullptr;
+    }
+
+    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        if (current_fb_) {
+            esp_camera_fb_return(current_fb_);
+            current_fb_ = nullptr;
+        }
+        current_fb_ = esp_camera_fb_get();
+        if (!current_fb_) {
+            ESP_LOGE(TAG, "Camera capture failed");
+            return false;
+        }
+
+        if (got_warmup < warmup) {
+            got_warmup++;
+            continue;
+        }
+
+        if (current_fb_->format == PIXFORMAT_RGB565) {
+            if (!moss_jpeg_still::RgbLooksComplete(current_fb_->len, current_fb_->width,
+                                                   current_fb_->height)) {
+                ESP_LOGW(TAG, "Drop short RGB565 len=%u %dx%d", (unsigned)current_fb_->len,
+                         current_fb_->width, current_fb_->height);
+                continue;
+            }
+        } else if (current_fb_->format == PIXFORMAT_JPEG) {
+            if (!moss_jpeg_still::LooksComplete(current_fb_->buf, current_fb_->len)) {
+                continue;
+            }
+        }
+        break;
+    }
+
+    if (!current_fb_) {
+        ESP_LOGE(TAG, "No valid frame");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Captured frame: %dx%d, len=%u, format=%d", current_fb_->width,
+             current_fb_->height, (unsigned)current_fb_->len, current_fb_->format);
+    return true;
+}
+
 bool Esp32Camera::ReleaseSensorKeepJpeg() {
     if (!streaming_on_ || current_fb_ == nullptr || current_fb_->format != PIXFORMAT_JPEG ||
         current_fb_->buf == nullptr || current_fb_->len < 128) {
         return false;
     }
     const size_t len = current_fb_->len;
-    if (encode_buf_size_ < len) {
-        if (encode_buf_) {
-            heap_caps_free(encode_buf_);
-            encode_buf_ = nullptr;
-            encode_buf_size_ = 0;
-        }
-        encode_buf_ = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (encode_buf_ == nullptr) {
-            ESP_LOGE(TAG, "Failed to park JPEG (%u bytes)", (unsigned)len);
-            return false;
-        }
-        encode_buf_size_ = len;
+    if (encode_buf_) {
+        heap_caps_free(encode_buf_);
+        encode_buf_ = nullptr;
+        encode_buf_size_ = 0;
     }
+    encode_buf_ = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (encode_buf_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to park JPEG (%u bytes)", (unsigned)len);
+        return false;
+    }
+    encode_buf_size_ = len;
     memcpy(encode_buf_, current_fb_->buf, len);
     jpeg_parked_len_ = len;
     esp_camera_fb_return(current_fb_);
     current_fb_ = nullptr;
-    esp_camera_deinit();
-    streaming_on_ = false;
-    ESP_LOGI(TAG, "DVP released, JPEG parked len=%u", (unsigned)len);
+    ESP_LOGI(TAG, "JPEG parked len=%u (DVP release deferred)", (unsigned)len);
+    return true;
+}
+
+bool Esp32Camera::ExportParkedJpeg(std::vector<uint8_t>& out) {
+    if (jpeg_parked_len_ == 0 || encode_buf_ == nullptr) {
+        return false;
+    }
+    out.assign(encode_buf_, encode_buf_ + jpeg_parked_len_);
+    heap_caps_free(encode_buf_);
+    encode_buf_ = nullptr;
+    encode_buf_size_ = 0;
+    jpeg_parked_len_ = 0;
     return true;
 }
 
@@ -343,26 +410,16 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
         return false;
     }
 
-    // Sensor-native RGB565BE. encode_buf_ may already be swapped for LVGL.
-    uint8_t* rgb = static_cast<uint8_t*>(
-        heap_caps_malloc(src_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    uint8_t* rgb =
+        static_cast<uint8_t*>(heap_caps_malloc(src_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (rgb == nullptr) {
         ESP_LOGE(TAG, "Failed to copy RGB565 for SW JPEG");
         return false;
     }
     memcpy(rgb, current_fb_->buf, src_len);
-    // OV2640 DVP is RGB565BE (same as face detect). image_to_jpeg RGB565 is LE.
     SwapRgb565BeToLe(rgb, src_len);
-
     esp_camera_fb_return(current_fb_);
     current_fb_ = nullptr;
-    esp_camera_deinit();
-    streaming_on_ = false;
-    if (encode_buf_) {
-        heap_caps_free(encode_buf_);
-        encode_buf_ = nullptr;
-        encode_buf_size_ = 0;
-    }
 
     uint16_t enc_w = w;
     uint16_t enc_h = h;
@@ -429,6 +486,11 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
         jpeg_parked_len_ = 0;
         return false;
     }
+    if (encode_buf_) {
+        heap_caps_free(encode_buf_);
+        encode_buf_ = nullptr;
+        encode_buf_size_ = 0;
+    }
     encode_buf_ = static_cast<uint8_t*>(heap_caps_malloc(jpeg_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (encode_buf_ == nullptr) {
         free(jpeg);
@@ -440,8 +502,8 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
     free(jpeg);
     encode_buf_size_ = jpeg_len;
     jpeg_parked_len_ = jpeg_len;
-    ESP_LOGI(TAG, "DVP released, SW JPEG parked %dx%d len=%u quality=%d", (int)enc_w, (int)enc_h,
-             (unsigned)jpeg_len, used_q);
+    ESP_LOGI(TAG, "SW JPEG parked %dx%d len=%u quality=%d (DVP release deferred)", (int)enc_w,
+             (int)enc_h, (unsigned)jpeg_len, used_q);
     return true;
 }
 
@@ -468,6 +530,121 @@ bool Esp32Camera::SetSwapBytes(bool enabled) {
     return true;
 }
 
+std::string Esp32Camera::ExplainJpegUpload(const std::string& url, const std::string& token,
+                                           const uint8_t* jpeg_data, size_t jpeg_len,
+                                           const std::string& question) {
+    if (url.empty()) {
+        throw std::runtime_error("Image explain URL or token is not set");
+    }
+    if (jpeg_data == nullptr || jpeg_len == 0) {
+        throw std::runtime_error("No camera frame captured");
+    }
+
+    QueueHandle_t jpeg_queue = xQueueCreate(40, sizeof(JpegChunk));
+    if (jpeg_queue == nullptr) {
+        ESP_LOGE(TAG, "Failed to create JPEG queue");
+        throw std::runtime_error("Failed to create JPEG queue");
+    }
+
+    ESP_LOGI(TAG, "JPEG passthrough upload, len=%u", (unsigned)jpeg_len);
+    JpegChunk chunk = {.data = nullptr, .len = jpeg_len};
+    chunk.data =
+        (uint8_t*)heap_caps_aligned_alloc(16, jpeg_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (chunk.data == nullptr) {
+        vQueueDelete(jpeg_queue);
+        throw std::runtime_error("Failed to copy JPEG frame");
+    }
+    memcpy(chunk.data, jpeg_data, jpeg_len);
+    xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
+    JpegChunk end_chunk = {.data = nullptr, .len = 0};
+    xQueueSend(jpeg_queue, &end_chunk, portMAX_DELAY);
+
+    auto network = Board::GetInstance().GetNetwork();
+    auto http = network->CreateHttp(3);
+    std::string boundary = "----ESP32_CAMERA_BOUNDARY";
+
+    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+    http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+    if (!token.empty()) {
+        http->SetHeader("Authorization", "Bearer " + token);
+    }
+    http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    http->SetHeader("Transfer-Encoding", "chunked");
+    if (!http->Open("POST", url)) {
+        ESP_LOGE(TAG, "Failed to connect to explain URL");
+        JpegChunk pending;
+        while (xQueueReceive(jpeg_queue, &pending, portMAX_DELAY) == pdPASS) {
+            if (pending.data != nullptr) {
+                heap_caps_free(pending.data);
+            } else {
+                break;
+            }
+        }
+        vQueueDelete(jpeg_queue);
+        throw std::runtime_error("Failed to connect to explain URL");
+    }
+
+    {
+        std::string question_field;
+        question_field += "--" + boundary + "\r\n";
+        question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
+        question_field += "\r\n";
+        question_field += question + "\r\n";
+        http->Write(question_field.c_str(), question_field.size());
+    }
+    {
+        std::string file_header;
+        file_header += "--" + boundary + "\r\n";
+        file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
+        file_header += "Content-Type: image/jpeg\r\n";
+        file_header += "\r\n";
+        http->Write(file_header.c_str(), file_header.size());
+    }
+
+    size_t total_sent = 0;
+    bool saw_terminator = false;
+    while (true) {
+        JpegChunk rx;
+        if (xQueueReceive(jpeg_queue, &rx, portMAX_DELAY) != pdPASS) {
+            ESP_LOGE(TAG, "Failed to receive JPEG chunk");
+            break;
+        }
+        if (rx.data == nullptr) {
+            saw_terminator = true;
+            break;
+        }
+        http->Write((const char*)rx.data, rx.len);
+        total_sent += rx.len;
+        heap_caps_free(rx.data);
+    }
+    vQueueDelete(jpeg_queue);
+
+    if (!saw_terminator || total_sent == 0) {
+        ESP_LOGE(TAG, "JPEG encoder failed or produced empty output");
+        throw std::runtime_error("Failed to encode image to JPEG");
+    }
+
+    {
+        std::string multipart_footer;
+        multipart_footer += "\r\n--" + boundary + "--\r\n";
+        http->Write(multipart_footer.c_str(), multipart_footer.size());
+    }
+    http->Write("", 0);
+
+    if (http->GetStatusCode() != 200) {
+        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", http->GetStatusCode());
+        throw std::runtime_error("Failed to upload photo");
+    }
+
+    std::string result = http->ReadAll();
+    http->Close();
+
+    size_t remain_stack_size = uxTaskGetStackHighWaterMark(nullptr);
+    ESP_LOGI(TAG, "Explain compressed size=%d, remain stack size=%d, question=%s\n%s",
+             (int)total_sent, (int)remain_stack_size, question.c_str(), result.c_str());
+    return result;
+}
+
 std::string Esp32Camera::Explain(const std::string& question) {
     if (explain_url_.empty()) {
         throw std::runtime_error("Image explain URL or token is not set");
@@ -485,36 +662,17 @@ std::string Esp32Camera::Explain(const std::string& question) {
         throw std::runtime_error("No camera frame captured");
     }
 
-    // Create local JPEG queue
+    if (jpeg_data != nullptr) {
+        return ExplainJpegUpload(explain_url_, explain_token_, jpeg_data, jpeg_len, question);
+    }
+
     QueueHandle_t jpeg_queue = xQueueCreate(40, sizeof(JpegChunk));
     if (jpeg_queue == nullptr) {
         ESP_LOGE(TAG, "Failed to create JPEG queue");
         throw std::runtime_error("Failed to create JPEG queue");
     }
 
-    auto queue_jpeg_chunk = [jpeg_queue](const uint8_t* data, size_t len) -> bool {
-        JpegChunk chunk = {.data = nullptr, .len = len};
-        chunk.data = (uint8_t*)heap_caps_aligned_alloc(16, len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (chunk.data == nullptr) {
-            ESP_LOGE(TAG, "Failed to allocate %u bytes for JPEG chunk", (unsigned)len);
-            return false;
-        }
-        memcpy(chunk.data, data, len);
-        xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
-        return true;
-    };
-
-    if (jpeg_data != nullptr) {
-        // OV2640 等传感器已输出 JPEG，直接透传，勿再经 image_to_jpeg 重编码
-        ESP_LOGI(TAG, "JPEG passthrough upload, len=%u", (unsigned)jpeg_len);
-        if (!queue_jpeg_chunk(jpeg_data, jpeg_len)) {
-            vQueueDelete(jpeg_queue);
-            throw std::runtime_error("Failed to copy JPEG frame");
-        }
-        JpegChunk end_chunk = {.data = nullptr, .len = 0};
-        xQueueSend(jpeg_queue, &end_chunk, portMAX_DELAY);
-    } else {
-        encoder_thread_ = std::thread([this, jpeg_queue]() {
+    encoder_thread_ = std::thread([this, jpeg_queue]() {
             int64_t start_time = esp_timer_get_time();
             uint16_t w = current_fb_->width;
             uint16_t h = current_fb_->height;
@@ -577,7 +735,6 @@ std::string Esp32Camera::Explain(const std::string& question) {
             int64_t end_time = esp_timer_get_time();
             ESP_LOGI(TAG, "JPEG encoding time: %ld ms", (long)((end_time - start_time) / 1000));
         });
-    }
 
     auto network = Board::GetInstance().GetNetwork();
     auto http = network->CreateHttp(3);

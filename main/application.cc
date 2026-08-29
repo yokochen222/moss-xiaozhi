@@ -653,6 +653,10 @@ void Application::InitializeProtocol() {
                         protocol_->SetPendingAudioDropped(false);
                     }
                     audio_service_.ResetDecoder();
+                    if (auto* codec = Board::GetInstance().GetAudioCodec();
+                        codec != nullptr && !codec->output_enabled()) {
+                        MossDesktopPreparePlayback(codec);
+                    }
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -689,6 +693,10 @@ void Application::InitializeProtocol() {
                         }
                         if (GetDeviceState() != kDeviceStateSpeaking) {
                             SetDeviceState(kDeviceStateSpeaking);
+                        }
+                        if (auto* codec = Board::GetInstance().GetAudioCodec();
+                            codec != nullptr && !codec->output_enabled()) {
+                            MossDesktopPreparePlayback(codec);
                         }
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
@@ -1051,6 +1059,9 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+            FaceTracker::GetInstance().TryResumeAfterVoiceIdle();
+#endif
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -1095,6 +1106,9 @@ void Application::HandleStateChangedEvent() {
             } else {
                 ConfigureWakeWordForListening();
             }
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+            FaceTracker::GetInstance().TryResumeAfterVoiceIdle();
+#endif
             break;
         }
         case kDeviceStateSpeaking:

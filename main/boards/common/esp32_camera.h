@@ -44,6 +44,12 @@ public:
     bool SetFrameSize(framesize_t size);
     // Encode current RGB565 frame to JPEG <= max_bytes, then deinit DVP.
     bool EncodeAndParkJpeg(size_t max_bytes);
+    // Fast still capture for vision explain (minimal warmup, no LVGL preview copy).
+    bool CaptureExplainStill();
+    bool ExportParkedJpeg(std::vector<uint8_t>& out);
+    static std::string ExplainJpegUpload(const std::string& url, const std::string& token,
+                                         const uint8_t* jpeg_data, size_t jpeg_len,
+                                         const std::string& question);
 
     virtual void SetExplainUrl(const std::string &url, const std::string &token) override;
     virtual bool Capture() override;

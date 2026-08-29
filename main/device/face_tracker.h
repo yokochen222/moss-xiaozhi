@@ -67,6 +67,8 @@ public:
     // Returns true if tracking was running (caller should Resume later).
     bool PauseForExternalCameraUse();
     void ResumeAfterExternalCameraUse();
+    // Call when leaving speaking/connecting so deferred post-photo resume can run.
+    void TryResumeAfterVoiceIdle();
 
     bool Start();
     bool Stop();
@@ -89,6 +91,7 @@ private:
     void ReleaseDetectBuffer();
     void FillPreviewFromRgb565(const uint16_t* src, int src_w, int src_h);
     void FillPreviewFromFrame(const camera_fb_t* fb);
+    bool ResumeTrackingCameraLocked();
 
     mutable std::mutex mutex_;
     FaceTrackCamera* camera_ = nullptr;
