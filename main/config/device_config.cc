@@ -132,16 +132,19 @@ void AppendHardware(cJSON* root) {
 
 namespace DeviceConfig {
 
+// NVS key max 15 chars; JSON field remains "default_motor_speed".
+static constexpr const char* kNvsDefaultMotorSpeed = "def_motor_spd";
+
 int DefaultMotorSpeedPercent() {
     Settings settings("vendor");
-    int speed = settings.GetInt("default_motor_speed", EyeMotorDevice::DEFAULT_SPEED_PERCENT);
+    int speed = settings.GetInt(kNvsDefaultMotorSpeed, EyeMotorDevice::DEFAULT_SPEED_PERCENT);
     return ClampPercent(speed, EyeMotorDevice::DEFAULT_SPEED_PERCENT);
 }
 
-void SetDefaultMotorSpeedPercent(int speed) {
+bool SetDefaultMotorSpeedPercent(int speed) {
     speed = std::clamp(speed, 1, 100);
     Settings settings("vendor", true);
-    settings.SetInt("default_motor_speed", speed);
+    return settings.SetInt(kNvsDefaultMotorSpeed, speed);
 }
 
 bool LocalAecSupported() {
@@ -360,7 +363,12 @@ bool Apply(cJSON* payload, std::string* error) {
                 }
                 return false;
             }
-            SetDefaultMotorSpeedPercent(speed);
+            if (!SetDefaultMotorSpeedPercent(speed)) {
+                if (error) {
+                    *error = "failed to save default_motor_speed";
+                }
+                return false;
+            }
             changed = true;
         }
         if (LocalAecSupported() && JsonHasBool(hw, "local_aec")) {

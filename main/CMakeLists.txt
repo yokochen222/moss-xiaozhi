@@ -143,11 +143,13 @@ file(GLOB BOARD_NESTED_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers/*.cc
 )
 list(APPEND SOURCES ${BOARD_SOURCES} ${BOARD_NESTED_SOURCES})
-list(APPEND INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp
-    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers
-)
+list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR})
+foreach(_board_inc mcp drivers)
+    set(_board_inc_dir "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/${_board_inc}")
+    if(IS_DIRECTORY "${_board_inc_dir}")
+        list(APPEND INCLUDE_DIRS "${_board_inc_dir}")
+    endif()
+endforeach()
 
 # Select one audio engine for each chip family
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)

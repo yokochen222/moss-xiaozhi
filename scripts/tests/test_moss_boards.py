@@ -80,6 +80,7 @@ class MossCmakeSourceIsolationTests(unittest.TestCase):
         self.assertNotIn("pca9685_driver.cc", family)
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp/*.cc", self.cmake)
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers/*.cc", self.cmake)
+        self.assertIn('if(IS_DIRECTORY "${_board_inc_dir}")', self.cmake)
 
 
 class MossBoardMcpLayoutTests(unittest.TestCase):
@@ -109,7 +110,7 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
 
     def test_onvif_owns_lamp_merge_595(self):
         board = ROOT / "main/boards/moss/moss-onvif"
-        self.assertFalse((board / "mcp").exists() and any((board / "mcp").glob("*.cc")))
+        self.assertFalse((board / "mcp").exists())
         driver = (board / "drivers/74hc595_driver.cc").read_text(encoding="utf-8")
         self.assertIn("panel_state_", driver)
         self.assertIn("0x1F", driver)

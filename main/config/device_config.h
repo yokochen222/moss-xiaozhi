@@ -9,7 +9,7 @@ cJSON* BuildJson();
 bool Apply(cJSON* payload, std::string* error);
 
 int DefaultMotorSpeedPercent();
-void SetDefaultMotorSpeedPercent(int speed);
+bool SetDefaultMotorSpeedPercent(int speed);
 
 bool LocalAecSupported();
 bool LocalAecEnabled();
