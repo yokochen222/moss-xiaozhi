@@ -55,14 +55,15 @@ bool FaceTracker::PauseForExternalCameraUse() {
         last_follow_delay_ms_ = 0;
     }
     StepperGimbalDevice::GetInstance().SetFollowRates(0, 0, kMaxStepDelayMs);
-    for (int i = 0; i < 40; ++i) {
+    // fb_get can block up to 4s; tearing down DVP while it is in flight corrupts heap.
+    for (int i = 0; i < 80; ++i) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!frame_in_flight_) {
                 break;
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(25));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -371,9 +372,10 @@ void FaceTracker::TaskLoop() {
 
         const int frame_w = fb->width;
         const int frame_h = fb->height;
-        const size_t need = static_cast<size_t>(frame_w) * static_cast<size_t>(frame_h) *
-                            sizeof(uint16_t);
-        if (frame_w <= 0 || frame_h <= 0 || fb->len < need || !EnsureDetectBuffer(frame_w, frame_h)) {
+        const size_t need =
+            static_cast<size_t>(frame_w) * static_cast<size_t>(frame_h) * sizeof(uint16_t);
+        if (frame_w <= 0 || frame_h <= 0 || fb->len < need ||
+            !EnsureDetectBuffer(frame_w, frame_h)) {
             cam->ReturnTrackingFrame(fb);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -581,8 +583,7 @@ bool FaceTracker::Start() {
                  (unsigned)largest_int);
         task_caps_ = true;
         BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(
-            TaskEntry, "face_track", 8192, this, 1, &task_, 1,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            TaskEntry, "face_track", 8192, this, 1, &task_, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (ok != pdPASS) {
             task_caps_ = false;
             ok = xTaskCreatePinnedToCore(TaskEntry, "face_track", 8192, this, 1, &task_, 1);

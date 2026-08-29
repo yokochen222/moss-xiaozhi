@@ -129,6 +129,20 @@ class MossCameraPreviewPolicyTests(unittest.TestCase):
         loop = slice_between(tracker, "void FaceTracker::TaskLoop()", "bool FaceTracker::Start()")
         self.assertLess(loop.find("ReturnTrackingFrame"), loop.find("det->run"))
         self.assertNotIn("ReleaseTracking()", loop)
+        pause = slice_between(
+            tracker, "bool FaceTracker::PauseForExternalCameraUse()", "static bool VoicePipelineBusy()"
+        )
+        self.assertIn("frame_in_flight_", pause)
+        self.assertIn("pdMS_TO_TICKS(50)", pause)
+        jpeg = (ROOT / "main/display/lvgl_display/jpg/image_to_jpeg.cpp").read_text(
+            encoding="utf-8"
+        )
+        malloc_fn = slice_between(jpeg, "static void* malloc_psram(size_t size)", "static __always_inline")
+        self.assertIn("MALLOC_CAP_SPIRAM", malloc_fn)
+        self.assertLess(
+            malloc_fn.find("MALLOC_CAP_SPIRAM"), malloc_fn.find("MALLOC_CAP_8BIT")
+        )
+        self.assertNotIn("malloc(size)", malloc_fn)
         stop = slice_between(tracker, "bool FaceTracker::Stop()", "bool FaceTracker::IsRunning()")
         self.assertIn("ReleaseTracking()", stop)
         self.assertIn("EnsureDetectBuffer", loop)
@@ -138,7 +152,9 @@ class MossCameraPreviewPolicyTests(unittest.TestCase):
         self.assertIn("DropOneCameraFrame()", acquire)
         release = slice_between(self.board, "void ReleaseTrackingLocked()", "static void PulseDvpReset()")
         self.assertIn("tracking_acquired_ = false", release)
-        self.assertIn("esp_camera_fb_get()", release)
+        self.assertIn("DeinitDvpSafe()", release)
+        self.assertNotIn("esp_camera_fb_get()", release)
+        self.assertNotIn("esp_camera_fb_return", release)
         self.assertIn("SetDvpPowerDown(true)", self.board)
 
     def test_take_photo_explain_is_not_at_priority_one(self):

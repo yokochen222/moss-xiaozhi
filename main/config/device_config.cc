@@ -10,9 +10,9 @@
 #include "device/lamp_panel.h"
 #include "settings.h"
 
-#include <algorithm>
 #include <esp_app_desc.h>
 #include <wifi_manager.h>
+#include <algorithm>
 
 #ifdef HAVE_LVGL
 #include "display/lvgl_display/lvgl_display.h"
@@ -132,8 +132,13 @@ void AppendHardware(cJSON* root) {
 
 namespace DeviceConfig {
 
-// NVS key max 15 chars; JSON field remains "default_motor_speed".
-static constexpr const char* kNvsDefaultMotorSpeed = "def_motor_spd";
+// NVS key max 15 chars (NVS_KEY_NAME_MAX_SIZE-1). JSON field stays "default_motor_speed".
+static constexpr char kNvsDefaultMotorSpeed[] = "def_motor_spd";
+static constexpr char kNvsLocalAec[] = "local_aec";
+static constexpr char kNvsPressToTalk[] = "press_to_talk";
+static_assert(sizeof(kNvsDefaultMotorSpeed) - 1 <= 15, "NVS key too long");
+static_assert(sizeof(kNvsLocalAec) - 1 <= 15, "NVS key too long");
+static_assert(sizeof(kNvsPressToTalk) - 1 <= 15, "NVS key too long");
 
 int DefaultMotorSpeedPercent() {
     Settings settings("vendor");
@@ -144,7 +149,14 @@ int DefaultMotorSpeedPercent() {
 bool SetDefaultMotorSpeedPercent(int speed) {
     speed = std::clamp(speed, 1, 100);
     Settings settings("vendor", true);
-    return settings.SetInt(kNvsDefaultMotorSpeed, speed);
+    if (!settings.SetInt(kNvsDefaultMotorSpeed, speed)) {
+        return false;
+    }
+    auto& motor = EyeMotorDevice::GetInstance();
+    if (motor.IsRunning()) {
+        motor.SetSpeed(static_cast<uint8_t>(speed));
+    }
+    return true;
 }
 
 bool LocalAecSupported() {
@@ -158,7 +170,7 @@ bool LocalAecSupported() {
 bool LocalAecEnabled() {
 #if CONFIG_USE_DEVICE_AEC
     Settings settings("vendor");
-    return settings.GetInt("local_aec", 1) != 0;
+    return settings.GetInt(kNvsLocalAec, 1) != 0;
 #else
     return false;
 #endif
@@ -167,7 +179,7 @@ bool LocalAecEnabled() {
 void SetLocalAecEnabled(bool enabled) {
 #if CONFIG_USE_DEVICE_AEC
     Settings settings("vendor", true);
-    settings.SetInt("local_aec", enabled ? 1 : 0);
+    settings.SetInt(kNvsLocalAec, enabled ? 1 : 0);
     Application::GetInstance().SetAecMode(enabled ? kAecOnDeviceSide : kAecOff);
 #endif
 }
@@ -181,7 +193,7 @@ cJSON* BuildJson() {
         cJSON_AddNumberToObject(audio, "volume", codec->output_volume());
     }
     Settings vendor("vendor");
-    cJSON_AddBoolToObject(audio, "press_to_talk", vendor.GetInt("press_to_talk", 0) != 0);
+    cJSON_AddBoolToObject(audio, "press_to_talk", vendor.GetInt(kNvsPressToTalk, 0) != 0);
     cJSON_AddItemToObject(root, "audio", audio);
 
     auto* screen = cJSON_CreateObject();
@@ -240,7 +252,7 @@ bool Apply(cJSON* payload, std::string* error) {
         if (JsonHasBool(audio, "press_to_talk")) {
             bool enabled = cJSON_IsTrue(cJSON_GetObjectItem(audio, "press_to_talk"));
             Settings settings("vendor", true);
-            settings.SetInt("press_to_talk", enabled ? 1 : 0);
+            settings.SetInt(kNvsPressToTalk, enabled ? 1 : 0);
             changed = true;
         }
     }

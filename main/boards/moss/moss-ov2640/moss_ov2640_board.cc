@@ -8,17 +8,17 @@
 #include "config.h"
 #include "device/face_tracker.h"
 #include "device/moss_camera_preview.h"
-#include "device/moss_jpeg_still.h"
 #include "device/moss_camera_stream.h"
+#include "device/moss_jpeg_still.h"
 #include "device/stepper_gimbal.h"
 #include "display/display.h"
 #include "esp32_camera.h"
 #include "mcp_server.h"
 #include "moss_spi_lcd_display.h"
-#include "splash_player.h"
 #include "pca9685_driver.h"
 #include "power_save_timer.h"
 #include "press_to_talk_mcp_tool.h"
+#include "splash_player.h"
 #include "wifi_board.h"
 
 #include <driver/i2c_master.h>
@@ -332,14 +332,14 @@ public:
             err = esp_camera_init(&cfg);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "Tracking %s failed: 0x%x", attempt.tag, err);
-                esp_camera_deinit();
+                DeinitDvpSafe();
                 PulseDvpReset();
                 continue;
             }
             vTaskDelay(pdMS_TO_TICKS(50));
             if (!DropOneCameraFrame()) {
                 ESP_LOGW(TAG, "Tracking %s produced no frames", attempt.tag);
-                esp_camera_deinit();
+                DeinitDvpSafe();
                 PulseDvpReset();
                 err = ESP_FAIL;
                 continue;
@@ -395,9 +395,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!tracking_acquired_) {
-                if (fb) {
-                    esp_camera_fb_return(fb);
-                }
+                // DVP already torn down; returning would write a freed pool.
                 return nullptr;
             }
         }
@@ -409,6 +407,9 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!tracking_acquired_) {
+            return;
+        }
         esp_camera_fb_return(fb);
     }
 
@@ -445,8 +446,7 @@ private:
             const bool compact = VoiceBusy() || largest_dma < 16384;
             const framesize_t still_sizes_compact[] = {FRAMESIZE_QVGA, FRAMESIZE_HVGA};
             const framesize_t still_sizes_full[] = {FRAMESIZE_SXGA, FRAMESIZE_SVGA, FRAMESIZE_VGA};
-            const framesize_t* still_sizes =
-                compact ? still_sizes_compact : still_sizes_full;
+            const framesize_t* still_sizes = compact ? still_sizes_compact : still_sizes_full;
             const size_t still_count =
                 compact ? sizeof(still_sizes_compact) / sizeof(still_sizes_compact[0])
                         : sizeof(still_sizes_full) / sizeof(still_sizes_full[0]);
@@ -467,11 +467,12 @@ private:
                 const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
                 const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
                 const size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-                ESP_LOGI(TAG,
-                         "On-demand OV2640 start (RGB565 XCLK=%dHz size=%d) free_int=%u free_dma=%u "
-                         "largest_dma=%u free_psram=%u",
-                         (int)cfg.xclk_freq_hz, (int)cfg.frame_size, (unsigned)free_internal,
-                         (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
+                ESP_LOGI(
+                    TAG,
+                    "On-demand OV2640 start (RGB565 XCLK=%dHz size=%d) free_int=%u free_dma=%u "
+                    "largest_dma=%u free_psram=%u",
+                    (int)cfg.xclk_freq_hz, (int)cfg.frame_size, (unsigned)free_internal,
+                    (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
                 camera_.reset(new Esp32Camera(cfg));
                 if (camera_->IsInitialized()) {
                     inited = true;
@@ -540,16 +541,15 @@ private:
         }
         tracking_acquired_ = false;
         ESP_LOGI(TAG, "Tracking OV2640 stop (free DVP DMA)");
-        for (int i = 0; i < 8; ++i) {
-            camera_fb_t* fb = esp_camera_fb_get();
-            if (!fb) {
-                break;
-            }
-            esp_camera_fb_return(fb);
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
-        esp_camera_deinit();
+        // Do not fb_get/return: fb_count=1 immediately DMA-writes the same PSRAM
+        // frame, and cam_deinit free then corrupts the heap (tlsf assert / cache).
+        DeinitDvpSafe();
         PulseDvpReset();
+    }
+
+    static void DeinitDvpSafe() {
+        vTaskDelay(pdMS_TO_TICKS(30));
+        esp_camera_deinit();
     }
 
     static void PulseDvpReset() {
@@ -634,7 +634,8 @@ private:
         if (!camera_->CaptureExplainStill()) {
             return false;
         }
-        if (!camera_->EncodeAndParkJpeg(static_cast<size_t>(moss_jpeg_still::kExplainJpegMaxBytes))) {
+        if (!camera_->EncodeAndParkJpeg(
+                static_cast<size_t>(moss_jpeg_still::kExplainJpegMaxBytes))) {
             ESP_LOGE(TAG, "SW JPEG encode/park failed");
             return false;
         }
