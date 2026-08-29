@@ -272,13 +272,11 @@ void Application::Run() {
             const auto state = GetDeviceState();
             if (state == kDeviceStateSpeaking) {
 #if CONFIG_ENABLE_VAD_INTERRUPT
-                if (listening_mode_ != kListeningModeRealtime && !IsVadBargeInEnabled()) {
-                    HoldSpeakingUplink();
-                } else if (listening_mode_ != kListeningModeRealtime) {
+                if (listening_mode_ == kListeningModeRealtime) {
+                    SendUplinkFromQueue();
+                } else {
                     while (audio_service_.PopPacketFromSendQueue())
                         ;
-                } else {
-                    SendUplinkFromQueue();
                 }
 #else
                 if (listening_mode_ != kListeningModeRealtime) {
@@ -305,26 +303,6 @@ void Application::Run() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
-#if CONFIG_ENABLE_VAD_INTERRUPT
-            // VAD barge-in only when device AEC is off (auto-stop + mic during TTS).
-            if (!IsVadBargeInEnabled() && GetDeviceState() == kDeviceStateSpeaking && protocol_) {
-                const bool voice = audio_service_.IsVoiceDetected();
-                // Brief TTS gaps re-arm; ignore micro-gaps shorter than 280 ms.
-                constexpr int64_t kSilenceArmUs = 280 * 1000;
-                if (!voice) {
-                    if (vad_silence_started_us_ == 0) {
-                        vad_silence_started_us_ = esp_timer_get_time();
-                    } else if (!vad_interrupt_armed_ &&
-                               esp_timer_get_time() - vad_silence_started_us_ >= kSilenceArmUs) {
-                        vad_interrupt_armed_ = true;
-                    }
-                    CancelVadInterruptTimer();
-                } else {
-                    vad_silence_started_us_ = 0;
-                    MaybeStartVadInterruptTimer(!vad_interrupt_armed_);
-                }
-            }
-#endif
         }
 
 #if CONFIG_ENABLE_VAD_INTERRUPT
@@ -610,11 +588,16 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+        auto state = GetDeviceState();
         if (protocol_->IsPendingAudioDropped()) {
-            return;
+            // Recover if TTS audio arrives before tts/start (seen after SendTextChat).
+            if (state == kDeviceStateSpeaking) {
+                protocol_->SetPendingAudioDropped(false);
+            } else {
+                return;
+            }
         }
         // Allow listening as well: text-trigger may receive TTS before state flips to speaking.
-        auto state = GetDeviceState();
         if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
@@ -669,6 +652,7 @@ void Application::InitializeProtocol() {
                     if (protocol_) {
                         protocol_->SetPendingAudioDropped(false);
                     }
+                    audio_service_.ResetDecoder();
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -697,6 +681,15 @@ void Application::InitializeProtocol() {
                         last_tts_sentence_us_ = esp_timer_get_time();
                         CancelVadInterruptTimer();
 #endif
+                        // Some server paths emit sentence_start before tts/start; without
+                        // this, pending_audio_dropped stays true and all TTS is silent.
+                        aborted_ = false;
+                        if (protocol_) {
+                            protocol_->SetPendingAudioDropped(false);
+                        }
+                        if (GetDeviceState() != kDeviceStateSpeaking) {
+                            SetDeviceState(kDeviceStateSpeaking);
+                        }
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
                         RelayChat("message", "assistant", message);
@@ -1108,36 +1101,17 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::SPEAKING);
 
             if (listening_mode_ != kListeningModeRealtime) {
-#if CONFIG_ENABLE_VAD_INTERRUPT
-                if (!IsVadBargeInEnabled()) {
-                    audio_service_.EnableVoiceProcessing(true);
-                    audio_service_.EnableWakeWordDetection(false);
-                } else {
-                    audio_service_.EnableVoiceProcessing(false);
-                    audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
-                }
-#else
+                // Half duplex (local AEC off): mute uplink during TTS. Do not arm
+                // VAD barge-in here; speaker echo is often mis-detected as speech.
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
-#endif
             }
 #if CONFIG_ENABLE_VAD_INTERRUPT
-            if (listening_mode_ != kListeningModeRealtime && !IsVadBargeInEnabled()) {
-                CancelVadInterruptTimer();
-                speaking_started_us_ = esp_timer_get_time();
-                last_tts_sentence_us_ = speaking_started_us_;
-                vad_silence_started_us_ = 0;
-                vad_interrupt_armed_ =
-                    !audio_service_.IsVoiceDetected();
-                FlushBargeInHold(false);
-            } else {
-                CancelVadInterruptTimer();
-                vad_interrupt_armed_ = false;
-                vad_silence_started_us_ = 0;
-                FlushBargeInHold(false);
-            }
+            CancelVadInterruptTimer();
+            vad_interrupt_armed_ = false;
+            vad_silence_started_us_ = 0;
+            FlushBargeInHold(false);
 #endif
-            audio_service_.ResetDecoder();
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1509,8 +1483,8 @@ void Application::HandleExternalTextMessage(const std::string& text) {
                 }
             }
         } else if (state == kDeviceStateSpeaking) {
+            // Queue for the next listening cycle; do not abort in-flight TTS (breaks playback).
             pending_text_to_send_ = text;
-            AbortSpeaking(kAbortReasonNone);
         } else if (state == kDeviceStateListening || state == kDeviceStateConnecting) {
             if (protocol_ && protocol_->IsAudioChannelOpened()) {
                 protocol_->SendTextChat(text);
