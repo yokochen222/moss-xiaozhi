@@ -89,9 +89,12 @@ set(BUILTIN_ICON_FONT font_material_symbols_14_1)
 set(EMOTE_RESOLUTION "320_240")
 
 # Select the board source directory from Kconfig
-# Set default assets if the board uses partition table V2
-if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
-    set(BOARD_DIR "moss/moss-desktop")
+if(CONFIG_BOARD_TYPE_MOSS_ONVIF)
+    set(BOARD_DIR "moss/moss-onvif")
+elseif(CONFIG_BOARD_TYPE_MOSS_OV2640)
+    set(BOARD_DIR "moss/moss-ov2640")
+endif()
+if(CONFIG_BOARD_FAMILY_MOSS)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
@@ -135,8 +138,16 @@ file(GLOB BOARD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/*.c
 )
-list(APPEND SOURCES ${BOARD_SOURCES})
-list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR})
+file(GLOB BOARD_NESTED_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp/*.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers/*.cc
+)
+list(APPEND SOURCES ${BOARD_SOURCES} ${BOARD_NESTED_SOURCES})
+list(APPEND INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers
+)
 
 # Select one audio engine for each chip family
 if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_ESP32S31)
@@ -292,16 +303,13 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND SOURCES "boards/common/esp32_camera.cc")
 endif()
 
-# Moss MCP peripherals + HTTP API + splash assets (moss-desktop only)
+# Moss MCP peripherals + HTTP API + splash assets (MOSS family)
 set(MAIN_PRIV_REQUIRES_EXTRA "")
 set(MOSS_EMOTE_ASSETS "")
-if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
+if(CONFIG_BOARD_FAMILY_MOSS)
     list(APPEND SOURCES
         "device/infrared.cc"
-        "device/lamp_bar.cc"
-        "device/lamp_panel.cc"
-        "device/lamp_eye.cc"
-        "device/eye_motor.cc"
+        "device/ir_catalog.cc"
         "api/api.cc"
         "api/methods/ir/ir_handlers.cc"
         "api/methods/ir/ir_data_manager.cc"
@@ -309,19 +317,42 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP)
         "config/ext_mqtt_config.cc"
         "config/moss_config_service.cc"
         "config/device_config.cc"
-        "device/ir_catalog.cc"
+        "config/product.cc"
         "external_mqtt_client.cc"
+        "mcp/tools/lamp_panel.cc"
+        "mcp/tools/lamp_eye.cc"
+        "mcp/tools/lamp_bar.cc"
+        "mcp/tools/eye_motor.cc"
+        "mcp/tools/infrared.cc"
+        "mcp/tools/api_server.cc"
+        "mcp/tools/yunxiangji.cc"
     )
-    file(GLOB MOSS_MCP_TOOL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/*.cc)
-    file(GLOB MOSS_MCP_UTILS_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils/*.cc)
-    list(APPEND SOURCES ${MOSS_MCP_TOOL_SOURCES} ${MOSS_MCP_UTILS_SOURCES})
+    if(CONFIG_BOARD_TYPE_MOSS_ONVIF)
+        list(APPEND SOURCES
+            "device/lamp_bar.cc"
+            "device/lamp_panel.cc"
+            "device/lamp_eye.cc"
+            "device/eye_motor.cc"
+        )
+    endif()
+    if(CONFIG_BOARD_TYPE_MOSS_OV2640)
+        list(APPEND SOURCES
+            "device/ov2640/lamp_bar.cc"
+            "device/ov2640/lamp_panel.cc"
+            "device/ov2640/lamp_eye.cc"
+            "device/ov2640/eye_motor.cc"
+            "device/stepper_gimbal.cc"
+            "device/face_tracker.cc"
+            "device/moss_camera_stream.cc"
+            "api/methods/camera/camera_handlers.cc"
+        )
+    endif()
     list(APPEND INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/device
         ${CMAKE_CURRENT_SOURCE_DIR}/api
         ${CMAKE_CURRENT_SOURCE_DIR}/api/methods
         ${CMAKE_CURRENT_SOURCE_DIR}/config
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
-        ${CMAKE_CURRENT_SOURCE_DIR}/mcp/utils
     )
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server spiffs mdns espressif2022__esp_emote_gfx)
     file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
@@ -358,10 +389,17 @@ idf_component_register(SRCS ${SOURCES}
                     )
 
 # Moss splash uses private eaf_dec headers from esp_emote_gfx.
-if(CONFIG_BOARD_TYPE_MOSS_DESKTOP AND NOT CMAKE_BUILD_EARLY_EXPANSION)
-    if(NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
+if(CONFIG_BOARD_FAMILY_MOSS AND NOT CMAKE_BUILD_EARLY_EXPANSION)
+    if(CONFIG_BOARD_TYPE_MOSS_ONVIF AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
         message(FATAL_ERROR
-            "moss-desktop requires partitions/moss-desktop-16m.csv "
+            "moss-onvif requires partitions/moss-desktop-16m.csv "
+            "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
+            "Update sdkconfig and flash partition-table + app together, not OTA."
+        )
+    endif()
+    if(CONFIG_BOARD_TYPE_MOSS_OV2640 AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/v2/16m_moss_desktop.csv")
+        message(FATAL_ERROR
+            "moss-ov2640 requires partitions/v2/16m_moss_desktop.csv "
             "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
             "Update sdkconfig and flash partition-table + app together, not OTA."
         )
@@ -369,6 +407,12 @@ if(CONFIG_BOARD_TYPE_MOSS_DESKTOP AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     idf_component_get_property(EMOTE_GFX_DIR espressif2022__esp_emote_gfx COMPONENT_DIR)
     if(EMOTE_GFX_DIR)
         target_include_directories(${COMPONENT_LIB} PRIVATE "${EMOTE_GFX_DIR}/src")
+    endif()
+    if(CONFIG_BOARD_TYPE_MOSS_OV2640 AND CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD)
+        message(FATAL_ERROR
+            "moss-ov2640 has no SD card; embed human_face_detect in flash "
+            "(CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y). "
+            "Rebuild with: python3 scripts/build.py moss/moss-ov2640 --name moss-ov2640")
     endif()
 endif()
 

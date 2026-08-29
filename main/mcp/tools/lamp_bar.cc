@@ -34,7 +34,7 @@ void LampBarTool::Register() {
         "- action='stop_flow'：关闭流水灯效果\n"
         "系统控制：\n"
         "- action='get_status'：获取流水灯当前状态信息\n"
-        "- action='reset_driver'：重置74HC595驱动\n"
+        "- action='reset_driver'：重置灯光驱动\n"
         "- action='force_restart'：强制重启流水灯系统\n"
         ,
         PropertyList({
@@ -59,13 +59,13 @@ void LampBarTool::Register() {
                 status += "流水灯:\n";
                 status += "  电源: " + std::string(lamp_bar_device_.IsPowered() ? "开启" : "关闭") + "\n";
                 status += "  流水效果: " + std::string(lamp_bar_device_.IsFlowing() ? "运行中" : "停止") + "\n";
-                status += "硬件: 使用74HC595移位寄存器控制 (Q0-Q4: 流水灯)";
+                status += "硬件: 板级流水灯驱动 (5 路)";
                 return status;
             } else if (action == "reset_driver") {
                 if (lamp_bar_device_.ResetDriver()) {
-                    return "74HC595驱动已重置";
+                    return "灯光驱动已重置";
                 } else {
-                    return "重置74HC595驱动失败";
+                    return "重置灯光驱动失败";
                 }
             } else if (action == "force_restart") {
                 if (lamp_bar_device_.ForceRestart()) {

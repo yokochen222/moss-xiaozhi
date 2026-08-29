@@ -45,6 +45,12 @@ dependencies:
     version: ^2.1.6
     rules:
     - if: target in [esp32s3]
+
+  espressif/human_face_detect:
+    version: "^0.5.0"
+    rules:
+    - if: target in [esp32s3]
+
   espressif/esp_video:
     version: ^2.3.0
     rules:

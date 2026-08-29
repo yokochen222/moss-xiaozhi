@@ -12,6 +12,12 @@
 #include "device/lamp_eye.h"
 #include "device/lamp_panel.h"
 
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+#include "device/face_tracker.h"
+#include "device/moss_camera_stream.h"
+#include "device/stepper_gimbal.h"
+#endif
+
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <cstdint>
@@ -328,6 +334,31 @@ void ExternalMqttClient::HandleTypedMessage(cJSON* root) {
         });
         return;
     }
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    if (type == "gimbal.control") {
+        // Inline: a queued follow then stop on the main loop runs back-to-back and the motor never starts.
+        HandleGimbalControl(id, payload);
+        return;
+    }
+    if (type == "face_track.control") {
+        auto& tracker = FaceTracker::GetInstance();
+        const std::string action = JsonString(payload, "action");
+        bool ok = false;
+        std::string message = "ok";
+        if (action == "start") {
+            MossCameraStream::GetInstance().Disarm();
+            ok = tracker.Start();
+            message = ok ? "started" : "start failed";
+        } else if (action == "stop") {
+            ok = tracker.Stop();
+            message = ok ? "stopped" : "stop failed";
+        } else {
+            message = "unknown action";
+        }
+        PublishAck("face_track.state", id, ok, message);
+        return;
+    }
+#endif
     if (type == "hw.status") {
         PublishHwState(id, true, "ok");
         return;
@@ -540,6 +571,74 @@ void ExternalMqttClient::PublishHwState(const std::string& request_id, bool ok,
     PublishUp("hw.state", request_id, payload);
     cJSON_Delete(payload);
 }
+
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+void ExternalMqttClient::HandleGimbalControl(const std::string& request_id, cJSON* payload) {
+    auto& gimbal = StepperGimbalDevice::GetInstance();
+    const std::string action = JsonString(payload, "action");
+    bool ok = false;
+    std::string message = "ok";
+    if (action == "stop") {
+        ok = gimbal.Idle();
+        if (!ok) {
+            message = "idle failed";
+        }
+    } else if (action == "follow") {
+        if (FaceTracker::GetInstance().IsRunning()) {
+            ok = false;
+            message = "face track owns gimbal";
+        } else {
+            const int h = JsonInt(payload, "h_dir", 0);
+            const int v = JsonInt(payload, "v_dir", 0);
+            ok = gimbal.SetFollowRates(h > 0 ? 1 : (h < 0 ? -1 : 0),
+                                       v > 0 ? 1 : (v < 0 ? -1 : 0), 4, StepMode::Half);
+            if (!ok) {
+                message = "follow task failed";
+            }
+        }
+    } else if (action == "move") {
+        if (FaceTracker::GetInstance().IsRunning()) {
+            ok = false;
+            message = "face track owns gimbal";
+        } else {
+            const std::string direction = JsonString(payload, "direction");
+            GimbalDir dir = GimbalDir::Up;
+            bool have_dir = true;
+            if (direction == "up") {
+                dir = GimbalDir::Up;
+            } else if (direction == "down") {
+                dir = GimbalDir::Down;
+            } else if (direction == "left") {
+                dir = GimbalDir::Left;
+            } else if (direction == "right") {
+                dir = GimbalDir::Right;
+            } else {
+                have_dir = false;
+            }
+            if (!have_dir) {
+                ok = false;
+                message = "invalid direction";
+            } else {
+                int degrees = JsonInt(payload, "degrees", 14);
+                if (degrees < 4) {
+                    degrees = 4;
+                }
+                if (degrees > 45) {
+                    degrees = 45;
+                }
+                const int steps = (degrees * 4096 + 180) / 360;
+                ok = gimbal.Move(dir, static_cast<uint16_t>(steps), StepMode::Half, 4);
+                if (!ok) {
+                    message = "move failed";
+                }
+            }
+        }
+    } else {
+        message = "unknown action";
+    }
+    PublishAck("gimbal.state", request_id, ok, message);
+}
+#endif
 
 void ExternalMqttClient::HandleHwControl(const std::string& request_id, cJSON* payload) {
     const std::string device = payload ? JsonString(payload, "device") : "";

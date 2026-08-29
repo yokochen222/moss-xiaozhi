@@ -2,6 +2,7 @@
 #include "api/http_util.h"
 #include "application.h"
 #include "config/device_config.h"
+#include "config/product.h"
 #include "config/ext_mqtt_config.h"
 #include "config/moss_config_service.h"
 #include "system_info.h"
@@ -42,7 +43,8 @@ esp_err_t HandleHealth(httpd_req_t* req) {
     auto mqtt = ExtMqttSettings::Load();
     cJSON* obj = cJSON_CreateObject();
     cJSON_AddStringToObject(obj, "status", "ok");
-    cJSON_AddStringToObject(obj, "name", "moss-desktop");
+    cJSON_AddStringToObject(obj, "name", BOARD_TYPE);
+    MossProduct::AddIdentity(obj);
     cJSON_AddStringToObject(obj, "hostname", MossConfigService::GetInstance().Hostname().c_str());
     cJSON_AddStringToObject(obj, "instance", MossConfigService::GetInstance().InstanceName().c_str());
     cJSON_AddStringToObject(obj, "ip", WifiManager::GetInstance().GetIpAddress().c_str());

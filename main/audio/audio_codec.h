@@ -11,6 +11,7 @@
 #include <functional>
 
 #include "board.h"
+#include "sdkconfig.h"
 
 #define AUDIO_CODEC_DMA_DESC_NUM 6
 #define AUDIO_CODEC_DMA_FRAME_NUM 240
@@ -67,5 +68,11 @@ protected:
     virtual int Read(int16_t* dest, int samples) = 0;
     virtual int Write(const int16_t* data, int samples) = 0;
 };
+
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+void MossDesktopSetNs4150Pa(bool enable);
+void MossDesktopPreparePlayback(AudioCodec* codec);
+void MossDesktopReleasePlayback(AudioCodec* codec);
+#endif
 
 #endif // _AUDIO_CODEC_H

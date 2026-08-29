@@ -1,0 +1,36 @@
+{
+    "manufacturer": "moss",
+    "type": "moss-ov2640",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "moss-ov2640",
+            "sdkconfig_append": [
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_ENABLE_VAD_INTERRUPT=y",
+                "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n",
+                "CONFIG_USE_AFE_WAKE_WORD=n",
+                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
+                "CONFIG_SR_MN_CN_NONE=n",
+                "CONFIG_SR_MN_CN_MULTINET7_QUANT=y",
+                "CONFIG_CUSTOM_WAKE_WORD=\"mo si\"",
+                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"MOSS\"",
+                "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
+                "CONFIG_PARTITION_TABLE_CUSTOM=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/16m_moss_desktop.csv\"",
+                "CONFIG_FREERTOS_HZ=1000",
+                "CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=8192",
+                "CONFIG_CAMERA_PSRAM_DMA=y",
+                "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_CUSTOM=y",
+                "CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE=262144",
+                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y",
+                "CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT=y",
+                "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y",
+                "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD=n",
+                "CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_PARTITION=n",
+                "CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y",
+                "CONFIG_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y"
+            ]
+        }
+    ]
+}

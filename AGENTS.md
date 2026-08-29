@@ -46,6 +46,8 @@ Board selection is a coupled chain:
 
 When adding a board or variant, update every relevant link in that chain. Include a unique board identity, correct chip target, flash/partition settings, exactly one `DECLARE_BOARD`, and board documentation. Follow `docs/custom-board.md`.
 
+This fork ships two MOSS boards: `moss/moss-onvif` and `moss/moss-ov2640`. Shared desktop-client code is gated by `CONFIG_BOARD_FAMILY_MOSS`. Camera/gimbal/face-track sources compile only for `CONFIG_BOARD_TYPE_MOSS_OV2640`. Do not OTA across their partition tables; first flash uses `erase-flash`. Desktop routing uses the firmware `board` field (`moss-onvif` / `moss-ov2640`), not `product=moss-xiaozhi`.
+
 ## Commands
 
 Source the intended ESP-IDF environment first:
@@ -65,6 +67,10 @@ python3 scripts/build.py <board-directory> --name <variant-name>
 # Host-side build tests
 python3 -m unittest discover -s scripts/tests -v
 
+# Firmware compile gate (both boards)
+python3 scripts/build.py moss/moss-onvif --name moss-onvif
+python3 scripts/build.py moss/moss-ov2640 --name moss-ov2640
+
 # Format/check touched files
 clang-format -i <files>
 clang-format --dry-run -Werror <files>
@@ -80,6 +86,7 @@ The build script changes local `sdkconfig` and build state. Do not assume the bu
 - Audio changes: verify capture, playback, wake/VAD, interruption, reconnect, and applicable AEC modes.
 - UI/assets changes: verify applicable no-display/OLED/LVGL paths and partition size.
 - Always report what was tested and what still needs physical hardware. A successful build is not hardware validation.
+- After board or desktop-routing changes: `python3 -m unittest discover -s scripts/tests -v`, both `build.py` variants, and moss-desktop `pnpm test`. Hardware smoke (discover / MQTT bind / chat / IR / camera source) is separate and required before release.
 
 ## Authoritative Documentation
 

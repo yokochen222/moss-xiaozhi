@@ -3,6 +3,8 @@
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "BoxAudioCodec"
 
@@ -206,18 +208,31 @@ void BoxAudioCodec::EnableInput(bool enable) {
         if (input_reference_) {
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
-        ESP_ERROR_CHECK(esp_codec_dev_open(input_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
+        // ES7210 shares I2C1 with PCA9685 / OV2640 SCCB. One NACK must not abort the chip.
+        esp_err_t err = ESP_FAIL;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            err = esp_codec_dev_open(input_dev_, &fs);
+            if (err == ESP_OK) {
+                break;
+            }
+            ESP_LOGW(TAG, "input open failed (%s), retry %d", esp_err_to_name(err), attempt + 1);
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "EnableInput open failed: %s", esp_err_to_name(err));
+            return;
+        }
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_set_in_channel_gain(
             input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_));
         if (input_reference_ && reference_gain_channel_ >= 0) {
             // ES7210 gain masks use physical MIC numbering, which differs
             // from the TDM slot order (MIC1, MIC3, MIC2, MIC4).
-            ESP_ERROR_CHECK(esp_codec_dev_set_in_channel_gain(
+            ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_set_in_channel_gain(
                 input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(reference_gain_channel_),
                 reference_gain_));
         }
     } else {
-        ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(input_dev_));
     }
     AudioCodec::EnableInput(enable);
 }
@@ -240,6 +255,9 @@ void BoxAudioCodec::EnableOutput(bool enable) {
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+        MossDesktopSetNs4150Pa(false);
+#endif
     }
     AudioCodec::EnableOutput(enable);
 }

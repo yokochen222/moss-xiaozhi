@@ -37,6 +37,9 @@ private:
     void HandleExportGet(const std::string& request_id);
     void HandleImport(const std::string& request_id, cJSON* payload);
     void HandleHwControl(const std::string& request_id, cJSON* payload);
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    void HandleGimbalControl(const std::string& request_id, cJSON* payload);
+#endif
     void HandleDeviceConfigGet(const std::string& request_id);
     void HandleDeviceConfigSet(const std::string& request_id, cJSON* payload);
     void PublishHwState(const std::string& request_id, bool ok, const std::string& message);

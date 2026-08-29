@@ -30,10 +30,20 @@ private:
     camera_fb_t *current_fb_ = nullptr;
     uint8_t *encode_buf_ = nullptr;  // Buffer for JPEG encoding (with optional byte swap)
     size_t encode_buf_size_ = 0;
+    size_t jpeg_parked_len_ = 0;
 
 public:
     Esp32Camera(const camera_config_t &config);
     ~Esp32Camera();
+
+    bool IsInitialized() const { return streaming_on_; }
+    // Copy JPEG, return the fb, deinit DVP so LCD SPI can run during Explain.
+    bool ReleaseSensorKeepJpeg();
+    size_t CapturedJpegLen() const;
+    bool SetSensorJpegQuality(int quality);
+    bool SetFrameSize(framesize_t size);
+    // Encode current RGB565 frame to JPEG <= max_bytes, then deinit DVP.
+    bool EncodeAndParkJpeg(size_t max_bytes);
 
     virtual void SetExplainUrl(const std::string &url, const std::string &token) override;
     virtual bool Capture() override;

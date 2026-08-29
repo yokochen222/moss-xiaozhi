@@ -20,7 +20,7 @@
 #include <driver/i2c_master.h>
 #include <wifi_manager.h>
 
-#define TAG "MossDesktopBoard"
+#define TAG "MossOnvifBoard"
 
 // Idle backlight/panel blank timeout (seconds). Wake word stays on (cpu_max_freq=-1).
 static constexpr int kScreenOffIdleSeconds = 30;
@@ -31,7 +31,7 @@ static void SendSt7735VendorInit(esp_lcd_panel_io_handle_t io) {
     ESP_LOGI(TAG, "ST7735 vendor init (INVON) sent");
 }
 
-class MossDesktopBoard : public WifiBoard {
+class MossOnvifBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     Button boot_button_;
@@ -191,7 +191,7 @@ private:
     }
 
 public:
-    MossDesktopBoard() : boot_button_(BOOT_BUTTON_GPIO) {
+    MossOnvifBoard() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
         InitializeSpi();
         InitializeSt7735Display();
@@ -234,4 +234,4 @@ public:
     }
 };
 
-DECLARE_BOARD(MossDesktopBoard);
+DECLARE_BOARD(MossOnvifBoard);

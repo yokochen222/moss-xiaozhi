@@ -1,6 +1,8 @@
 #include "audio_service.h"
+#include "audio_codec.h"
 #include <esp_log.h>
 #include <cstring>
+#include "sdkconfig.h"
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
     (esp_ae_rate_cvt_cfg_t) {                                                                \
@@ -190,6 +192,9 @@ void AudioService::Stop() {
     if (notify_drained && callbacks_.on_playback_drained) {
         callbacks_.on_playback_drained();
     }
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+    MossDesktopReleasePlayback(codec_);
+#endif
 }
 
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
@@ -337,7 +342,11 @@ void AudioService::AudioOutputTask() {
         if (!codec_->output_enabled()) {
             esp_timer_stop(audio_power_timer_);
             esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+            MossDesktopPreparePlayback(codec_);
+#else
             codec_->EnableOutput(true);
+#endif
         }
 
         codec_->OutputData(task->pcm);
@@ -730,7 +739,11 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+        MossDesktopPreparePlayback(codec_);
+#else
         codec_->EnableOutput(true);
+#endif
     }
 
     const auto* buf = reinterpret_cast<const uint8_t*>(ogg.data());
@@ -779,6 +792,11 @@ void AudioService::ResetDecoder() {
     if (notify_drained && callbacks_.on_playback_drained) {
         callbacks_.on_playback_drained();
     }
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+    if (notify_drained) {
+        MossDesktopReleasePlayback(codec_);
+    }
+#endif
 }
 
 bool AudioService::IsPlaybackDrainedLocked() const {
@@ -805,12 +823,20 @@ void AudioService::CheckAndUpdateAudioPowerState() {
         // input task instead of closing the codec from the esp_timer task.
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
     }
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+    if (codec_->output_enabled()) {
+        if (output_elapsed > 800 && IsPlaybackIdle()) {
+            MossDesktopReleasePlayback(codec_);
+        }
+    }
+#else
     if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled()) {
         // Keep TX clock when duplex RX is active; otherwise RX may stall on some boards.
         if (!(codec_->duplex() && codec_->input_enabled())) {
             codec_->EnableOutput(false);
         }
     }
+#endif
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
     }

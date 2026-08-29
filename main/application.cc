@@ -13,8 +13,12 @@
 
 #include "config/device_config.h"
 
-#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+#ifdef CONFIG_BOARD_FAMILY_MOSS
 #include "config/moss_config_service.h"
+#endif
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+#include "device/face_tracker.h"
+#include "device/moss_camera_stream.h"
 #endif
 
 #include <driver/gpio.h>
@@ -361,7 +365,7 @@ void Application::Run() {
 
 void Application::HandleNetworkConnectedEvent() {
     ESP_LOGI(TAG, "Network connected");
-#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+#ifdef CONFIG_BOARD_FAMILY_MOSS
     MossConfigService::GetInstance().OnNetworkConnected();
 #endif
     auto state = GetDeviceState();
@@ -768,7 +772,7 @@ void Application::InitializeProtocol() {
 
     protocol_->Start();
 
-#ifdef CONFIG_BOARD_TYPE_MOSS_DESKTOP
+#ifdef CONFIG_BOARD_FAMILY_MOSS
     // External MQTT is started by MossConfigService after Wi-Fi is up.
 #endif
 }
@@ -1464,10 +1468,24 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     RequestChatWake(wake_word);
 }
 
+void Application::SetPendingAnnounce(const std::string& text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_announce_ = text;
+}
+
+std::string Application::TakePendingAnnounce() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string text = pending_announce_;
+    pending_announce_.clear();
+    return text;
+}
+
 void Application::HandleExternalTextMessage(const std::string& text) {
     if (text.empty()) {
         return;
     }
+
+    SetPendingAnnounce(text);
 
     Schedule([this, text]() {
         auto state = GetDeviceState();
@@ -1518,6 +1536,15 @@ bool Application::CanEnterSleepMode() {
     if (!audio_service_.IsIdle()) {
         return false;
     }
+
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    if (MossCameraStream::GetInstance().IsArmed()) {
+        return false;
+    }
+    if (FaceTracker::GetInstance().IsRunning()) {
+        return false;
+    }
+#endif
 
     // Now it is safe to enter sleep mode
     return true;

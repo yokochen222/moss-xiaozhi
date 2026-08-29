@@ -3,6 +3,7 @@
 #include "application.h"
 #include "audio/wake_word_config.h"
 #include "board.h"
+#include "config/product.h"
 #include "device/eye_motor.h"
 #include "device/lamp_bar.h"
 #include "device/lamp_eye.h"
@@ -193,6 +194,8 @@ cJSON* BuildJson() {
 
     AppendWakeWord(root);
     AppendHardware(root);
+
+    MossProduct::AddIdentity(root);
 
     auto* device = cJSON_CreateObject();
     const esp_app_desc_t* app = esp_app_get_description();

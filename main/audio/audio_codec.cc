@@ -6,6 +6,13 @@
 #include <esp_log.h>
 #include <cstring>
 #include <driver/i2s_common.h>
+#include "sdkconfig.h"
+
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "pca9685_driver.h"
+#endif
 
 extern "C" {
 void __attribute__((weak)) AudioPcmTap_OnInput(const int16_t*, size_t, int) {}
@@ -13,6 +20,49 @@ void __attribute__((weak)) AudioPcmTap_OnOutput(const int16_t*, size_t, int) {}
 }
 
 #define TAG "AudioCodec"
+
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+namespace {
+
+constexpr uint8_t kNs4150PaPcaChannel = 1;
+bool ns4150_pa_enabled = false;
+
+}  // namespace
+
+void MossDesktopSetNs4150Pa(bool enable) {
+    if (ns4150_pa_enabled == enable) {
+        return;
+    }
+    if (!Pca9685::GetInstance().IsReady()) {
+        return;
+    }
+    if (!Pca9685::GetInstance().SetDigital(kNs4150PaPcaChannel, enable)) {
+        ESP_LOGW(TAG, "NS4150B EN %s failed (PCA9685 ch%d)", enable ? "on" : "off",
+                 (int)kNs4150PaPcaChannel);
+        return;
+    }
+    ns4150_pa_enabled = enable;
+    ESP_LOGI(TAG, "NS4150B EN %s (PCA9685 ch%d)", enable ? "on" : "off", (int)kNs4150PaPcaChannel);
+}
+
+void MossDesktopPreparePlayback(AudioCodec* codec) {
+    if (codec == nullptr) {
+        return;
+    }
+    if (!codec->output_enabled()) {
+        codec->EnableOutput(true);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    MossDesktopSetNs4150Pa(true);
+}
+
+void MossDesktopReleasePlayback(AudioCodec* codec) {
+    MossDesktopSetNs4150Pa(false);
+    if (codec != nullptr && codec->output_enabled()) {
+        codec->EnableOutput(false);
+    }
+}
+#endif
 
 AudioCodec::AudioCodec() {
 }

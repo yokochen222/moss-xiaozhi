@@ -7,7 +7,7 @@
 #include <functional>
 #include <map>
 
-// 所有单独的工具实现都放在tools/子文件夹
+// 通用 MCP 在 mcp/tools/；板级 MCP 在 boards/<board>/mcp/
 
 namespace mcp_tools {
 

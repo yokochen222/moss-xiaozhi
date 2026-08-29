@@ -3,6 +3,9 @@
 #include "methods/config/config_handlers.h"
 #include "methods/ir/ir_handlers.h"
 #include "methods/ir/ir_data_manager.h"
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+#include "methods/camera/camera_handlers.h"
+#endif
 
 #include <esp_log.h>
 #include <esp_http_server.h>
@@ -32,7 +35,7 @@ bool ApiServer::Start(int port) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port_;
     config.max_open_sockets = 7;
-    config.max_uri_handlers = 24;
+    config.max_uri_handlers = 32;
     config.max_resp_headers = 16;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
@@ -69,6 +72,15 @@ bool ApiServer::Start(int port) {
     add("/ir/command/delete", HTTP_POST, api_methods::ir::HandleIrCommandDelete);
     add("/ir/export", HTTP_GET, api_methods::ir::HandleIrExport);
     add("/ir/import", HTTP_POST, api_methods::ir::HandleIrImport);
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    add("/camera/stream", HTTP_GET, api_methods::camera::HandleStream);
+    add("/camera/snapshot", HTTP_GET, api_methods::camera::HandleSnapshot);
+    add("/camera/disarm", HTTP_GET, api_methods::camera::HandleDisarm);
+    add("/camera/disarm", HTTP_POST, api_methods::camera::HandleDisarm);
+    add("/gimbal/control", HTTP_POST, api_methods::camera::HandleGimbal);
+    add("/face_track/control", HTTP_POST, api_methods::camera::HandleFaceTrack);
+    add("/face_track/status", HTTP_GET, api_methods::camera::HandleFaceTrack);
+#endif
     add("/*", HTTP_OPTIONS, http_util::HandleOptions);
 
     is_running_ = true;

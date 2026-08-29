@@ -32,21 +32,24 @@ class VersionTests(unittest.TestCase):
         for variants in (idf5, idf6, idf61):
             names = [variant["full_name"] for variant in variants]
             self.assertEqual(len(names), len(set(names)))
-            # This fork only ships moss-desktop.
             self.assertEqual(
                 {variant["board"] for variant in variants},
-                {"moss/moss-desktop"},
+                {"moss/moss-onvif", "moss/moss-ov2640"},
             )
 
         idf6_names = {variant["full_name"] for variant in idf6}
-        self.assertEqual(idf6_names, {"moss-desktop"})
-        moss = next(variant for variant in idf6)
-        self.assertEqual(moss["type"], "moss-desktop")
-        self.assertEqual(moss["target"], "esp32s3")
-        self.assertEqual(moss["config"], "CONFIG_BOARD_TYPE_MOSS_DESKTOP")
+        self.assertEqual(idf6_names, {"moss-onvif", "moss-ov2640"})
+        by_type = {variant["type"]: variant for variant in idf6}
+        self.assertEqual(by_type["moss-onvif"]["target"], "esp32s3")
+        self.assertEqual(by_type["moss-onvif"]["config"], "CONFIG_BOARD_TYPE_MOSS_ONVIF")
+        self.assertEqual(by_type["moss-ov2640"]["config"], "CONFIG_BOARD_TYPE_MOSS_OV2640")
         self.assertEqual(
-            moss["display_name"],
-            "MOSS Desktop Assistant (MOSS 桌面助手)",
+            by_type["moss-onvif"]["display_name"],
+            "MOSS ONVIF (外接 ONVIF 摄像机)",
+        )
+        self.assertEqual(
+            by_type["moss-ov2640"]["display_name"],
+            "MOSS OV2640 (板载摄像头)",
         )
 
         for config_path in (ROOT / "main/boards").rglob("config.json"):
@@ -269,16 +272,24 @@ class BoardSelectionTests(unittest.TestCase):
         ]
 
 
-    def test_moss_desktop_is_the_only_board(self):
-        board = "moss/moss-desktop"
-        self.assertTrue(build._board_type_exists(board))
+    def test_moss_onvif_and_ov2640_boards_exist(self):
+        self.assertTrue(build._board_type_exists("moss/moss-onvif"))
+        self.assertTrue(build._board_type_exists("moss/moss-ov2640"))
         self.assertEqual(
-            build._resolve_board_config(board, "esp32s3", []),
-            "CONFIG_BOARD_TYPE_MOSS_DESKTOP",
+            build._resolve_board_config("moss/moss-onvif", "esp32s3", []),
+            "CONFIG_BOARD_TYPE_MOSS_ONVIF",
         )
         self.assertEqual(
-            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_DESKTOP"),
-            "MOSS Desktop Assistant (MOSS 桌面助手)",
+            build._resolve_board_config("moss/moss-ov2640", "esp32s3", []),
+            "CONFIG_BOARD_TYPE_MOSS_OV2640",
+        )
+        self.assertEqual(
+            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_ONVIF"),
+            "MOSS ONVIF (外接 ONVIF 摄像机)",
+        )
+        self.assertEqual(
+            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_OV2640"),
+            "MOSS OV2640 (板载摄像头)",
         )
 
 
@@ -490,9 +501,13 @@ class BoardMenuTests(unittest.TestCase):
         choice = kconfig.split("choice BOARD_TYPE\n", 1)[1].split(
             "endchoice\n", 1
         )[0]
-        # This fork only ships moss-desktop on ESP32-S3.
-        self.assertIn("default BOARD_TYPE_MOSS_DESKTOP", choice)
-        self.assertIn("config BOARD_TYPE_MOSS_DESKTOP", choice)
+        # This fork ships moss-onvif and moss-ov2640 on ESP32-S3.
+        self.assertIn("default BOARD_TYPE_MOSS_ONVIF", choice)
+        self.assertIn("config BOARD_TYPE_MOSS_ONVIF", choice)
+        self.assertIn("config BOARD_TYPE_MOSS_OV2640", choice)
+        self.assertNotIn("config BOARD_TYPE_MOSS_DESKTOP", choice)
+        kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
+        self.assertIn("config BOARD_FAMILY_MOSS", kconfig)
         self.assertNotIn("if IDF_TARGET_", choice)
 
 
@@ -1262,9 +1277,9 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.variants = [
             {
-                "board": "moss/moss-desktop",
-                "name": "moss-desktop",
-                "full_name": "moss-desktop",
+                "board": "moss/moss-onvif",
+                "name": "moss-onvif",
+                "full_name": "moss-onvif",
             },
             {
                 "board": "multi-board",
@@ -1311,7 +1326,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(
             output.getvalue(),
-            "moss/moss-desktop\n"
+            "moss/moss-onvif\n"
             "multi-board\n"
             "  - variant-a\n"
             "  - variant-b\n",
@@ -1357,12 +1372,12 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(build, "build_board") as build_board,
         ):
-            build.main(["moss/moss-desktop", "--name", "moss-desktop"])
+            build.main(["moss/moss-onvif", "--name", "moss-onvif"])
 
         build_board.assert_called_once_with(
-            "moss/moss-desktop",
+            "moss/moss-onvif",
             config_filename="config.json",
-            name_filter="moss-desktop",
+            name_filter="moss-onvif",
             create_zip=False,
             language=None,
             wake_word=None,
@@ -1381,7 +1396,7 @@ class CliTests(unittest.TestCase):
             ),
             mock.patch.object(build, "build_board") as build_board,
         ):
-            build.main(["moss/moss-desktop", "--name", "moss-desktop", "--zip"])
+            build.main(["moss/moss-onvif", "--name", "moss-onvif", "--zip"])
 
         self.assertTrue(build_board.call_args.kwargs["create_zip"])
 
@@ -1397,9 +1412,9 @@ class CliTests(unittest.TestCase):
             mock.patch.object(build, "build_board") as build_board,
         ):
             build.main([
-                "moss/moss-desktop",
+                "moss/moss-onvif",
                 "--name",
-                "moss-desktop",
+                "moss-onvif",
                 "--language",
                 "en-US",
                 "--wake-word",
@@ -1420,9 +1435,9 @@ class CliTests(unittest.TestCase):
             mock.patch.object(build, "build_board") as build_board,
         ):
             build.main([
-                "moss/moss-desktop",
+                "moss/moss-onvif",
                 "--name",
-                "moss-desktop",
+                "moss-onvif",
                 "--build-options-json",
                 '{"wifi_provisioning":"blufi"}',
             ])

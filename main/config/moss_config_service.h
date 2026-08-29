@@ -15,6 +15,7 @@ public:
     void LeaveBindMode();
     void OnMqttConnected();
     void OnMqttDisconnected();
+    void AnnounceOnline();
     void OnBindHello();
     void OnBindClear();
     void OnConfigSavedStartMqtt();
@@ -29,6 +30,7 @@ private:
     MossConfigService();
     ~MossConfigService();
 
+    void StartLanServices();
     void StartMdns();
     void StopMdns();
     static void HelloTimeoutCallback(void* arg);

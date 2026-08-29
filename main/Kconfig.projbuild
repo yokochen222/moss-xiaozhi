@@ -119,15 +119,22 @@ endchoice
 
 choice BOARD_TYPE
     prompt "Target Board"
-    default BOARD_TYPE_MOSS_DESKTOP
+    default BOARD_TYPE_MOSS_ONVIF
     help
         Select the physical board hardware implementation.
-        This fork only ships the MOSS Desktop board.
+        This fork ships MOSS ONVIF and MOSS OV2640 boards.
 
-    config BOARD_TYPE_MOSS_DESKTOP
-        bool "MOSS Desktop Assistant (MOSS 桌面助手)"
+    config BOARD_TYPE_MOSS_ONVIF
+        bool "MOSS ONVIF (外接 ONVIF 摄像机)"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_MOSS_OV2640
+        bool "MOSS OV2640 (板载摄像头)"
         depends on IDF_TARGET_ESP32S3
 endchoice
+
+config BOARD_FAMILY_MOSS
+    bool
+    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640
 
 choice DISPLAY_STYLE
     prompt "Select display style"
@@ -143,7 +150,7 @@ choice DISPLAY_STYLE
 
     config USE_EMOTE_MESSAGE_STYLE
         bool "Emote animation style"
-        depends on BOARD_TYPE_MOSS_DESKTOP
+        depends on BOARD_FAMILY_MOSS
 endchoice
 
 config USE_MULTILINE_CHAT_MESSAGE
@@ -252,7 +259,7 @@ config USE_AUDIO_PROCESSOR
 config USE_DEVICE_AEC
     bool "Enable Device-Side AEC"
     default n
-    depends on USE_AUDIO_PROCESSOR && BOARD_TYPE_MOSS_DESKTOP
+    depends on USE_AUDIO_PROCESSOR && BOARD_FAMILY_MOSS
     help
         To work properly, device-side AEC requires a clean output reference path from the speaker signal and physical acoustic isolation between the microphone and speaker.
 

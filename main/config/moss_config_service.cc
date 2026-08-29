@@ -2,6 +2,7 @@
 #include "api/api.h"
 #include "api/methods/ir/ir_data_manager.h"
 #include "application.h"
+#include "config/product.h"
 #include "device/infrared.h"
 #include "device/ir_catalog.h"
 #include "ext_mqtt_config.h"
@@ -13,6 +14,7 @@
 #include <esp_timer.h>
 #include <mdns.h>
 #include <algorithm>
+#include <wifi_manager.h>
 
 #define TAG "MossConfig"
 
@@ -91,20 +93,32 @@ void MossConfigService::OnNetworkConnected() {
     });
 
     auto config = ExtMqttSettings::Load();
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    // Onboard MJPEG is served on :5500. Keep HTTP/mDNS even after MQTT bind.
+    StartLanServices();
+#endif
     if (!config.bound || config.broker.empty()) {
         ESP_LOGI(TAG, "Unbound: entering LAN bind mode");
         EnterBindMode();
         return;
     }
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    ESP_LOGI(TAG, "Bound: MQTT up, HTTP/mDNS kept for camera");
+#else
     ESP_LOGI(TAG, "Bound: starting external MQTT, HTTP stays off until retries fail");
+#endif
     mqtt_client_.Start();
 }
 
-void MossConfigService::EnterBindMode() {
+void MossConfigService::StartLanServices() {
     if (!ApiServer::GetInstance().IsRunning()) {
         ApiServer::GetInstance().Start(5500);
     }
     StartMdns();
+}
+
+void MossConfigService::EnterBindMode() {
+    StartLanServices();
     bind_mode_ = true;
 }
 
@@ -113,6 +127,11 @@ void MossConfigService::LeaveBindMode() {
     if (hello_timer_) {
         esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
     }
+#ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
+    StartLanServices();
+    bind_mode_ = false;
+    ESP_LOGI(TAG, "Left bind mode, HTTP/mDNS kept for camera");
+#else
     if (!bind_mode_ && !ApiServer::GetInstance().IsRunning() && !mdns_started_) {
         return;
     }
@@ -122,10 +141,12 @@ void MossConfigService::LeaveBindMode() {
     StopMdns();
     bind_mode_ = false;
     ESP_LOGI(TAG, "Left bind mode, HTTP/mDNS stopped");
+#endif
 }
 
 void MossConfigService::OnMqttConnected() {
     mqtt_client_.ResetFailCount();
+    Application::GetInstance().Schedule([]() { MossConfigService::GetInstance().AnnounceOnline(); });
     if (awaiting_hello_ && hello_timer_) {
         esp_timer_stop(reinterpret_cast<esp_timer_handle_t>(hello_timer_));
         esp_timer_start_once(reinterpret_cast<esp_timer_handle_t>(hello_timer_), kHelloTimeoutUs);
@@ -137,7 +158,27 @@ void MossConfigService::OnMqttDisconnected() {
     // Reconnect is handled inside ExternalMqttClient.
 }
 
+void MossConfigService::AnnounceOnline() {
+    cJSON* payload = cJSON_CreateObject();
+    MossProduct::AddIdentity(payload);
+    cJSON_AddStringToObject(payload, "name", BOARD_TYPE);
+    cJSON_AddStringToObject(payload, "hostname", hostname_.c_str());
+    const std::string ip = WifiManager::GetInstance().GetIpAddress();
+    if (!ip.empty()) {
+        cJSON_AddStringToObject(payload, "ip", ip.c_str());
+    }
+    if (!PublishUp("device.online", "", payload)) {
+        ESP_LOGW(TAG, "device.online publish failed");
+    } else {
+        ESP_LOGI(TAG, "device.online board=%s ip=%s", BOARD_TYPE, ip.c_str());
+    }
+    cJSON_Delete(payload);
+}
+
 void MossConfigService::OnBindHello() {
+    if (!awaiting_hello_ && !bind_mode_) {
+        return;
+    }
     ESP_LOGI(TAG, "bind.hello received");
     LeaveBindMode();
 }
@@ -170,7 +211,16 @@ void MossConfigService::StartMdns() {
     }
     mdns_hostname_set(hostname_.c_str());
     mdns_instance_name_set(InstanceName().c_str());
-    mdns_service_add(InstanceName().c_str(), "_moss-http", "_tcp", 5500, nullptr, 0);
+    mdns_txt_item_t txt[] = {
+        {"path", "/health"},
+        {"product", MossProduct::kId},
+        {"board", BOARD_TYPE},
+    };
+    esp_err_t add_err =
+        mdns_service_add(InstanceName().c_str(), "_moss-http", "_tcp", 5500, txt, 3);
+    if (add_err != ESP_OK && add_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "mdns_service_add: %s", esp_err_to_name(add_err));
+    }
     mdns_started_ = true;
     ESP_LOGI(TAG, "mDNS started hostname=%s.local instance=%s", hostname_.c_str(),
              InstanceName().c_str());

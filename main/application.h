@@ -121,6 +121,8 @@ public:
     AudioService& GetAudioService() { return audio_service_; }
     // External MQTT codesuccess / text wake trigger.
     void HandleExternalTextMessage(const std::string& text);
+    void SetPendingAnnounce(const std::string& text);
+    std::string TakePendingAnnounce();
 
     using ChatRelayCallback = std::function<void(const std::string& event, const std::string& role,
                                                  const std::string& text, const std::string& state)>;
@@ -152,6 +154,7 @@ private:
     std::function<void(const std::string&)> mcp_broadcast_callback_;
     ChatRelayCallback chat_relay_callback_;
     std::string pending_text_to_send_;
+    std::string pending_announce_;
 
     bool has_server_time_ = false;
     bool aborted_ = false;

@@ -1,10 +1,10 @@
 {
     "manufacturer": "moss",
-    "type": "moss-desktop",
+    "type": "moss-onvif",
     "target": "esp32s3",
     "builds": [
         {
-            "name": "moss-desktop",
+            "name": "moss-onvif",
             "sdkconfig_append": [
                 "CONFIG_USE_DEVICE_AEC=y",
                 "CONFIG_ENABLE_VAD_INTERRUPT=y",
@@ -17,7 +17,8 @@
                 "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"MOSS\"",
                 "CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20",
                 "CONFIG_PARTITION_TABLE_CUSTOM=y",
-                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/moss-desktop-16m.csv\""
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/moss-desktop-16m.csv\"",
+                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y"
             ]
         }
     ]

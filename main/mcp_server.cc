@@ -109,11 +109,13 @@ void McpServer::AddCommonTools() {
                 Property("question", kPropertyTypeString)
             }),
             [camera](const PropertyList& properties) -> ReturnValue {
-                // Lower the priority to do the camera capture
-                TaskPriorityReset priority_reset(1);
+                // Lower priority only for DVP grab. Explain HTTP at prio 1 starves audio/LCD.
+                {
+                    TaskPriorityReset priority_reset(1);
 
-                if (!camera->Capture()) {
-                    throw std::runtime_error("Failed to capture photo");
+                    if (!camera->Capture()) {
+                        throw std::runtime_error("Failed to capture photo");
+                    }
                 }
                 auto question = properties["question"].value<std::string>();
                 return camera->Explain(question);

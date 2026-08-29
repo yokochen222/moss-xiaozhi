@@ -83,7 +83,7 @@ void LampPanelTool::Register() {
                 status += "  面板灯1: " + std::string(lamp_panel_device_.IsPanelLed1On() ? "开启" : "关闭") + "\n";
                 status += "  面板灯2: " + std::string(lamp_panel_device_.IsPanelLed2On() ? "开启" : "关闭") + "\n";
                 status += "  底灯:    " + std::string(lamp_panel_device_.IsBottomLedOn() ? "开启" : "关闭") + "\n";
-                status += "硬件: 74HC595 (Q5=面板灯1, Q6=面板灯2, Q7=底灯)；与流水灯共用同一组 SER/RCK/SCK 引脚但状态完全隔离。";
+                status += "硬件: 板级面板灯/底灯驱动";
                 return status;
             } else {
                 return "未知动作: " + action +
