@@ -671,12 +671,13 @@ void Application::InitializeProtocol() {
                     } else {
                         ESP_LOGI(TAG, "tts/start: keep queued TTS packets");
                     }
-                    if (auto* codec = Board::GetInstance().GetAudioCodec();
-                        codec != nullptr && !codec->output_enabled()) {
+                    if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
                         MossDesktopPreparePlayback(codec);
 #else
-                        codec->EnableOutput(true);
+                        if (!codec->output_enabled()) {
+                            codec->EnableOutput(true);
+                        }
 #endif
                     }
                     SetDeviceState(kDeviceStateSpeaking);
@@ -720,12 +721,13 @@ void Application::InitializeProtocol() {
                         if (GetDeviceState() != kDeviceStateSpeaking) {
                             SetDeviceState(kDeviceStateSpeaking);
                         }
-                        if (auto* codec = Board::GetInstance().GetAudioCodec();
-                            codec != nullptr && !codec->output_enabled()) {
+                        if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
                             MossDesktopPreparePlayback(codec);
 #else
-                            codec->EnableOutput(true);
+                            if (!codec->output_enabled()) {
+                                codec->EnableOutput(true);
+                            }
 #endif
                         }
                         display->AddTextGlyphs(glyphs, bpp);
@@ -1341,6 +1343,7 @@ void Application::HandleVadInterruptConfirm() {
         return;
     }
     ESP_LOGI(TAG, "VAD barge-in confirmed (pb=%d res=%d pct=%d)", playback, residual, pct);
+    barge_in_flush_residual_ = residual;
     barge_in_candidate_residual_ = 0;
     HoldSpeakingUplink();
     AbortSpeaking(kAbortReasonVadInterrupt);
@@ -1367,11 +1370,13 @@ void Application::FlushBargeInHold(bool send) {
     if (send && protocol_) {
         HoldSpeakingUplink();
         if (!barge_in_hold_.empty()) {
-            // Keep ~720ms before the relative energy jump. An absolute floor of
-            // 280 dropped "云台"/"你会" when echo_est was only 78 (11/20 sent,
-            // ASR heard "角度。" / "十十度").
-            constexpr int kOnsetPadPackets = 16;
-            constexpr size_t kFallbackPackets = 24;
+            // Hit is the loud part after NLP. The first syllables sit below
+            // onset_need ("好的拜拜"→"拜拜", "不是丫丫"→"不丫丫"). Walk back to
+            // the echo floor, then pad. Cap at 20 packets so we do not dump
+            // 1.9s of TTS leak again.
+            constexpr int kOnsetPadPackets = 8;
+            constexpr size_t kMaxSendPackets = 20;
+            constexpr size_t kFallbackPackets = 16;
             const size_t n = barge_in_hold_.size();
             const size_t head = std::max<size_t>(1, n / 4);
             int echo_est = 0;
@@ -1379,22 +1384,40 @@ void Application::FlushBargeInHold(bool send) {
                 echo_est += barge_in_hold_[i]->residual;
             }
             echo_est /= static_cast<int>(head);
-            const int onset_need = echo_est + std::max(echo_est / 4, 20);
-            // Loud leading echo: search the latter part so an early PA spike is
-            // not treated as the start of speech.
-            const size_t search_from = (echo_est >= 160) ? n / 3 : 0;
-            size_t start = n;
-            for (size_t i = search_from; i < n; ++i) {
+            int onset_need = echo_est + std::max(echo_est, 80);
+            if (barge_in_flush_residual_ > 0) {
+                const int mid = (echo_est + barge_in_flush_residual_) / 2;
+                const int cap = std::max(echo_est + 40, barge_in_flush_residual_ * 2 / 3);
+                onset_need = std::max(onset_need, mid);
+                onset_need = std::min(onset_need, cap);
+            }
+            const size_t earliest = n > kMaxSendPackets ? n - kMaxSendPackets : 0;
+            size_t hit = n;
+            for (size_t i = earliest; i < n; ++i) {
                 if (barge_in_hold_[i]->residual >= onset_need) {
-                    start = i > static_cast<size_t>(kOnsetPadPackets) ? i - kOnsetPadPackets : 0;
+                    hit = i;
                     break;
                 }
             }
-            if (start >= n) {
+            size_t start;
+            if (hit >= n) {
                 start = n > kFallbackPackets ? n - kFallbackPackets : 0;
+            } else {
+                const int back_floor = echo_est + std::max(echo_est / 4, 20);
+                size_t speech_at = hit;
+                while (speech_at > earliest &&
+                       barge_in_hold_[speech_at - 1]->residual > back_floor) {
+                    speech_at--;
+                }
+                start = speech_at > static_cast<size_t>(kOnsetPadPackets)
+                            ? speech_at - kOnsetPadPackets
+                            : 0;
+                if (start < earliest) {
+                    start = earliest;
+                }
             }
-            ESP_LOGI(TAG, "barge-in preroll %u/%u packets (echo_est=%d need=%d)",
-                     (unsigned)(n - start), (unsigned)n, echo_est, onset_need);
+            ESP_LOGI(TAG, "barge-in preroll %u/%u packets (echo_est=%d need=%d hit=%u)",
+                     (unsigned)(n - start), (unsigned)n, echo_est, onset_need, (unsigned)hit);
             for (size_t i = start; i < n; ++i) {
                 if (!protocol_->SendAudio(std::move(barge_in_hold_[i]))) {
                     break;
@@ -1403,6 +1426,7 @@ void Application::FlushBargeInHold(bool send) {
         }
     }
     barge_in_hold_.clear();
+    barge_in_flush_residual_ = 0;
 }
 
 #endif

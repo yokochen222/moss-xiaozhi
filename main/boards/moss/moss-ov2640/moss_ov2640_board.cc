@@ -112,6 +112,7 @@ public:
     }
 
     bool Capture() override {
+        MossDesktopSharedI2cHold i2c_hold;
         const bool own_session = !stream_acquired_;
         if (own_session) {
             FaceTracker::GetInstance().PauseForExternalCameraUse();
@@ -293,6 +294,7 @@ public:
         if (tracking_acquired_) {
             return true;
         }
+        MossDesktopHoldSharedI2c(true);
         // Drop JPEG instance if any (photo parks JPEG then deinit DVP).
         ReleaseLocked();
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -349,6 +351,7 @@ public:
         }
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Tracking esp_camera_init failed: 0x%x", err);
+            MossDesktopHoldSharedI2c(false);
             UnpauseLcdAfterFailedDvp();
             return false;
         }
@@ -545,6 +548,7 @@ private:
         // frame, and cam_deinit free then corrupts the heap (tlsf assert / cache).
         DeinitDvpSafe();
         PulseDvpReset();
+        MossDesktopHoldSharedI2c(false);
     }
 
     static void DeinitDvpSafe() {

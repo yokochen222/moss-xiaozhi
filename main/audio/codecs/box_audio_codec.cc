@@ -242,6 +242,12 @@ void BoxAudioCodec::EnableOutput(bool enable) {
     if (enable == output_enabled_) {
         return;
     }
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+    if (MossDesktopSharedI2cHeld()) {
+        ESP_LOGW(TAG, "Skip EnableOutput(%s): camera holds shared I2C", enable ? "true" : "false");
+        return;
+    }
+#endif
     if (enable) {
         // Play 16bit 1 channel
         esp_codec_dev_sample_info_t fs = {

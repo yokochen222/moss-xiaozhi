@@ -4,6 +4,7 @@
 #include "settings.h"
 
 #include <esp_log.h>
+#include <atomic>
 #include <cstring>
 #include <driver/i2s_common.h>
 #include "sdkconfig.h"
@@ -26,10 +27,29 @@ namespace {
 
 constexpr uint8_t kNs4150PaPcaChannel = 1;
 bool ns4150_pa_enabled = false;
+std::atomic<int> shared_i2c_hold{0};
 
 }  // namespace
 
+void MossDesktopHoldSharedI2c(bool hold) {
+    if (hold) {
+        shared_i2c_hold.fetch_add(1, std::memory_order_acq_rel);
+        return;
+    }
+    int v = shared_i2c_hold.load(std::memory_order_relaxed);
+    while (v > 0 && !shared_i2c_hold.compare_exchange_weak(v, v - 1, std::memory_order_acq_rel,
+                                                           std::memory_order_relaxed)) {
+    }
+}
+
+bool MossDesktopSharedI2cHeld() {
+    return shared_i2c_hold.load(std::memory_order_acquire) > 0;
+}
+
 void MossDesktopSetNs4150Pa(bool enable) {
+    if (MossDesktopSharedI2cHeld()) {
+        return;
+    }
     if (ns4150_pa_enabled == enable) {
         return;
     }
@@ -46,6 +66,9 @@ void MossDesktopSetNs4150Pa(bool enable) {
 }
 
 void MossDesktopPreparePlayback(AudioCodec* codec) {
+    if (MossDesktopSharedI2cHeld()) {
+        return;
+    }
     if (codec == nullptr) {
         return;
     }
@@ -57,10 +80,19 @@ void MossDesktopPreparePlayback(AudioCodec* codec) {
 }
 
 void MossDesktopReleasePlayback(AudioCodec* codec) {
-    MossDesktopSetNs4150Pa(false);
-    if (codec != nullptr && codec->output_enabled()) {
-        codec->EnableOutput(false);
+    if (MossDesktopSharedI2cHeld()) {
+        return;
     }
+    MossDesktopSetNs4150Pa(false);
+    if (codec == nullptr || !codec->output_enabled()) {
+        return;
+    }
+    // Duplex I2S: never close TX on this board. Mic-off during camera used to
+    // EnableOutput(false) on the shared I2C bus and crash SCCB_Deinit.
+    if (codec->duplex()) {
+        return;
+    }
+    codec->EnableOutput(false);
 }
 #endif
 

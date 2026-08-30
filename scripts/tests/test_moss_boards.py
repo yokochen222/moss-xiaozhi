@@ -76,6 +76,99 @@ class MossBoardIdentityTests(unittest.TestCase):
             self.assertIn("AUDIO_CODEC_REFERENCE_GAIN", src)
         self.assertNotIn("AUDIO_CODEC_INPUT_GAIN, 2, 0.0f", ov2640)
 
+    def test_ov2640_release_playback_keeps_i2s_while_mic_on(self):
+        src = (ROOT / "main/audio/audio_codec.cc").read_text(encoding="utf-8")
+        start = src.find("void MossDesktopReleasePlayback")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("AudioCodec::AudioCodec", start)]
+        self.assertIn("MossDesktopSetNs4150Pa(false)", body)
+        self.assertIn("MossDesktopSharedI2cHeld()", body)
+        self.assertIn("duplex()", body)
+        self.assertIn("codec->EnableOutput(false)", body)
+        self.assertLess(body.find("if (codec->duplex())"), body.find("codec->EnableOutput(false)"))
+        self.assertNotIn("input_enabled()", body)
+
+    def test_ov2640_camera_holds_shared_i2c_during_dvp(self):
+        codec = (ROOT / "main/audio/audio_codec.cc").read_text(encoding="utf-8")
+        self.assertIn("void MossDesktopHoldSharedI2c", codec)
+        box = (ROOT / "main/audio/codecs/box_audio_codec.cc").read_text(encoding="utf-8")
+        self.assertIn("MossDesktopSharedI2cHeld()", box)
+        board = (ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc").read_text(
+            encoding="utf-8"
+        )
+        cap = board.find("bool Capture() override")
+        self.assertGreater(cap, 0)
+        cap_body = board[cap : board.find("bool SetHMirror", cap)]
+        self.assertIn("MossDesktopSharedI2cHold", cap_body)
+        track = board.find("bool AcquireTracking() override")
+        track_body = board[track : board.find("bool IsTrackingAcquired", track)]
+        self.assertIn("MossDesktopHoldSharedI2c(true)", track_body)
+        mcp = (ROOT / "main/mcp_server.cc").read_text(encoding="utf-8")
+        self.assertIn("MossDesktopHoldSharedI2c(true)", mcp)
+
+    def test_both_boards_keep_i2s_tx_while_mic_on_for_wake(self):
+        src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        start = src.find("void AudioService::CheckAndUpdateAudioPowerState")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("void AudioService::SetModelsList", start)]
+        self.assertIn("MossDesktopReleasePlayback(codec_)", body)
+        self.assertIn("MossDesktopSharedI2cHeld()", body)
+        self.assertIn("Keep TX clock when duplex RX is active", body)
+        self.assertIn("duplex() && codec_->input_enabled()", body)
+        ov2640 = body[body.find("CONFIG_BOARD_TYPE_MOSS_OV2640") : body.find("#else")]
+        onvif = body[body.find("#else") :]
+        self.assertIn("MossDesktopReleasePlayback", ov2640)
+        self.assertNotIn("EnableOutput(false)", ov2640)
+        self.assertIn("EnableOutput(false)", onvif)
+        self.assertLess(
+            onvif.find("duplex() && codec_->input_enabled()"),
+            onvif.find("EnableOutput(false)"),
+        )
+
+    def test_ov2640_unmutes_pa_even_when_i2s_already_on(self):
+        service = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        out_start = service.find("void AudioService::AudioOutputTask")
+        self.assertGreater(out_start, 0)
+        out_body = service[out_start : service.find("void AudioService::", out_start + 1)]
+        pa = out_body.find("MossDesktopPreparePlayback(codec_)")
+        self.assertGreater(pa, 0)
+        opened = out_body.find("if (!codec_->output_enabled())")
+        self.assertGreater(opened, 0)
+        self.assertGreater(pa, out_body.find("}", opened))
+
+        reset_start = service.find("void AudioService::ResetDecoder")
+        reset_body = service[reset_start : service.find("bool AudioService::IsPlaybackDrainedLocked", reset_start)]
+        self.assertNotIn("MossDesktopReleasePlayback", reset_body)
+
+        app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        tts = app.find('if (strcmp(state->valuestring, "start") == 0)')
+        tts_body = app[tts : app.find('else if (strcmp(state->valuestring, "stop") == 0)', tts)]
+        self.assertIn("MossDesktopPreparePlayback(codec)", tts_body)
+        self.assertNotIn("codec != nullptr && !codec->output_enabled()", tts_body)
+
+    def test_ov2640_camera_guard_restores_mic_during_tts(self):
+        src = (ROOT / "main/mcp_server.cc").read_text(encoding="utf-8")
+        start = src.find("class MossCameraVoiceGuard")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("}  // namespace", start)]
+        self.assertNotIn("Do not reopen the mic during TTS", body)
+        dtor = body[body.find("~MossCameraVoiceGuard") :]
+        self.assertIn("kDeviceStateSpeaking", dtor)
+        self.assertIn("EnableInput(true)", dtor)
+        self.assertIn("EnableVoiceProcessing(true)", dtor)
+        self.assertIn("voice_session", dtor)
+        take = src.find('AddTool("self.camera.take_photo"')
+        self.assertGreater(take, 0)
+        take_body = src[take : src.find("AddUserOnlyTools", take)]
+        capture = take_body.find("camera->Capture()")
+        explain = take_body.find("camera->Explain")
+        guard = take_body.find("MossCameraVoiceGuard voice_guard")
+        self.assertGreater(capture, 0)
+        self.assertGreater(explain, 0)
+        self.assertGreater(guard, 0)
+        self.assertLess(guard, capture)
+        self.assertLess(capture, explain)
+
     def test_apply_wake_word_does_not_touch_codec_volume(self):
         src = (ROOT / "main/audio/wake_words/custom_wake_word.cc").read_text(encoding="utf-8")
         start = src.find("bool CustomWakeWord::ApplyConfig")
@@ -394,11 +487,22 @@ class MossBargeInTests(unittest.TestCase):
                 "void Application::SendUplinkFromQueue"
             )
         ]
-        self.assertIn("kOnsetPadPackets = 16", flush)
+        self.assertIn("kOnsetPadPackets = 8", flush)
+        self.assertIn("kMaxSendPackets = 20", flush)
+        self.assertIn("back_floor", flush)
         self.assertIn("onset_need", flush)
-        self.assertIn("kFallbackPackets = 24", flush)
+        self.assertIn("kFallbackPackets = 16", flush)
+        self.assertIn("barge_in_flush_residual_", flush)
         self.assertIn("HoldSpeakingUplink()", flush)
         self.assertNotIn("kMinSpeechAbs", flush)
+        self.assertNotIn("kOnsetPadPackets = 6", flush)
+        self.assertNotIn("kMaxSendPackets = 16", flush)
+        confirm = src[
+            src.find("void Application::HandleVadInterruptConfirm") : src.find(
+                "void Application::HoldSpeakingUplink"
+            )
+        ]
+        self.assertIn("barge_in_flush_residual_ = residual", confirm)
 
     def test_audio_service_learns_echo_floor_before_barge_in(self):
         header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")

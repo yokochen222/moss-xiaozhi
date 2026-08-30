@@ -70,6 +70,10 @@
 桌面硬件页同一套控件：音量、AEC、按住说话、亮度、唤醒词、灵敏度、灯/电机、远程唤醒。  
 **不要**为 onvif 隐藏其中任何一项。onvif 没有 LVGL 主题（splash 屏），`screen.theme` 不出现是对的，两板都如此。
 
+双工 I2S：麦克风还在跑时 **两板都不得关 TX**。关掉 TX 会卡住 ES7210，唤醒变聋。onvif 在 `CheckAndUpdateAudioPowerState` 里跳过 `EnableOutput(false)`；ov2640 关 PCA9685 功放时同样只关 PA、不关 I2S。禁止只给其中一块加 MIC 增益来「修」唤醒。
+
+ov2640 的 PA 和 I2S 是分开的：idle 听唤醒时 TX 可开、功放关掉。出声时必须再 `MossDesktopPreparePlayback`，**不能**因为 `output_enabled()` 已是 true 就跳过，否则 TTS 进 DAC 但喇叭没电。onvif 功放跟 `EnableOutput` 绑在 GPIO48，TX 开着就有声，不要把 ov2640 这套 PA 逻辑抄过去。
+
 ### 2.3 显示
 
 两板都是 0.96" ST7735 160×80 + 嵌入 splash，**不用 LVGL 主题**。硬件页不显示「界面主题」。
@@ -90,7 +94,8 @@ moss-ov2640: 以上全 true（onboard_preview 目前仍为 false）
 这些是摄像头/云台/功放 PCA9685 的特例，**不要**复制到 onvif，也 **不要** 把共用控制面塞进这些宏：
 
 - `application.cc`：人脸追踪在 idle/listening 恢复；相机流/追踪占用时不进休眠
-- `audio_codec.cc`：`MossDesktopPreparePlayback` 打开 PCA9685 上的 NS4150B
+- `mcp_server.cc`：`MossCameraVoiceGuard` 只在 DVP 抓帧时关 MIC；抓完立刻恢复，TTS 讲解期间必须能 barge-in（不要等 listening）
+- `audio_codec.cc`：`MossDesktopPreparePlayback` / `MossDesktopReleasePlayback`（PCA9685 上的 NS4150B）。SCCB / PCA9685 / ES8311 共用 IO1/IO2：DVP 期间必须 `MossDesktopHoldSharedI2c`，禁止音频定时器在总线上关 codec。双工时不要关 I2S TX。
 - `main/api/api.cc`：`/camera` `/gimbal` `/face_track` 路由
 - `main/CMakeLists.txt`：`device/ov2640/*`、云台、人脸、`camera_handlers.cc`
 

@@ -347,14 +347,18 @@ void AudioService::AudioOutputTask() {
         if (!codec_->output_enabled()) {
             esp_timer_stop(audio_power_timer_);
             esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+        }
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
-            MossDesktopPreparePlayback(codec_);
+        // PA is independent of I2S on this board: idle listening keeps TX for
+        // wake but turns the amp off. Always unmute before PCM, even if TX is up.
+        MossDesktopPreparePlayback(codec_);
 #else
+        if (!codec_->output_enabled()) {
             codec_->EnableOutput(true);
             // Match ov2640: let NS4150B / analog path settle before the first PCM.
             vTaskDelay(pdMS_TO_TICKS(10));
-#endif
         }
+#endif
 
         if (playback_muted_.load(std::memory_order_relaxed)) {
             NotePlaybackPcm(task->pcm.data(), task->pcm.size());
@@ -978,13 +982,15 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
         esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+    }
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
-        MossDesktopPreparePlayback(codec_);
+    MossDesktopPreparePlayback(codec_);
 #else
+    if (!codec_->output_enabled()) {
         codec_->EnableOutput(true);
         vTaskDelay(pdMS_TO_TICKS(10));
-#endif
     }
+#endif
 
     const auto* buf = reinterpret_cast<const uint8_t*>(ogg.data());
     size_t size = ogg.size();
@@ -1034,11 +1040,9 @@ void AudioService::ResetDecoder() {
     if (notify_drained && callbacks_.on_playback_drained) {
         callbacks_.on_playback_drained();
     }
-#if CONFIG_BOARD_TYPE_MOSS_OV2640
-    if (notify_drained) {
-        MossDesktopReleasePlayback(codec_);
-    }
-#endif
+    // Do not ReleasePlayback here. tts/start calls ResetDecoder while the mic
+    // is still on; turning the amp off while leaving I2S up made the next
+    // PreparePlayback skip (output_enabled already true) and TTS was silent.
 }
 
 bool AudioService::IsPlaybackDrainedLocked() const {
@@ -1066,8 +1070,10 @@ void AudioService::CheckAndUpdateAudioPowerState() {
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_INPUT_STOP_REQUEST);
     }
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
-    if (codec_->output_enabled()) {
+    if (codec_->output_enabled() && !MossDesktopSharedI2cHeld()) {
         if (output_elapsed > 800 && IsPlaybackIdle()) {
+            // PA off only. Never close I2S TX (duplex). Skip entirely while
+            // the camera holds the shared I2C bus (SCCB + PCA9685 + codec).
             MossDesktopReleasePlayback(codec_);
         }
     }

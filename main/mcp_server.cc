@@ -36,9 +36,12 @@ public:
             return;
         }
         active_ = true;
+        MossDesktopHoldSharedI2c(true);
+        i2c_held_ = true;
         auto& audio = Application::GetInstance().GetAudioService();
         auto* codec = Board::GetInstance().GetAudioCodec();
         voice_processing_was_on_ = audio.IsAudioProcessorRunning();
+        wake_was_on_ = audio.IsWakeWordRunning();
         audio.EnableVoiceProcessing(false);
         audio.EnableWakeWordDetection(false);
         if (codec != nullptr) {
@@ -58,22 +61,37 @@ public:
         auto& audio = app.GetAudioService();
         auto* codec = Board::GetInstance().GetAudioCodec();
         const auto state = app.GetDeviceState();
-        // Do not reopen the mic during TTS; wait until listening resumes.
-        if (codec != nullptr && input_was_on_ && state == kDeviceStateListening) {
-            codec->EnableInput(true);
+        const bool voice_session = state == kDeviceStateListening ||
+                                   state == kDeviceStateSpeaking ||
+                                   state == kDeviceStateConnecting;
+        if (i2c_held_) {
+            MossDesktopHoldSharedI2c(false);
+            i2c_held_ = false;
         }
-        if (state == kDeviceStateListening && voice_processing_was_on_) {
-            audio.EnableVoiceProcessing(true);
-        }
-        if (codec != nullptr && !codec->output_enabled()) {
+        // Capture is over. Restore the mic even while TTS is playing so barge-in
+        // matches the non-camera speaking path (and onvif, which never mutes here).
+        if (codec != nullptr && state == kDeviceStateSpeaking) {
             MossDesktopPreparePlayback(codec);
         }
+        if (codec != nullptr && input_was_on_ && voice_session) {
+            codec->EnableInput(true);
+        }
+        if (voice_processing_was_on_ && voice_session) {
+            audio.EnableVoiceProcessing(true);
+        }
+        if (wake_was_on_ && state == kDeviceStateListening) {
+            audio.EnableWakeWordDetection(true);
+        }
+        ESP_LOGI(TAG, "Camera voice restore state=%d input=%d vad=%d", (int)state,
+                 input_was_on_ && voice_session, voice_processing_was_on_ && voice_session);
     }
 
 private:
     bool active_ = false;
+    bool i2c_held_ = false;
     bool input_was_on_ = false;
     bool voice_processing_was_on_ = false;
+    bool wake_was_on_ = false;
 };
 
 }  // namespace
@@ -168,11 +186,11 @@ void McpServer::AddCommonTools() {
                 Property("question", kPropertyTypeString)
             }),
             [camera](const PropertyList& properties) -> ReturnValue {
-#if CONFIG_BOARD_TYPE_MOSS_OV2640
-                MossCameraVoiceGuard voice_guard;
-#endif
-                // Lower priority only for DVP grab. Explain HTTP at prio 1 starves audio/LCD.
                 {
+#if CONFIG_BOARD_TYPE_MOSS_OV2640
+                    MossCameraVoiceGuard voice_guard;
+#endif
+                    // Lower priority only for DVP grab. Explain HTTP at prio 1 starves audio/LCD.
                     TaskPriorityReset priority_reset(1);
 
                     if (!camera->Capture()) {

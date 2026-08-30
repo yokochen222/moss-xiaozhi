@@ -73,6 +73,18 @@ protected:
 void MossDesktopSetNs4150Pa(bool enable);
 void MossDesktopPreparePlayback(AudioCodec* codec);
 void MossDesktopReleasePlayback(AudioCodec* codec);
+// OV2640 SCCB / PCA9685 / ES8311 share IO1/IO2. Hold while DVP is up so the
+// audio power timer cannot close the codec or toggle PA on that bus.
+void MossDesktopHoldSharedI2c(bool hold);
+bool MossDesktopSharedI2cHeld();
+
+class MossDesktopSharedI2cHold {
+public:
+    MossDesktopSharedI2cHold() { MossDesktopHoldSharedI2c(true); }
+    ~MossDesktopSharedI2cHold() { MossDesktopHoldSharedI2c(false); }
+    MossDesktopSharedI2cHold(const MossDesktopSharedI2cHold&) = delete;
+    MossDesktopSharedI2cHold& operator=(const MossDesktopSharedI2cHold&) = delete;
+};
 #endif
 
 #endif // _AUDIO_CODEC_H
