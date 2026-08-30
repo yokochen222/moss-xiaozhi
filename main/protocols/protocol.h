@@ -12,6 +12,7 @@ struct AudioStreamPacket {
     int sample_rate = 0;
     int frame_duration = 0;
     uint32_t timestamp = 0;
+    int residual = 0;  // post-AEC mean-abs at encode; barge-in preroll trim
     std::vector<uint8_t> payload;
 };
 

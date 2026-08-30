@@ -604,8 +604,10 @@ void Application::InitializeProtocol() {
                 return;
             }
         }
-        // Allow listening as well: text-trigger may receive TTS before state flips to speaking.
-        if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+        // Wake / text-trigger: MQTT binary can arrive while still connecting or
+        // listening, before the scheduled tts/start flips the device to speaking.
+        if (state == kDeviceStateSpeaking || state == kDeviceStateListening ||
+            state == kDeviceStateConnecting) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
     });
@@ -659,7 +661,16 @@ void Application::InitializeProtocol() {
                     if (protocol_) {
                         protocol_->SetPendingAudioDropped(false);
                     }
-                    audio_service_.ResetDecoder();
+                    // tts/start is deferred onto the main loop. MQTT audio often
+                    // queues first (wake greeting "你好，上校。"). ResetDecoder
+                    // here would drop that entire utterance; only wipe when this
+                    // is a new speaking turn or the queues are still empty.
+                    const auto prior = GetDeviceState();
+                    if (prior == kDeviceStateSpeaking || audio_service_.IsPlaybackIdle()) {
+                        audio_service_.ResetDecoder();
+                    } else {
+                        ESP_LOGI(TAG, "tts/start: keep queued TTS packets");
+                    }
                     if (auto* codec = Board::GetInstance().GetAudioCodec();
                         codec != nullptr && !codec->output_enabled()) {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
@@ -695,6 +706,10 @@ void Application::InitializeProtocol() {
 #if CONFIG_ENABLE_VAD_INTERRUPT
                         last_tts_sentence_us_ = esp_timer_get_time();
                         CancelVadInterruptTimer();
+                        vad_interrupt_armed_ = false;
+                        vad_silence_started_us_ = 0;
+                        barge_in_candidate_residual_ = 0;
+                        barge_in_ratio_hits_ = 0;
 #endif
                         // Some server paths emit sentence_start before tts/start; without
                         // this, pending_audio_dropped stays true and all TTS is silent.
@@ -1095,9 +1110,7 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");
 
 #if CONFIG_ENABLE_VAD_INTERRUPT
-            if (keep_preroll) {
-                FlushBargeInHold(true);
-            } else {
+            if (!keep_preroll) {
                 FlushBargeInHold(false);
                 while (audio_service_.PopPacketFromSendQueue())
                     ;
@@ -1144,6 +1157,9 @@ void Application::HandleStateChangedEvent() {
             CancelVadInterruptTimer();
             vad_interrupt_armed_ = false;
             vad_silence_started_us_ = 0;
+            last_barge_in_reject_us_ = 0;
+            barge_in_candidate_residual_ = 0;
+            barge_in_ratio_hits_ = 0;
             FlushBargeInHold(false);
 #endif
             break;
@@ -1163,6 +1179,9 @@ void Application::CancelVadInterruptTimer() {
     if (vad_interrupt_timer_ != nullptr) {
         esp_timer_stop(vad_interrupt_timer_);
     }
+    barge_in_ratio_hits_ = 0;
+    audio_service_.SetPlaybackMuted(false);
+    audio_service_.SetPlaybackDuckQ8(256);
 }
 
 void Application::UpdateSpeakingBargeIn() {
@@ -1171,40 +1190,70 @@ void Application::UpdateSpeakingBargeIn() {
         return;
     }
 
+    const bool timer_active =
+        vad_interrupt_timer_ != nullptr && esp_timer_is_active(vad_interrupt_timer_);
     const bool speech = audio_service_.IsVoiceDetected();
-    const bool near_end = audio_service_.IsLikelyNearEndSpeech();
     const int64_t now = esp_timer_get_time();
 
     if (!speech) {
+        // A 60ms VAD dip must not restart the confirm window; confirm re-checks.
+        if (timer_active) {
+            return;
+        }
         CancelVadInterruptTimer();
+        if (audio_service_.PlaybackLevel() >= 200) {
+            // VAD gap while the PA is still loud is echo NLP, not a user pause.
+            vad_silence_started_us_ = 0;
+            vad_interrupt_armed_ = false;
+            return;
+        }
         if (vad_silence_started_us_ == 0) {
             vad_silence_started_us_ = now;
         }
         // A real barge-in usually starts after a pause. Echo from a loud PA
         // keeps VAD in SPEECH the whole TTS, so this arm never latches.
-        if (now - vad_silence_started_us_ >= 180 * 1000) {
+        if (now - vad_silence_started_us_ >= 120 * 1000) {
             vad_interrupt_armed_ = true;
         }
         return;
     }
 
     vad_silence_started_us_ = 0;
-    if (!near_end) {
-        CancelVadInterruptTimer();
+    if (timer_active) {
+        return;
+    }
+    const int pb = audio_service_.PlaybackLevel();
+    const int res = audio_service_.ResidualLevel();
+    const int pct = pb > 0 ? (int)((int64_t)res * 100 / pb) : 0;
+    // Soft duck (~40%) in the 16–20% band so NLP eases before the hard mute.
+    // Steady echo is ~9–13%; ducking at 12% kept TTS at 40% and still pumped.
+    if (!audio_service_.IsPlaybackMuted()) {
+        if (pb >= 200 && res >= 180 && pct >= 16) {
+            audio_service_.SetPlaybackDuckQ8(102);
+        } else if (pct < 13) {
+            audio_service_.SetPlaybackDuckQ8(256);
+        }
+    }
+    if (!audio_service_.IsConfirmedNearEndSpeech()) {
+        barge_in_ratio_hits_ = 0;
+        return;
+    }
+    if (barge_in_ratio_hits_ < 1) {
+        barge_in_ratio_hits_ = 1;
         return;
     }
     MaybeStartVadInterruptTimer(!vad_interrupt_armed_);
 }
 
 void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
-    constexpr int64_t kVadInterruptGuardUs = 900 * 1000;
+    constexpr int64_t kVadInterruptGuardUs = 350 * 1000;
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
         return;
     }
     if (audio_service_.IsPlaybackIdle()) {
         return;
     }
-    if (!audio_service_.IsLikelyNearEndSpeech()) {
+    if (!audio_service_.IsConfirmedNearEndSpeech()) {
         return;
     }
     if (vad_interrupt_timer_ == nullptr) {
@@ -1213,15 +1262,24 @@ void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
     if (esp_timer_is_active(vad_interrupt_timer_)) {
         return;
     }
+    constexpr int64_t kRejectCooldownUs = 400 * 1000;
+    if (last_barge_in_reject_us_ > 0 &&
+        esp_timer_get_time() - last_barge_in_reject_us_ < kRejectCooldownUs) {
+        return;
+    }
 
     const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
     int64_t extra_guard_us = 0;
     if (elapsed < kVadInterruptGuardUs) {
         extra_guard_us = kVadInterruptGuardUs - elapsed;
     }
+    if (!audio_service_.EchoProfileReady() &&
+        audio_service_.ResidualLevel() <= audio_service_.PlaybackLevel()) {
+        extra_guard_us = std::max(extra_guard_us, int64_t{80 * 1000});
+    }
 
     // Echo spikes often follow a new TTS sentence; AEC also re-adapts here.
-    constexpr int64_t kPostTtsSentenceGuardUs = 450 * 1000;
+    constexpr int64_t kPostTtsSentenceGuardUs = 280 * 1000;
     const int64_t since_sentence_us = esp_timer_get_time() - last_tts_sentence_us_;
     if (since_sentence_us < kPostTtsSentenceGuardUs) {
         extra_guard_us = std::max(extra_guard_us, kPostTtsSentenceGuardUs - since_sentence_us);
@@ -1232,34 +1290,59 @@ void Application::MaybeStartVadInterruptTimer(bool unarmed_path) {
         volume = codec->output_volume();
     }
 
-    // Armed: user spoke after a pause. Unarmed: talking over ongoing TTS.
-    int64_t sustain_ms = unarmed_path ? 850 : 380;
+    // Mute PA as soon as we suspect near-end so NLP stops crushing the uplink.
+    // Confirm still waits; a false echo spike dies once the speaker is silent.
+    int64_t sustain_ms = unarmed_path ? 120 : 80;
     if (volume >= 80) {
-        sustain_ms = unarmed_path ? 1050 : 480;
+        sustain_ms = unarmed_path ? 140 : 100;
     } else if (volume >= 60) {
-        sustain_ms = unarmed_path ? 950 : 420;
+        sustain_ms = unarmed_path ? 130 : 90;
     }
 
-    ESP_LOGI(TAG, "VAD barge-in candidate (%s, vol=%d pb=%d res=%d), confirming in %d ms",
-             unarmed_path ? "overlap" : "armed", volume, audio_service_.PlaybackLevel(),
-             audio_service_.ResidualLevel(), (int)(sustain_ms + extra_guard_us / 1000));
+    const int pb = audio_service_.PlaybackLevel();
+    const int res = audio_service_.ResidualLevel();
+    const int pct = pb > 0 ? (int)((int64_t)res * 100 / pb) : 0;
+    ESP_LOGI(TAG, "VAD barge-in candidate (%s, vol=%d pb=%d res=%d pct=%d), confirming in %d ms",
+             unarmed_path ? "overlap" : "armed", volume, pb, res, pct,
+             (int)(sustain_ms + extra_guard_us / 1000));
+    barge_in_candidate_residual_ = audio_service_.ResidualLevel();
+    audio_service_.SetPlaybackMuted(true);
     esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000 + extra_guard_us);
 }
 
 void Application::HandleVadInterruptConfirm() {
     if (GetDeviceState() != kDeviceStateSpeaking || protocol_ == nullptr) {
+        audio_service_.SetPlaybackMuted(false);
         return;
     }
+    const int residual = audio_service_.ResidualLevel();
+    const int playback = audio_service_.PlaybackLevel();
+    const int pct = playback > 0 ? (int)((int64_t)residual * 100 / playback) : 0;
+    auto reject = [this, residual, playback, pct](const char* why) {
+        last_barge_in_reject_us_ = esp_timer_get_time();
+        barge_in_candidate_residual_ = 0;
+        audio_service_.SetPlaybackMuted(false);
+        ESP_LOGI(TAG, "VAD barge-in dropped (%s: pb=%d res=%d pct=%d)", why, playback, residual,
+                 pct);
+    };
     if (!audio_service_.IsVoiceDetected() || audio_service_.IsPlaybackIdle()) {
+        reject("idle");
         return;
     }
-    if (!audio_service_.IsLikelyNearEndSpeech()) {
-        ESP_LOGI(TAG, "VAD barge-in dropped (echo: pb=%d res=%d)", audio_service_.PlaybackLevel(),
-                 audio_service_.ResidualLevel());
+    if (!audio_service_.IsConfirmedNearEndSpeech()) {
+        reject("echo");
         return;
     }
-    ESP_LOGI(TAG, "VAD barge-in confirmed (pb=%d res=%d)", audio_service_.PlaybackLevel(),
-             audio_service_.ResidualLevel());
+    // Echo residual falls after mute (437 → 314). Real barge-in rose
+    // (267 → 305, 482 → 789). Apply spike reject even while the PA is muted.
+    if (barge_in_candidate_residual_ > 0 &&
+        residual * 4 < barge_in_candidate_residual_ * 3) {
+        reject("spike");
+        return;
+    }
+    ESP_LOGI(TAG, "VAD barge-in confirmed (pb=%d res=%d pct=%d)", playback, residual, pct);
+    barge_in_candidate_residual_ = 0;
+    HoldSpeakingUplink();
     AbortSpeaking(kAbortReasonVadInterrupt);
     // Stop TTS immediately; keep send-queue pre-roll for ASR onset.
     audio_service_.ResetDecoder();
@@ -1268,15 +1351,11 @@ void Application::HandleVadInterruptConfirm() {
 }
 
 void Application::HoldSpeakingUplink() {
-    // Keep recent near-end frames locally. Echo-only is dropped so a normal
-    // TTS stop cannot be ASR'd as the user.
-    constexpr size_t kBargeInHoldMaxPackets = 34;
-    const bool near_end =
-        audio_service_.IsVoiceDetected() && audio_service_.IsLikelyNearEndSpeech();
+    // Keep the last ~1.9s of post-AEC frames. Do not require the near-end
+    // energy gate here: onset of "你会…" is often below the barge-in threshold
+    // and would be dropped, so ASR only hears "学会些什么".
+    constexpr size_t kBargeInHoldMaxPackets = 32;
     while (auto packet = audio_service_.PopPacketFromSendQueue()) {
-        if (!near_end) {
-            continue;
-        }
         barge_in_hold_.push_back(std::move(packet));
         while (barge_in_hold_.size() > kBargeInHoldMaxPackets) {
             barge_in_hold_.pop_front();
@@ -1286,9 +1365,40 @@ void Application::HoldSpeakingUplink() {
 
 void Application::FlushBargeInHold(bool send) {
     if (send && protocol_) {
-        for (auto& packet : barge_in_hold_) {
-            if (!protocol_->SendAudio(std::move(packet))) {
-                break;
+        HoldSpeakingUplink();
+        if (!barge_in_hold_.empty()) {
+            // Keep ~720ms before the relative energy jump. An absolute floor of
+            // 280 dropped "云台"/"你会" when echo_est was only 78 (11/20 sent,
+            // ASR heard "角度。" / "十十度").
+            constexpr int kOnsetPadPackets = 16;
+            constexpr size_t kFallbackPackets = 24;
+            const size_t n = barge_in_hold_.size();
+            const size_t head = std::max<size_t>(1, n / 4);
+            int echo_est = 0;
+            for (size_t i = 0; i < head; ++i) {
+                echo_est += barge_in_hold_[i]->residual;
+            }
+            echo_est /= static_cast<int>(head);
+            const int onset_need = echo_est + std::max(echo_est / 4, 20);
+            // Loud leading echo: search the latter part so an early PA spike is
+            // not treated as the start of speech.
+            const size_t search_from = (echo_est >= 160) ? n / 3 : 0;
+            size_t start = n;
+            for (size_t i = search_from; i < n; ++i) {
+                if (barge_in_hold_[i]->residual >= onset_need) {
+                    start = i > static_cast<size_t>(kOnsetPadPackets) ? i - kOnsetPadPackets : 0;
+                    break;
+                }
+            }
+            if (start >= n) {
+                start = n > kFallbackPackets ? n - kFallbackPackets : 0;
+            }
+            ESP_LOGI(TAG, "barge-in preroll %u/%u packets (echo_est=%d need=%d)",
+                     (unsigned)(n - start), (unsigned)n, echo_est, onset_need);
+            for (size_t i = start; i < n; ++i) {
+                if (!protocol_->SendAudio(std::move(barge_in_hold_[i]))) {
+                    break;
+                }
             }
         }
     }
@@ -1325,6 +1435,10 @@ void Application::StartListeningAudio() {
     // Send the start listening command
     protocol_->SendStartListening(listening_mode_);
     audio_service_.EnableVoiceProcessing(true);
+#if CONFIG_ENABLE_VAD_INTERRUPT
+    // Cloud drops uplink that arrives before listen-start.
+    FlushBargeInHold(true);
+#endif
 
     ConfigureWakeWordForListening();
 

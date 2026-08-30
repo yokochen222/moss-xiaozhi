@@ -142,6 +142,7 @@ MossSpiLcdDisplay::MossSpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io,
     (void)offset_x; (void)offset_y; (void)mirror_x; (void)mirror_y; (void)swap_xy;
     panel_ = panel;
 
+    moss_splash::set_lcd_panel_io(panel_io);
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
     // 启动一次性 splash (start.eaf), 它会直接画 panel.
@@ -288,12 +289,7 @@ void MossSpiLcdDisplay::SetScreenOn(bool on) {
         return;
     }
     screen_on_ = on;
-    if (panel_ != nullptr) {
-        esp_err_t err = esp_lcd_panel_disp_on_off(panel_, on);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "disp_on_off(%d) failed: %s", on, esp_err_to_name(err));
-        }
-    }
+    moss_splash::panel_set_disp_on_off(panel_, on);
     ESP_LOGI(TAG, "Screen %s", on ? "ON" : "OFF");
 }
 

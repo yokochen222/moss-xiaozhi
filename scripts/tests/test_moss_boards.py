@@ -313,9 +313,17 @@ class MossBargeInTests(unittest.TestCase):
                 "void Application::MaybeStartVadInterruptTimer"
             )
         ]
-        self.assertIn("IsLikelyNearEndSpeech()", update)
+        self.assertIn("IsConfirmedNearEndSpeech()", update)
+        self.assertNotIn("ShouldEarlyMuteForBargeIn()", update)
+        self.assertNotIn("VAD barge-in early mute", update)
+        self.assertIn("barge_in_ratio_hits_", update)
+        self.assertIn("SetPlaybackDuckQ8(102)", update)
+        self.assertIn("pct >= 16", update)
         self.assertIn("vad_interrupt_armed_", update)
-        self.assertIn("180 * 1000", update)
+        self.assertIn("120 * 1000", update)
+        self.assertIn("timer_active", update)
+        self.assertIn("PlaybackLevel() >= 200", update)
+        self.assertIn("vad_interrupt_armed_ = false", update)
 
     def test_speaking_start_records_guard_clock_and_echo_profile(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
@@ -333,7 +341,11 @@ class MossBargeInTests(unittest.TestCase):
             )
         ]
         self.assertIn("AbortSpeaking", confirm)
-        self.assertIn("IsLikelyNearEndSpeech()", confirm)
+        self.assertIn("HoldSpeakingUplink()", confirm)
+        self.assertIn("IsConfirmedNearEndSpeech()", confirm)
+        self.assertIn("residual * 4 < barge_in_candidate_residual_ * 3", confirm)
+        self.assertNotIn("IsPlaybackMuted() && barge_in_candidate_residual_", confirm)
+        self.assertIn("SetPlaybackMuted(false)", confirm)
         self.assertNotIn("IsVadBargeInEnabled()", confirm)
         start_timer = src[
             src.find("void Application::MaybeStartVadInterruptTimer") : src.find(
@@ -341,26 +353,164 @@ class MossBargeInTests(unittest.TestCase):
             )
         ]
         self.assertNotIn("IsVadBargeInEnabled()", start_timer)
-        self.assertIn("IsLikelyNearEndSpeech()", start_timer)
-        self.assertIn("kVadInterruptGuardUs = 900 * 1000", start_timer)
+        self.assertIn("IsConfirmedNearEndSpeech()", start_timer)
+        self.assertIn("EchoProfileReady()", start_timer)
+        self.assertIn("kVadInterruptGuardUs = 350 * 1000", start_timer)
+        self.assertIn("kPostTtsSentenceGuardUs = 280 * 1000", start_timer)
+        self.assertIn("unarmed_path ? 120 : 80", start_timer)
+        self.assertIn("SetPlaybackMuted(true)", start_timer)
+        self.assertIn("kRejectCooldownUs = 400 * 1000", start_timer)
+        sentence_start = src.find('else if (strcmp(state->valuestring, "sentence_start") == 0)')
+        stt = src.find('else if (strcmp(type->valuestring, "stt") == 0)', sentence_start)
+        self.assertGreater(sentence_start, 0)
+        self.assertGreater(stt, sentence_start)
+        sentence = src[sentence_start:stt]
+        self.assertIn("vad_interrupt_armed_ = false", sentence)
+        self.assertIn("CancelVadInterruptTimer()", sentence)
 
-    def test_hold_uplink_drops_echo_without_near_end_energy(self):
+    def test_hold_uplink_keeps_onset_without_near_end_energy(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         hold = src[
             src.find("void Application::HoldSpeakingUplink") : src.find(
                 "void Application::FlushBargeInHold"
             )
         ]
-        self.assertIn("IsLikelyNearEndSpeech()", hold)
+        self.assertNotIn("IsLikelyNearEndSpeech()", hold)
+        self.assertIn("kBargeInHoldMaxPackets = 32", hold)
+
+    def test_barge_in_preroll_flushes_after_listen_start(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        start = src[
+            src.find("void Application::StartListeningAudio") : src.find(
+                "void Application::ConfigureWakeWordForListening"
+            )
+        ]
+        listen = start.find("SendStartListening")
+        flush_call = start.find("FlushBargeInHold(true)")
+        self.assertGreater(listen, 0)
+        self.assertGreater(flush_call, listen)
+        flush = src[
+            src.find("void Application::FlushBargeInHold") : src.find(
+                "void Application::SendUplinkFromQueue"
+            )
+        ]
+        self.assertIn("kOnsetPadPackets = 16", flush)
+        self.assertIn("onset_need", flush)
+        self.assertIn("kFallbackPackets = 24", flush)
+        self.assertIn("HoldSpeakingUplink()", flush)
+        self.assertNotIn("kMinSpeechAbs", flush)
 
     def test_audio_service_learns_echo_floor_before_barge_in(self):
         header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
         src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
         self.assertIn("IsLikelyNearEndSpeech()", header)
+        self.assertIn("IsConfirmedNearEndSpeech()", header)
+        self.assertIn("ShouldEarlyMuteForBargeIn()", header)
         self.assertIn("ResetEchoProfile()", header)
         self.assertIn("echo_learn_frames_", header)
+        self.assertNotIn("echo_coupling_", header)
         self.assertIn("NotePlaybackPcm", src)
         self.assertIn("NoteResidualPcm", src)
+        self.assertIn("NoteCapturePcm", src)
+        self.assertNotIn("AdaptEchoCoupling", src)
         self.assertIn("kEchoLearnFrames", src)
+        self.assertIn("near_end_latched_", src)
+        self.assertIn("floor / 3", src)
+        self.assertIn("kMinResidualPctOfPlayback = 20", src)
+        self.assertIn("kPlaybackStaleUs = 300 * 1000", src)
+        self.assertIn("packet->residual = PcmMeanAbs", src)
         self.assertIn("vTaskDelay(pdMS_TO_TICKS(10))", src)
+        self.assertIn("SetPlaybackMuted", header)
+        self.assertIn("SetPlaybackDuckQ8", header)
+        self.assertIn("playback_muted_", src)
+        self.assertIn("playback_duck_q8_", src)
+        self.assertIn("if (playback_muted_.load(std::memory_order_relaxed))", src)
+        afe = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
+        self.assertIn("aec_nlp_level = AEC_NLP_LEVEL_NORMAL", afe)
+        self.assertNotIn("aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR", afe)
+        self.assertNotIn("vad_delay_ms", afe)
+        self.assertNotIn("AFE_TYPE_SR", afe)
+
+    def test_barge_in_is_shared_not_forked_per_board(self):
+        markers = (
+            "ShouldEarlyMuteForBargeIn",
+            "HoldSpeakingUplink",
+            "SetPlaybackMuted",
+            "kOnsetPadPackets",
+        )
+        for leaf in ("moss-onvif", "moss-ov2640"):
+            board_dir = ROOT / "main/boards/moss" / leaf
+            for path in board_dir.rglob("*.cc"):
+                text = path.read_text(encoding="utf-8")
+                for marker in markers:
+                    self.assertNotIn(marker, text, f"{path.name} {marker}")
+            for path in board_dir.rglob("*.h"):
+                text = path.read_text(encoding="utf-8")
+                for marker in markers:
+                    self.assertNotIn(marker, text, f"{path.name} {marker}")
+
+
+class MossWakeTtsTests(unittest.TestCase):
+    def test_tts_start_keeps_packets_queued_before_scheduled_callback(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        start = src.find('if (strcmp(state->valuestring, "start") == 0)')
+        self.assertGreater(start, 0)
+        body = src[start : src.find('else if (strcmp(state->valuestring, "stop") == 0)', start)]
+        self.assertIn("IsPlaybackIdle()", body)
+        self.assertIn("keep queued TTS packets", body)
+        self.assertIn("ResetDecoder()", body)
+        self.assertLess(body.find("IsPlaybackIdle()"), body.find("keep queued TTS packets"))
+
+    def test_incoming_tts_accepted_before_speaking_state(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        start = src.find("protocol_->OnIncomingAudio")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("protocol_->OnAudioChannelOpened", start)]
+        self.assertIn("kDeviceStateConnecting", body)
+        self.assertIn("kDeviceStateListening", body)
+        self.assertIn("kDeviceStateSpeaking", body)
+
+    def test_voice_processing_start_does_not_drop_queued_tts(self):
+        src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        start = src.find("void AudioService::EnableVoiceProcessing")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("void AudioService::EnableAudioTesting", start)]
+        self.assertIn("if (IsPlaybackIdle())", body)
+        self.assertIn("ResetDecoder()", body)
+
+
+class MossLcdDmaTests(unittest.TestCase):
+    def test_both_boards_preallocate_lcd_spi_bounce(self):
+        for leaf in ("moss-onvif", "moss-ov2640"):
+            header = (ROOT / "main/boards" / f"moss/{leaf}" / "config.h").read_text(encoding="utf-8")
+            self.assertIn("#define DISPLAY_LCD_BOUNCE_ROWS 16", header)
+            self.assertIn("DISPLAY_SPI_MAX_TRANSFER", header)
+            board = (
+                ROOT / "main/boards" / f"moss/{leaf}" / f"{leaf.replace('-', '_')}_board.cc"
+            ).read_text(encoding="utf-8")
+            self.assertIn("DISPLAY_SPI_MAX_TRANSFER", board)
+            self.assertIn("trans_queue_depth = 1", board)
+            splash = (ROOT / "main/boards" / f"moss/{leaf}" / "splash_player.cc").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("s_lcd_bounce", splash)
+            self.assertIn("DrawPanelBitmapChunked", splash)
+            self.assertNotIn(
+                "esp_lcd_panel_draw_bitmap(cfg.panel, 0, 0, pw, ph, disp_buf)", splash
+            )
+            display = (ROOT / "main/boards" / f"moss/{leaf}" / "moss_spi_lcd_display.cc").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("panel_set_disp_on_off", display)
+            self.assertIn("panel_set_disp_on_off", splash)
+
+    def test_eaf_compat_prefers_psram_over_internal_dma(self):
+        for leaf in ("moss-onvif", "moss-ov2640"):
+            src = (ROOT / "main/boards" / f"moss/{leaf}" / "eaf_compat.cc").read_text(
+                encoding="utf-8"
+            )
+            start = src.find("alloc_aligned16")
+            self.assertGreater(start, 0)
+            body = src[start : src.find("posix_memalign", start)]
+            self.assertLess(body.find("MALLOC_CAP_SPIRAM"), body.find("MALLOC_CAP_INTERNAL"))
 

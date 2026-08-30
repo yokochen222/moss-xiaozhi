@@ -44,6 +44,9 @@
 
 #define DISPLAY_WIDTH 160
 #define DISPLAY_HEIGHT 80
+// 预分配 DMA bounce, 避免对话/唤醒时 SPI 再向内部 SRAM malloc.
+#define DISPLAY_LCD_BOUNCE_ROWS 16
+#define DISPLAY_SPI_MAX_TRANSFER (DISPLAY_WIDTH * DISPLAY_LCD_BOUNCE_ROWS * sizeof(uint16_t))
 #define DISPLAY_SWAP_XY true
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y false

@@ -133,9 +133,10 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
-    // AEC is disabled during idle wake; when enabled (duplex/barge-in) use strong
-    // NLP so loud TTS echo does not look like near-end speech to VAD.
-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
+    // VERYAGGR NLP treats double-talk as leftover echo and zeros "还有"/"我是"
+    // in the uplink (24/24 preroll still ASR-clipped). NORMAL keeps near-end;
+    // barge-in energy ratio + mute-on-candidate reject PA leak.
+    afe_config->aec_nlp_level = AEC_NLP_LEVEL_NORMAL;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
     afe_config->vad_mode = VAD_MODE_0;

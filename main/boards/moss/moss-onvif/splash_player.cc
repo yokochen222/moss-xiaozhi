@@ -8,12 +8,16 @@
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_memory_utils.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <mutex>
 
 #include <lvgl.h>
 
@@ -47,6 +51,64 @@ static void draw_dialog_box(uint16_t* dst, int dst_w, int dst_h,
                             uint8_t style, int64_t now_us);
 static void copy_dialog_snapshot(const struct DialogState* src, struct DialogState* dst);
 
+static volatile bool s_abort_lcd_draw = false;
+static esp_lcd_panel_io_handle_t s_lcd_io = nullptr;
+static std::mutex s_lcd_bus_mutex;
+
+static constexpr int kLcdBounceRows = DISPLAY_LCD_BOUNCE_ROWS;
+alignas(32) static DRAM_DMA_ALIGNED_ATTR uint16_t s_lcd_bounce[DISPLAY_WIDTH * kLcdBounceRows];
+static_assert(sizeof(s_lcd_bounce) <= DISPLAY_SPI_MAX_TRANSFER,
+              "LCD bounce exceeds SPI max transfer");
+
+static void LcdWaitIdle() {
+    if (s_lcd_io == nullptr) {
+        return;
+    }
+    (void)esp_lcd_panel_io_tx_param(s_lcd_io, -1, nullptr, 0);
+}
+
+void set_lcd_panel_io(esp_lcd_panel_io_handle_t io) { s_lcd_io = io; }
+
+void panel_set_disp_on_off(esp_lcd_panel_handle_t panel, bool on) {
+    if (panel == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_lcd_bus_mutex);
+    LcdWaitIdle();
+    esp_err_t err = esp_lcd_panel_disp_on_off(panel, on);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "disp_on_off(%d) failed: %s", on, esp_err_to_name(err));
+    }
+}
+
+// PSRAM 帧先拷到内部 DMA bounce 再刷, SPI 驱动不再现场 malloc.
+static void DrawPanelBitmapChunked(esp_lcd_panel_handle_t panel, int x0, int y0, int x1, int y1,
+                                   const uint16_t* color) {
+    const int w = x1 - x0;
+    const int h = y1 - y0;
+    if (panel == nullptr || color == nullptr || w <= 0 || h <= 0 || w > DISPLAY_WIDTH) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_lcd_bus_mutex);
+    for (int row = 0; row < h; row += kLcdBounceRows) {
+        if (s_abort_lcd_draw) {
+            LcdWaitIdle();
+            return;
+        }
+        const int rows = std::min(kLcdBounceRows, h - row);
+        std::memcpy(s_lcd_bounce, color + row * w, (size_t)rows * (size_t)w * sizeof(uint16_t));
+        esp_err_t err =
+            esp_lcd_panel_draw_bitmap(panel, x0, y0 + row, x1, y0 + row + rows, s_lcd_bounce);
+        LcdWaitIdle();
+        vTaskDelay(1);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "draw_bitmap chunk y=%d h=%d failed: %s", y0 + row, rows,
+                     esp_err_to_name(err));
+            return;
+        }
+    }
+}
+
 // 配色 (RGB565)
 static constexpr uint16_t kCodeColor = 0xFFFF;  // 白色
 
@@ -56,7 +118,7 @@ namespace code_scroll_cfg {
     static constexpr uint32_t TICK_INTERVAL_MS   = 15;   // 35ms per tick
     static constexpr uint32_t CHARS_PER_TICK      = 1;    // 1 char per tick = 20 chars/sec
     // 一帧渲染间隔 (FPS 控制, 不要太高以节省 CPU)
-    static constexpr uint32_t RENDER_INTERVAL_MS  = 50;   // render every 50ms = 20 FPS
+    static constexpr uint32_t RENDER_INTERVAL_MS  = 120;  // ~8 FPS; higher starves IDLE/WiFi DMA
 
     // 行高 (像素)
     static constexpr int ASCII_LINE_H  = 8;   // 7px char + 1px spacing
@@ -134,6 +196,7 @@ public:
             return;
         }
         s_stop_requested = false;
+        s_abort_lcd_draw = false;
 
         LoopCtx* ctx = new LoopCtx{};
         ctx->cfg = cfg;
@@ -145,16 +208,20 @@ public:
 
         BaseType_t ok = xTaskCreate(
             loop_task, "code_scroll",
-            8192, ctx, 5, &s_task);
+            8192, ctx, 1, &s_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "Failed to create code_scroll task");
             delete ctx;
             s_task = nullptr;
+            return;
         }
+        ESP_LOGI(TAG, "CodeScroll task started (bounce=%u dma=%d)",
+                 (unsigned)sizeof(s_lcd_bounce), (int)esp_ptr_dma_capable(s_lcd_bounce));
     }
 
     static void stop_loop() {
         s_stop_requested = true;
+        s_abort_lcd_draw = true;
     }
 
 private:
@@ -373,7 +440,7 @@ private:
                     }
 
                     // === 5. 发送到 panel ===
-                    esp_lcd_panel_draw_bitmap(cfg.panel, 0, 0, pw, ph, disp_buf);
+                    DrawPanelBitmapChunked(cfg.panel, 0, 0, pw, ph, disp_buf);
                 }
 
                 // === 6. 低功耗: 等待下一个 tick ===
@@ -1267,7 +1334,7 @@ void play_splash(esp_lcd_panel_handle_t panel,
             continue;
         }
         build_centered(frame_buf, frame_w, frame_h, out_buf, panel_w, panel_h);
-        esp_lcd_panel_draw_bitmap(panel, 0, 0, panel_w, panel_h, out_buf);
+        DrawPanelBitmapChunked(panel, 0, 0, panel_w, panel_h, out_buf);
 
         int64_t t_now = esp_timer_get_time();
         int64_t total_elapsed_ms = (t_now - t_start) / 1000;

@@ -168,6 +168,9 @@ private:
     int64_t speaking_started_us_ = 0;
     int64_t last_tts_sentence_us_ = 0;
     int64_t vad_silence_started_us_ = 0;
+    int64_t last_barge_in_reject_us_ = 0;
+    int barge_in_candidate_residual_ = 0;
+    int barge_in_ratio_hits_ = 0;
     bool vad_interrupt_armed_ = false;
     bool barge_in_listen_ = false;
     std::deque<std::unique_ptr<AudioStreamPacket>> barge_in_hold_;

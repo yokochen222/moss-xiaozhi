@@ -120,9 +120,19 @@ public:
     // True when post-AEC mic energy is clearly above the learned TTS echo floor.
     // Used so speaker leak cannot barge-in; VAD alone is not enough on loud PA boards.
     bool IsLikelyNearEndSpeech() const;
+    // Enter-threshold only. Confirm / start must not use the sticky drop level,
+    // or a brief echo spike can abort TTS after residual has already fallen.
+    bool IsConfirmedNearEndSpeech() const;
+    // Floor gate without the playback ratio. Mute the PA here so NLP stops
+    // eating onset; confirm still waits for the ratio gate. Do not use raw
+    // mic/ref: echo already has mic~3k/ref~28k and false-mutes TTS.
+    bool ShouldEarlyMuteForBargeIn() const;
+    bool EchoProfileReady() const;
     void ResetEchoProfile();
     int PlaybackLevel() const;
     int ResidualLevel() const;
+    int MicLevel() const;
+    int RefLevel() const;
     bool IsIdle();
     bool IsPlaybackIdle();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
@@ -137,6 +147,11 @@ public:
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
+
+    void SetPlaybackMuted(bool muted);
+    bool IsPlaybackMuted() const;
+    // 256 = full. Used to ease NLP before the 20% confirm mute (not a hard gate).
+    void SetPlaybackDuckQ8(int duck_q8);
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
@@ -197,7 +212,12 @@ private:
     std::atomic<int> residual_level_{0};
     std::atomic<int> echo_floor_{250};
     std::atomic<int> echo_learn_frames_{0};
+    mutable std::atomic<bool> near_end_latched_{false};
     std::atomic<int64_t> last_playback_us_{0};
+    std::atomic<bool> playback_muted_{false};
+    std::atomic<int> playback_duck_q8_{256};
+    std::atomic<int> mic_level_{0};
+    std::atomic<int> ref_level_{0};
 #if CONFIG_USE_DEVICE_AEC
     bool device_aec_enabled_ = true;
 #else
@@ -223,6 +243,7 @@ private:
     int EffectivePlaybackLevel() const;
     void NotePlaybackPcm(const int16_t* data, size_t samples);
     void NoteResidualPcm(const int16_t* data, size_t samples);
+    void NoteCapturePcm(const int16_t* data, size_t samples, int channels);
     void AdaptEchoFloor(int playback, int residual);
 };
 

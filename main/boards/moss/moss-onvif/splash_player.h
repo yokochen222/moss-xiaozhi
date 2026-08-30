@@ -1,5 +1,6 @@
 #pragma once
 
+#include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <cstdint>
 
@@ -65,6 +66,11 @@ void start_code_scroll_loop(const LoopConfig& cfg);
 
 // 请求停止代码滚动任务 (仅置标志, 任务会在当前帧结束后退出).
 void stop_code_scroll_loop();
+
+void set_lcd_panel_io(esp_lcd_panel_io_handle_t io);
+
+// 与刷屏共用总线锁, 避免 disp_on_off 和 draw_bitmap 把 SPI 队列卡死。
+void panel_set_disp_on_off(esp_lcd_panel_handle_t panel, bool on);
 
 // 跨 task 安全地更新 DialogState (临界区保护, splash task 与外部调用).
 // title / body 会被截断到各自 MAX 长度.
