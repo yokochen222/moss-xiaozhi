@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STILL_H = ROOT / "main/device/moss_jpeg_still.h"
 BOARD = ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc"
 CAM = ROOT / "main/boards/common/esp32_camera.cc"
+CAM_HAL = ROOT / "managed_components/espressif__esp32-camera/driver/cam_hal.c"
 CFG = ROOT / "main/boards/moss/moss-ov2640/config.json"
 
 
@@ -116,6 +117,7 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         self.header = STILL_H.read_text(encoding="utf-8")
         self.board = BOARD.read_text(encoding="utf-8")
         self.cam = CAM.read_text(encoding="utf-8")
+        self.cam_hal = CAM_HAL.read_text(encoding="utf-8")
         self.cfg = CFG.read_text(encoding="utf-8")
 
     def test_header_constants_match_python_and_config(self):
@@ -131,7 +133,10 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         self.assertEqual(constexpr_int(self.header, "kSwJpegQualityMin"), K_SW_JPEG_QUALITY_MIN)
         self.assertEqual(constexpr_int(self.header, "kSwJpegQualityStep"), K_SW_JPEG_QUALITY_STEP)
         self.assertEqual(constexpr_int(self.header, "kSwJpegMaxDownscales"), K_SW_JPEG_MAX_DOWNSCALES)
-        self.assertEqual(constexpr_int(self.header, "kSwJpegMinEdge"), K_SW_JPEG_MIN_EDGE)
+        self.assertEqual(constexpr_int(self.header, "kStillInitDelayMs"), 500)
+        self.assertEqual(constexpr_int(self.header, "kStillBrightness"), 1)
+        self.assertEqual(constexpr_int(self.header, "kStillAeLevel"), 1)
+        self.assertEqual(constexpr_int(self.header, "kStillGainCeiling"), 4)
 
     def test_board_uses_rgb565_sxga_and_waits_for_settle(self):
         capture = self.board[
@@ -156,13 +161,38 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         self.assertIn("fb_count = 2", ensure)
         self.assertIn("CAMERA_GRAB_WHEN_EMPTY", ensure)
         self.assertNotIn("FRAMESIZE_UXGA", ensure)
+        self.assertIn("still_sizes_voice", ensure)
+        self.assertIn("still_sizes_dma_tight", ensure)
+        self.assertIn("ApplyOv2640IndoorTuning()", ensure)
+        voice = ensure.find("still_sizes_voice[]")
+        self.assertGreater(voice, 0)
+        voice_end = ensure.find("still_sizes_dma_tight[]", voice)
+        self.assertGreater(voice_end, voice)
+        voice_arr = ensure[voice:voice_end]
+        self.assertLess(voice_arr.find("FRAMESIZE_VGA"), voice_arr.find("FRAMESIZE_QVGA"))
+        dma_arr = ensure[
+            ensure.find("still_sizes_dma_tight[]") : ensure.find("still_sizes_full[]")
+        ]
+        self.assertIn("FRAMESIZE_QVGA", dma_arr)
+        self.assertNotIn("FRAMESIZE_HVGA", dma_arr)
+        self.assertIn("fb_count = 2", ensure)
+        self.assertIn("VGA-first fb_count=2", ensure)
+        self.assertIn("CONFIG_CAMERA_PSRAM_DMA", ensure)
+        self.assertIn("const bool dma_tight = false", ensure)
         sxga = ensure.find("FRAMESIZE_SXGA")
         svga = ensure.find("FRAMESIZE_SVGA")
-        vga = ensure.find("FRAMESIZE_VGA")
         self.assertGreaterEqual(sxga, 0)
         self.assertGreater(svga, sxga)
-        self.assertGreater(vga, svga)
+        full = ensure[ensure.find("still_sizes_full[]") :]
+        self.assertLess(full.find("FRAMESIZE_SXGA"), full.find("FRAMESIZE_VGA"))
         self.assertIn("RGB565 XCLK", ensure)
+        settle = self.board[
+            self.board.find("void DrainStillSettleLocked()") : self.board.find(
+                "void DiscardPostSettleFramesLocked"
+            )
+        ]
+        self.assertIn("OnFrame(", settle)
+        self.assertNotIn("OnFrameVoice", settle)
         budget = self.board[
             self.board.find("bool CaptureJpegUnderBudgetLocked()") : self.board.find(
                 "void DrainStillSettleLocked()"
@@ -173,7 +203,7 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         self.assertNotIn("SetSensorJpegQuality", budget)
         self.assertIn("RgbLooksComplete", self.board)
         self.assertIn("bool Esp32Camera::EncodeAndParkJpeg", self.cam)
-        self.assertIn("memcpy(rgb, current_fb_->buf, src_len)", self.cam)
+        self.assertIn("memcpy(rgb, src, src_len)", self.cam)
         self.assertIn("SwapRgb565BeToLe", self.cam)
         self.assertIn("DownsampleRgb565X2", self.cam)
         self.assertIn("JpegFarOverBudget", self.cam)
@@ -186,7 +216,32 @@ class JpegStillPolicySyncTests(unittest.TestCase):
         ]
         self.assertIn("StopDvp()", encode)
         self.assertLess(encode.find("StopDvp()"), encode.find("image_to_jpeg"))
-        rgb_copy = encode[encode.find("memcpy(rgb, current_fb_->buf") :]
+        self.assertIn("MossDvpQuiesceBeforeDeinit()", encode)
+        self.assertLess(encode.find("MossDvpQuiesceBeforeDeinit()"), encode.find("heap_caps_malloc"))
+        self.assertNotIn("ESP_CACHE_MSYNC_FLAG_UNALIGNED", encode)
+        stop = self.cam[
+            self.cam.find("void Esp32Camera::StopDvp()") : self.cam.find("Esp32Camera::~Esp32Camera")
+        ]
+        self.assertIn("MossDvpQuiesceBeforeDeinit()", stop)
+        self.assertIn("MossDvpQuiesceBeforeDeinit()", self.board)
+        quiesce = self.board[
+            self.board.find("void MossDvpQuiesceBeforeDeinit") : self.board.find("class OnDemandEsp32Camera")
+        ]
+        self.assertIn("SetDvpPowerDown(true)", quiesce)
+        self.assertIn("LCD_CAM.cam_ctrl1.cam_start = 0", quiesce)
+        deinit_safe = self.board[
+            self.board.find("static void DeinitDvpSafe()") : self.board.find("static void PulseDvpReset()")
+        ]
+        self.assertIn("MossDvpQuiesceBeforeDeinit()", deinit_safe)
+        drop = self.cam_hal[
+            self.cam_hal.find("static inline void cam_drop_psram_cache") : self.cam_hal.find(
+                "CAM_WARN_THROTTLE"
+            )
+        ]
+        self.assertIn("(p + line - 1) & ~(line - 1)", drop)
+        self.assertNotIn("addr & ~(line - 1)", drop)
+        self.assertIn("LCD_CAM.cam_ctrl1.cam_start = 0", self.cam_hal)
+        rgb_copy = encode[encode.find("memcpy(rgb, src, src_len") :]
         self.assertNotIn("esp_camera_fb_return(current_fb_)", rgb_copy)
 
     def test_esp32_camera_drops_truncated_jpeg(self):

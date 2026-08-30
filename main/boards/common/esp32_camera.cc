@@ -22,6 +22,10 @@
 
 #define TAG "Esp32Camera"
 
+// ov2640 board stops OV2640 PCLK (PCA9685 PWDN) so GDMA cannot smash PSRAM
+// heap metadata while cam_deinit frees the frame buffers. Weak no-op elsewhere.
+extern "C" void __attribute__((weak)) MossDvpQuiesceBeforeDeinit(void) {}
+
 #if CONFIG_XIAOZHI_CAMERA_MIRROR_CONFIGURED
 #if CONFIG_XIAOZHI_CAMERA_HMIRROR
 static constexpr bool kConfiguredHMirror = true;
@@ -80,7 +84,7 @@ void Esp32Camera::StopDvp() {
     // Do not fb_return: with fb_count=1 the driver immediately DMA-writes the
     // same PSRAM frame. Freeing it in cam_deinit then hits a cache/heap fault.
     current_fb_ = nullptr;
-    vTaskDelay(pdMS_TO_TICKS(30));
+    MossDvpQuiesceBeforeDeinit();
     esp_camera_deinit();
     streaming_on_ = false;
 }
@@ -416,13 +420,18 @@ bool Esp32Camera::EncodeAndParkJpeg(size_t max_bytes) {
         return false;
     }
 
+    uint8_t* src = current_fb_->buf;
+    // Stop PCLK/GDMA before the RGB malloc so the other fb_count=2 slot cannot
+    // smash the new TLSF block (and cam_deinit cannot free a live GDMA target).
+    MossDvpQuiesceBeforeDeinit();
+
     uint8_t* rgb =
         static_cast<uint8_t*>(heap_caps_malloc(src_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (rgb == nullptr) {
         ESP_LOGE(TAG, "Failed to copy RGB565 for SW JPEG");
         return false;
     }
-    memcpy(rgb, current_fb_->buf, src_len);
+    memcpy(rgb, src, src_len);
     SwapRgb565BeToLe(rgb, src_len);
     StopDvp();
 

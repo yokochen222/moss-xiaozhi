@@ -34,6 +34,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <soc/lcd_cam_struct.h>
 #include <wifi_manager.h>
 #include <memory>
 #include <mutex>
@@ -41,6 +42,21 @@
 #include <vector>
 
 #define TAG "MossOv2640Board"
+
+// Stop OV2640 PCLK before cam_deinit. PSRAM GDMA otherwise keeps writing the
+// other frame slot and corrupts TLSF metadata (LoadProhibited in tlsf_free).
+extern "C" void MossDvpQuiesceBeforeDeinit(void) {
+    auto& pca = Pca9685::GetInstance();
+    if (pca.IsReady()) {
+        pca.SetDvpPowerDown(true);
+    }
+    LCD_CAM.cam_ctrl1.cam_start = 0;
+    LCD_CAM.cam_ctrl1.cam_reset = 1;
+    LCD_CAM.cam_ctrl1.cam_reset = 0;
+    LCD_CAM.cam_ctrl1.cam_afifo_reset = 1;
+    LCD_CAM.cam_ctrl1.cam_afifo_reset = 0;
+    vTaskDelay(pdMS_TO_TICKS(80));
+}
 
 // 在 codec 读写之后抽 PCM 给信号弹窗. 不占用 I2S, 不改采样.
 class MossDesktopAudioCodec : public BoxAudioCodec {
@@ -356,22 +372,7 @@ public:
             return false;
         }
         ESP_LOGI(TAG, "Tracking camera up (%s)", used);
-        sensor_t* s = esp_camera_sensor_get();
-        if (s && s->id.PID == OV2640_PID) {
-            s->set_brightness(s, 0);
-            s->set_contrast(s, 0);
-            s->set_saturation(s, 0);
-            s->set_whitebal(s, 1);
-            s->set_awb_gain(s, 1);
-            s->set_exposure_ctrl(s, 1);
-            s->set_aec2(s, 1);
-            s->set_gain_ctrl(s, 1);
-            s->set_bpc(s, 1);
-            s->set_wpc(s, 1);
-            s->set_raw_gma(s, 1);
-            s->set_lenc(s, 1);
-            s->set_dcw(s, 1);
-        }
+        ApplyOv2640IndoorTuning();
         tracking_acquired_ = true;
         vTaskDelay(pdMS_TO_TICKS(200));
         return true;
@@ -423,6 +424,64 @@ private:
                state == kDeviceStateConnecting;
     }
 
+    static void ApplyOv2640IndoorTuning() {
+        sensor_t* s = esp_camera_sensor_get();
+        if (s == nullptr || s->id.PID != OV2640_PID) {
+            return;
+        }
+        // Indoor stills: raise AE target and AGC ceiling so a bright window
+        // does not crush the room. Face-track uses the same sensor; keep
+        // resolution/fb_count unchanged there.
+        if (s->set_brightness) {
+            s->set_brightness(s, moss_jpeg_still::kStillBrightness);
+        }
+        if (s->set_contrast) {
+            s->set_contrast(s, 0);
+        }
+        if (s->set_saturation) {
+            s->set_saturation(s, 0);
+        }
+        if (s->set_whitebal) {
+            s->set_whitebal(s, 1);
+        }
+        if (s->set_awb_gain) {
+            s->set_awb_gain(s, 1);
+        }
+        if (s->set_exposure_ctrl) {
+            s->set_exposure_ctrl(s, 1);
+        }
+        if (s->set_aec2) {
+            s->set_aec2(s, 1);
+        }
+        if (s->set_gain_ctrl) {
+            s->set_gain_ctrl(s, 1);
+        }
+        if (s->set_ae_level) {
+            s->set_ae_level(s, moss_jpeg_still::kStillAeLevel);
+        }
+        if (s->set_gainceiling) {
+            s->set_gainceiling(s, static_cast<gainceiling_t>(moss_jpeg_still::kStillGainCeiling));
+        }
+        if (s->set_bpc) {
+            s->set_bpc(s, 1);
+        }
+        if (s->set_wpc) {
+            s->set_wpc(s, 1);
+        }
+        if (s->set_raw_gma) {
+            s->set_raw_gma(s, 1);
+        }
+        if (s->set_lenc) {
+            s->set_lenc(s, 1);
+        }
+        if (s->set_dcw) {
+            s->set_dcw(s, 1);
+        }
+        ESP_LOGI(TAG, "OV2640 indoor AE brightness=%d ae_level=%d gainceiling=%d",
+                 moss_jpeg_still::kStillBrightness, moss_jpeg_still::kStillAeLevel,
+                 moss_jpeg_still::kStillGainCeiling);
+    }
+
     bool EnsureStartedLocked(bool preview = false) {
         if (tracking_acquired_) {
             // Caller should have paused tracker; force release if still held.
@@ -446,17 +505,32 @@ private:
             cfg.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
             cfg.xclk_freq_hz = moss_jpeg_still::kStillXclkHz;
             const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
-            const bool compact = VoiceBusy() || largest_dma < 16384;
-            const framesize_t still_sizes_compact[] = {FRAMESIZE_QVGA, FRAMESIZE_HVGA};
+            const bool voice = VoiceBusy();
+#if CONFIG_CAMERA_PSRAM_DMA
+            // DVP DMA lives in PSRAM; internal largest_dma~15KB is normal and
+            // must not force fb_count=1 HVGA (that double-frees in cam_deinit).
+            const bool dma_tight = false;
+#else
+            const bool dma_tight = largest_dma < 16384;
+#endif
+            // Voice: VGA first, always fb_count=2. DMA-tight (no PSRAM DMA):
+            // QVGA only with fb_count=1 — the only still size proven safe then.
+            const framesize_t still_sizes_voice[] = {FRAMESIZE_VGA, FRAMESIZE_HVGA, FRAMESIZE_QVGA};
+            const framesize_t still_sizes_dma_tight[] = {FRAMESIZE_QVGA};
             const framesize_t still_sizes_full[] = {FRAMESIZE_SXGA, FRAMESIZE_SVGA, FRAMESIZE_VGA};
-            const framesize_t* still_sizes = compact ? still_sizes_compact : still_sizes_full;
-            const size_t still_count =
-                compact ? sizeof(still_sizes_compact) / sizeof(still_sizes_compact[0])
-                        : sizeof(still_sizes_full) / sizeof(still_sizes_full[0]);
-            if (compact) {
+            const framesize_t* still_sizes = still_sizes_full;
+            size_t still_count = sizeof(still_sizes_full) / sizeof(still_sizes_full[0]);
+            if (dma_tight) {
+                still_sizes = still_sizes_dma_tight;
+                still_count = sizeof(still_sizes_dma_tight) / sizeof(still_sizes_dma_tight[0]);
                 cfg.fb_count = 1;
-                ESP_LOGI(TAG, "Still capture compact mode (voice=%d largest_dma=%u)",
-                         VoiceBusy() ? 1 : 0, (unsigned)largest_dma);
+                ESP_LOGI(TAG, "Still capture DMA-tight QVGA (largest_dma=%u)", (unsigned)largest_dma);
+            } else if (voice) {
+                still_sizes = still_sizes_voice;
+                still_count = sizeof(still_sizes_voice) / sizeof(still_sizes_voice[0]);
+                cfg.fb_count = 2;
+                ESP_LOGI(TAG, "Still capture voice mode (VGA-first fb_count=2 largest_dma=%u)",
+                         (unsigned)largest_dma);
             }
             bool inited = false;
             for (size_t i = 0; i < still_count; ++i) {
@@ -478,6 +552,7 @@ private:
                     (unsigned)free_dma, (unsigned)largest_dma, (unsigned)free_spiram);
                 camera_.reset(new Esp32Camera(cfg));
                 if (camera_->IsInitialized()) {
+                    ApplyOv2640IndoorTuning();
                     inited = true;
                     break;
                 }
@@ -492,7 +567,7 @@ private:
             } else {
                 ESP_LOGW(TAG, "Vision explain URL not set yet; Capture ok but Explain may fail");
             }
-            vTaskDelay(pdMS_TO_TICKS(VoiceBusy() ? 400 : 200));
+            vTaskDelay(pdMS_TO_TICKS(moss_jpeg_still::kStillInitDelayMs));
             DrainWarmupFramesLocked(false);
             return true;
         }
@@ -552,7 +627,7 @@ private:
     }
 
     static void DeinitDvpSafe() {
-        vTaskDelay(pdMS_TO_TICKS(30));
+        MossDvpQuiesceBeforeDeinit();
         esp_camera_deinit();
     }
 
@@ -681,9 +756,7 @@ private:
             } else {
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
-            const auto ev = VoiceBusy()
-                                ? moss_jpeg_still::OnFrameVoice(st, complete, len, elapsed_ms)
-                                : moss_jpeg_still::OnFrame(st, complete, len, elapsed_ms);
+            const auto ev = moss_jpeg_still::OnFrame(st, complete, len, elapsed_ms);
             if (ev == moss_jpeg_still::SettleEvent::Ready) {
                 ESP_LOGI(TAG, "JPEG settled frames=%d streak=%d len=%u ms=%d", st.frames, st.streak,
                          (unsigned)st.last_len, elapsed_ms);
