@@ -35,7 +35,49 @@
 
 namespace {
 constexpr int kConnectingTimeoutTicks = 20;
+constexpr const char* kYunxiangjiWakeText = "请调用工具查询提醒内容";
 std::atomic<int> g_tts_downlink_logs{0};
+
+std::string NormalizeAnnounceText(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c <= 0x20 || c == '!' || c == '?' || c == '.' || c == ',' || c == ';' || c == ':' ||
+            c == '~') {
+            ++i;
+            continue;
+        }
+        if (i + 2 < text.size()) {
+            const unsigned char c1 = static_cast<unsigned char>(text[i + 1]);
+            const unsigned char c2 = static_cast<unsigned char>(text[i + 2]);
+            if (c == 0xE3 && c1 == 0x80 && (c2 == 0x81 || c2 == 0x82)) {
+                i += 3;
+                continue;
+            }
+            if (c == 0xEF && c1 == 0xBC && (c2 == 0x81 || c2 == 0x8C || c2 == 0x9F)) {
+                i += 3;
+                continue;
+            }
+        }
+        int n = 1;
+        if ((c & 0x80) == 0) {
+            n = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            n = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            n = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            n = 4;
+        }
+        if (i + static_cast<size_t>(n) > text.size()) {
+            n = 1;
+        }
+        out.append(text, i, static_cast<size_t>(n));
+        i += static_cast<size_t>(n);
+    }
+    return out;
+}
 }  // namespace
 
 Application::Application() {
@@ -602,6 +644,11 @@ void Application::InitializeProtocol() {
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         auto state = GetDeviceState();
+        // Duplicate reminder sentence_start sets this. Do not recover just
+        // because we are already speaking — that replayed the same TTS.
+        if (IsAnnounceReplaySuppressed()) {
+            return;
+        }
         if (protocol_->IsPendingAudioDropped()) {
             // SendTextChat sets dropped=true to discard leftover session audio.
             // Cloud TTS often arrives while still connecting/listening, before
@@ -677,7 +724,7 @@ void Application::InitializeProtocol() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
-                    if (protocol_) {
+                    if (!IsAnnounceReplaySuppressed() && protocol_) {
                         protocol_->SetPendingAudioDropped(false);
                     }
                     // tts/start is deferred onto the main loop. MQTT audio often
@@ -701,6 +748,7 @@ void Application::InitializeProtocol() {
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
+                    suppress_announce_replay_.store(false, std::memory_order_relaxed);
                     if (GetDeviceState() == kDeviceStateSpeaking) {
                         ESP_LOGI(TAG, "TTS stop -> listening (mode=%d)", listening_mode_);
                         if (listening_mode_ == kListeningModeManualStop) {
@@ -729,6 +777,13 @@ void Application::InitializeProtocol() {
                         barge_in_candidate_residual_ = 0;
                         barge_in_ratio_hits_ = 0;
 #endif
+                        // The model often restates the reminder after ack. Drop the
+                        // second identical utterance so the speaker only plays it once.
+                        if (ShouldDropDuplicateAnnounceTts(message)) {
+                            ESP_LOGI(TAG, "drop duplicate reminder TTS: %s", message.c_str());
+                            SuppressAnnounceReplay();
+                            return;
+                        }
                         // Some server paths emit sentence_start before tts/start; without
                         // this, pending_audio_dropped stays true and all TTS is silent.
                         aborted_ = false;
@@ -1099,7 +1154,11 @@ void Application::HandleStateChangedEvent() {
 
     switch (new_state) {
         case kDeviceStateUnknown:
-        case kDeviceStateIdle:
+        case kDeviceStateIdle: {
+            std::lock_guard<std::mutex> lock(mutex_);
+            last_external_detect_text_.clear();
+            ResetYunxiangjiSessionLocked();
+        }
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
             vad_interrupt_armed_ = false;
@@ -1493,8 +1552,12 @@ void Application::StartListeningAudio() {
     if (!pending_text_to_send_.empty()) {
         std::string text = pending_text_to_send_;
         pending_text_to_send_.clear();
-        ESP_LOGI(TAG, "StartListeningAudio: sending pending text: %s", text.c_str());
-        if (protocol_) {
+        if (ShouldSkipExternalDetect(text)) {
+            ESP_LOGI(TAG, "StartListeningAudio: skip already-sent detect");
+        } else if (protocol_) {
+            last_external_detect_text_ = text;
+            external_detect_sent_ = true;
+            ESP_LOGI(TAG, "StartListeningAudio: sending pending text: %s", text.c_str());
             // Wake-word uplink already punched UDP. Idle text-chat has no mic
             // frames before AutoStop TTS (120ms warmup then speaking mutes RX).
             protocol_->SendUdpHolePunch();
@@ -1669,6 +1732,51 @@ void Application::RequestChatWake(const std::string& wake_word) {
 
 void Application::WakeWordInvoke(const std::string& wake_word) { RequestChatWake(wake_word); }
 
+void Application::ResetYunxiangjiSessionLocked() {
+    last_taken_announce_.clear();
+    yunxiangji_tts_played_ = false;
+    external_detect_sent_ = false;
+    suppress_announce_replay_.store(false, std::memory_order_relaxed);
+}
+
+void Application::SuppressAnnounceReplay() {
+    suppress_announce_replay_.store(true, std::memory_order_relaxed);
+    if (protocol_) {
+        protocol_->SetPendingAudioDropped(true);
+    }
+    // First utterance already started seconds earlier; flush the replay.
+    audio_service_.ResetDecoder();
+}
+
+bool Application::IsAnnounceReplaySuppressed() const {
+    return suppress_announce_replay_.load(std::memory_order_relaxed);
+}
+
+bool Application::ShouldSkipExternalDetect(const std::string& text) const {
+    if (text.empty() || !external_detect_sent_) {
+        return false;
+    }
+    if (text == last_external_detect_text_) {
+        return true;
+    }
+    return text == kYunxiangjiWakeText && last_external_detect_text_ == kYunxiangjiWakeText;
+}
+
+bool Application::ShouldDropDuplicateAnnounceTts(const std::string& spoken) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (last_taken_announce_.empty() || spoken.empty()) {
+        return false;
+    }
+    if (NormalizeAnnounceText(spoken) != NormalizeAnnounceText(last_taken_announce_)) {
+        return false;
+    }
+    if (yunxiangji_tts_played_) {
+        return true;
+    }
+    yunxiangji_tts_played_ = true;
+    return false;
+}
+
 void Application::SetPendingAnnounce(const std::string& text) {
     std::lock_guard<std::mutex> lock(mutex_);
     pending_announce_ = text;
@@ -1679,6 +1787,11 @@ void Application::PushPendingAnnounce(const std::string& text) {
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
+    const std::string incoming = NormalizeAnnounceText(text);
+    if (!incoming.empty() && incoming == NormalizeAnnounceText(last_taken_announce_)) {
+        ESP_LOGI(TAG, "PushPendingAnnounce: skip already-taken content");
+        return;
+    }
     if (pending_announce_.empty()) {
         pending_announce_ = text;
         return;
@@ -1698,13 +1811,20 @@ std::string Application::TakePendingAnnounce() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::string text = pending_announce_;
     pending_announce_.clear();
+    if (!text.empty()) {
+        last_taken_announce_ = text;
+        yunxiangji_tts_played_ = false;
+    }
     return text;
 }
 
 std::string Application::AckPendingAnnounce() {
     std::lock_guard<std::mutex> lock(mutex_);
     pending_announce_.clear();
-    return "已播报";
+    if (!last_taken_announce_.empty()) {
+        yunxiangji_tts_played_ = true;
+    }
+    return "已播报。不要再口头播报，不要再说同一句话，不要调用灯或其它工具，直接结束本轮。";
 }
 
 void Application::HandleExternalTextMessage(const std::string& text, const std::string& announce) {
@@ -1726,6 +1846,7 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
             }
             // Keep pending text until StartListeningAudio (listen/start then detect).
             pending_text_to_send_ = text;
+            last_external_detect_text_ = text;
             listening_mode_ = kListeningModeAutoStop;
             Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
             if (!protocol_->IsAudioChannelOpened()) {
@@ -1733,6 +1854,7 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
                 if (!protocol_->OpenAudioChannel()) {
                     SetDeviceState(kDeviceStateIdle);
                     pending_text_to_send_.clear();
+                    last_external_detect_text_.clear();
                     last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
                     xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
                     return;
@@ -1741,9 +1863,20 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
             SetListeningMode(kListeningModeAutoStop);
         } else if (state == kDeviceStateSpeaking) {
             // Queue for the next listening cycle; do not abort in-flight TTS (breaks playback).
+            if (ShouldSkipExternalDetect(text) || text == last_external_detect_text_) {
+                ESP_LOGI(TAG, "HandleExternalTextMessage: skip duplicate detect while speaking");
+                return;
+            }
             pending_text_to_send_ = text;
+            last_external_detect_text_ = text;
         } else if (state == kDeviceStateListening || state == kDeviceStateConnecting) {
+            if (ShouldSkipExternalDetect(text) || text == last_external_detect_text_) {
+                ESP_LOGI(TAG, "HandleExternalTextMessage: skip duplicate detect");
+                return;
+            }
+            last_external_detect_text_ = text;
             if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                external_detect_sent_ = true;
                 protocol_->SendTextChat(text);
             } else {
                 pending_text_to_send_ = text;

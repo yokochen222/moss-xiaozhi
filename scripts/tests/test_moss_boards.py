@@ -242,9 +242,9 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         src = (ROOT / "main/mcp/tools/yunxiangji.cc").read_text(encoding="utf-8")
         self.assertIn("self.yunxiangji.take", src)
         self.assertIn("self.yunxiangji.ack", src)
-        self.assertIn("PeekPendingAnnounce", src)
+        self.assertIn("TakePendingAnnounce", src)
         self.assertIn("AckPendingAnnounce", src)
-        self.assertNotIn("TakePendingAnnounce", src)
+        self.assertIn("static bool registered = false", src)
         self.assertIn("void RegisterYunxiangjiTools()", src)
         app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         self.assertIn("RegisterYunxiangjiTools()", app)
@@ -396,6 +396,24 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         self.assertIn("PushPendingAnnounce(announce)", handle)
         self.assertNotIn("SetPendingAnnounce(text)", handle)
         self.assertIn("pending_text_to_send_ = text", handle)
+        self.assertIn("skip duplicate detect", handle)
+        self.assertIn("ShouldSkipExternalDetect", handle)
+        app_all = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        self.assertIn("drop duplicate reminder TTS", app_all)
+        self.assertIn("SuppressAnnounceReplay()", app_all)
+        self.assertIn("IsAnnounceReplaySuppressed()", app_all)
+        incoming = app_all[
+            app_all.find("protocol_->OnIncomingAudio") : app_all.find(
+                "protocol_->OnAudioChannelOpened"
+            )
+        ]
+        self.assertLess(
+            incoming.find("IsAnnounceReplaySuppressed()"),
+            incoming.find("IsPendingAudioDropped()"),
+        )
+        self.assertIn("skip already-sent detect", app_all)
+        self.assertIn("TakePendingAnnounce", app_all)
+        self.assertIn("last_taken_announce_", app_all)
 
     def test_idle_wake_reports_connecting_not_stale_idle(self):
         src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")

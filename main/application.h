@@ -6,6 +6,7 @@
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -161,6 +162,11 @@ private:
     ChatRelayCallback chat_relay_callback_;
     std::string pending_text_to_send_;
     std::string pending_announce_;
+    std::string last_external_detect_text_;
+    std::string last_taken_announce_;
+    bool yunxiangji_tts_played_ = false;
+    bool external_detect_sent_ = false;
+    std::atomic<bool> suppress_announce_replay_{false};
 
     bool has_server_time_ = false;
     bool aborted_ = false;
@@ -213,6 +219,11 @@ private:
     void ContinueWakeWordInvoke(const std::string& wake_word, bool encode_wake_audio = true);
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
+    void ResetYunxiangjiSessionLocked();
+    bool ShouldSkipExternalDetect(const std::string& text) const;
+    bool ShouldDropDuplicateAnnounceTts(const std::string& spoken);
+    void SuppressAnnounceReplay();
+    bool IsAnnounceReplaySuppressed() const;
 
     // Activation task (runs in background)
     void ActivationTask();
