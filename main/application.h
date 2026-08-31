@@ -125,7 +125,7 @@ public:
     // pending reminder content for self.yunxiangji.* and is not uploaded.
     void HandleExternalTextMessage(const std::string& text, const std::string& announce = "");
     void SetPendingAnnounce(const std::string& text);
-    void PushPendingAnnounce(const std::string& text);
+    bool PushPendingAnnounce(const std::string& text);
     std::string PeekPendingAnnounce();
     std::string TakePendingAnnounce();
     std::string AckPendingAnnounce();
@@ -220,6 +220,8 @@ private:
     void StartListeningAudio();
     void ConfigureWakeWordForListening();
     void ResetYunxiangjiSessionLocked();
+    void PrepareAnnounceInterrupt();
+    void SendOrQueueExternalDetect(const std::string& text);
     bool ShouldSkipExternalDetect(const std::string& text) const;
     bool ShouldDropDuplicateAnnounceTts(const std::string& spoken);
     void SuppressAnnounceReplay();
