@@ -212,6 +212,26 @@ bool MqttProtocol::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     return udp_->Send(encrypted) > 0;
 }
 
+void MqttProtocol::SendUdpHolePunch() {
+    // SILK WB 60ms DTX (TOC 0x58). Valid enough for the server to map our UDP
+    // source; wake-word sessions get this for free from encoded mic frames.
+    static const uint8_t kOpusDtx[] = {0x58, 0x80};
+    constexpr int kPunchPackets = 3;
+    int sent = 0;
+    for (int i = 0; i < kPunchPackets; ++i) {
+        auto packet = std::make_unique<AudioStreamPacket>();
+        packet->sample_rate = 16000;
+        packet->frame_duration = OPUS_FRAME_DURATION_MS;
+        packet->timestamp = static_cast<uint32_t>(i * OPUS_FRAME_DURATION_MS);
+        packet->payload.assign(kOpusDtx, kOpusDtx + sizeof(kOpusDtx));
+        if (!SendAudio(std::move(packet))) {
+            break;
+        }
+        ++sent;
+    }
+    ESP_LOGI(TAG, "UDP hole punch sent %d/%d packets", sent, kPunchPackets);
+}
+
 void MqttProtocol::CloseAudioChannel(bool send_goodbye) {
     xEventGroupSetBits(event_group_handle_, MQTT_PROTOCOL_CLOSE_EVENT);
 
@@ -252,6 +272,9 @@ bool MqttProtocol::OpenAudioChannel() {
 
     error_occurred_ = false;
     session_id_ = "";
+    // Idle text-chat opens the channel from LOW_POWER; wake word sets
+    // PERFORMANCE before hello. UDP RX is unreliable until modem PS is off.
+    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
     xEventGroupClearBits(event_group_handle_,
                          MQTT_PROTOCOL_SERVER_HELLO_EVENT | MQTT_PROTOCOL_CLOSE_EVENT);
 
@@ -352,6 +375,8 @@ bool MqttProtocol::OpenAudioChannel() {
         std::lock_guard<std::mutex> lock(channel_mutex_);
         udp_ = std::move(udp);
     }
+
+    SendUdpHolePunch();
 
     if (on_audio_channel_opened_ != nullptr) {
         on_audio_channel_opened_();

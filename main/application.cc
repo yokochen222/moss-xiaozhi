@@ -15,6 +15,7 @@
 
 #ifdef CONFIG_BOARD_FAMILY_MOSS
 #include "config/moss_config_service.h"
+#include "mcp_tools.h"
 #endif
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
 #include "device/face_tracker.h"
@@ -26,13 +27,15 @@
 #include <esp_timer.h>
 #include <arpa/inet.h>
 #include <cJSON.h>
-#include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 
 #define TAG "Application"
 
 namespace {
 constexpr int kConnectingTimeoutTicks = 20;
+std::atomic<int> g_tts_downlink_logs{0};
 }  // namespace
 
 Application::Application() {
@@ -138,6 +141,9 @@ void Application::Initialize() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
+#ifdef CONFIG_BOARD_FAMILY_MOSS
+    mcp_tools::RegisterYunxiangjiTools();
+#endif
 
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
@@ -597,8 +603,12 @@ void Application::InitializeProtocol() {
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         auto state = GetDeviceState();
         if (protocol_->IsPendingAudioDropped()) {
-            // Recover if TTS audio arrives before tts/start (seen after SendTextChat).
-            if (state == kDeviceStateSpeaking) {
+            // SendTextChat sets dropped=true to discard leftover session audio.
+            // Cloud TTS often arrives while still connecting/listening, before
+            // tts/start or sentence_start can flip the device to speaking.
+            // Recovering only in speaking drops the entire first utterance.
+            if (state == kDeviceStateSpeaking || state == kDeviceStateListening ||
+                state == kDeviceStateConnecting) {
                 protocol_->SetPendingAudioDropped(false);
             } else {
                 return;
@@ -608,7 +618,17 @@ void Application::InitializeProtocol() {
         // listening, before the scheduled tts/start flips the device to speaking.
         if (state == kDeviceStateSpeaking || state == kDeviceStateListening ||
             state == kDeviceStateConnecting) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+            if (g_tts_downlink_logs.load(std::memory_order_relaxed) < 3) {
+                const int n = g_tts_downlink_logs.fetch_add(1, std::memory_order_relaxed);
+                if (n < 3) {
+                    ESP_LOGI(TAG, "TTS downlink #%d state=%d sr=%d bytes=%u", n + 1,
+                             static_cast<int>(state), packet->sample_rate,
+                             static_cast<unsigned>(packet->payload.size()));
+                }
+            }
+            if (!audio_service_.PushPacketToDecodeQueue(std::move(packet))) {
+                ESP_LOGW(TAG, "TTS downlink dropped: decode queue full");
+            }
         }
     });
 
@@ -620,14 +640,13 @@ void Application::InitializeProtocol() {
                      "resampling may cause distortion",
                      protocol_->server_sample_rate(), codec->output_sample_rate());
         }
+        // Do not send listen/detect here. Doing it before listen/start makes the
+        // cloud emit TTS JSON/MCP with no UDP audio; /chat/say after listening
+        // already started is the path that has speaker output.
         if (!pending_text_to_send_.empty()) {
-            std::string text = pending_text_to_send_;
-            pending_text_to_send_.clear();
-            ESP_LOGI(TAG, "OnAudioChannelOpened: sending pending text: %s", text.c_str());
-            SetListeningMode(kListeningModeAutoStop);
-            protocol_->SetPendingAudioDropped(true);
-            protocol_->SendTextChat(text);
+            ESP_LOGI(TAG, "OnAudioChannelOpened: pending text waiting for listen/start");
         }
+        g_tts_downlink_logs.store(0, std::memory_order_relaxed);
     });
 
     protocol_->OnAudioChannelClosed([this, &board]() {
@@ -675,9 +694,7 @@ void Application::InitializeProtocol() {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
                         MossDesktopPreparePlayback(codec);
 #else
-                        if (!codec->output_enabled()) {
-                            codec->EnableOutput(true);
-                        }
+                        codec->PreparePlayback();
 #endif
                     }
                     SetDeviceState(kDeviceStateSpeaking);
@@ -725,9 +742,7 @@ void Application::InitializeProtocol() {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
                             MossDesktopPreparePlayback(codec);
 #else
-                            if (!codec->output_enabled()) {
-                                codec->EnableOutput(true);
-                            }
+                            codec->PreparePlayback();
 #endif
                         }
                         display->AddTextGlyphs(glyphs, bpp);
@@ -1047,14 +1062,18 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word, bool enco
     }
 
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    if (!pending_text_to_send_.empty()) {
+        ESP_LOGI(TAG, "ContinueWakeWordInvoke: pending text waits for listen/start");
+    } else {
 #if CONFIG_SEND_WAKE_WORD_DATA
-    if (encode_wake_audio) {
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            protocol_->SendAudio(std::move(packet));
+        if (encode_wake_audio) {
+            while (auto packet = audio_service_.PopWakeWordPacket()) {
+                protocol_->SendAudio(std::move(packet));
+            }
         }
-    }
-    protocol_->SendWakeWordDetected(wake_word);
+        protocol_->SendWakeWordDetected(wake_word);
 #endif
+    }
     play_popup_on_listening_ = true;
     SetListeningMode(GetDefaultListeningMode());
 }
@@ -1127,8 +1146,11 @@ void Application::HandleStateChangedEvent() {
             // Barge-in must re-send listen start even when the processor stays up.
             if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
                 keep_preroll) {
-                if (listening_mode_ == kListeningModeAutoStop &&
-                    !audio_service_.IsPlaybackIdle()) {
+                // Pending text-chat (reminder /chat/say) must send listen/start
+                // then detect; deferring until drain used to skip start and leave
+                // the first TTS with MQTT text but no UDP audio.
+                if (listening_mode_ == kListeningModeAutoStop && !audio_service_.IsPlaybackIdle() &&
+                    pending_text_to_send_.empty()) {
                     pending_listening_start_ = true;
                 } else {
                     StartListeningAudio();
@@ -1187,8 +1209,7 @@ void Application::CancelVadInterruptTimer() {
 }
 
 void Application::UpdateSpeakingBargeIn() {
-    if (GetDeviceState() != kDeviceStateSpeaking ||
-        listening_mode_ != kListeningModeRealtime) {
+    if (GetDeviceState() != kDeviceStateSpeaking || listening_mode_ != kListeningModeRealtime) {
         return;
     }
 
@@ -1337,8 +1358,7 @@ void Application::HandleVadInterruptConfirm() {
     }
     // Echo residual falls after mute (437 → 314). Real barge-in rose
     // (267 → 305, 482 → 789). Apply spike reject even while the PA is muted.
-    if (barge_in_candidate_residual_ > 0 &&
-        residual * 4 < barge_in_candidate_residual_ * 3) {
+    if (barge_in_candidate_residual_ > 0 && residual * 4 < barge_in_candidate_residual_ * 3) {
         reject("spike");
         return;
     }
@@ -1475,6 +1495,9 @@ void Application::StartListeningAudio() {
         pending_text_to_send_.clear();
         ESP_LOGI(TAG, "StartListeningAudio: sending pending text: %s", text.c_str());
         if (protocol_) {
+            // Wake-word uplink already punched UDP. Idle text-chat has no mic
+            // frames before AutoStop TTS (120ms warmup then speaking mutes RX).
+            protocol_->SendUdpHolePunch();
             protocol_->SetPendingAudioDropped(true);
             protocol_->SendTextChat(text);
         }
@@ -1516,9 +1539,7 @@ ListeningMode Application::GetDefaultListeningMode() const {
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
 }
 
-bool Application::IsVadBargeInEnabled() const {
-    return GetAecMode() == kAecOnDeviceSide;
-}
+bool Application::IsVadBargeInEnabled() const { return GetAecMode() == kAecOnDeviceSide; }
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
@@ -1646,13 +1667,31 @@ void Application::RequestChatWake(const std::string& wake_word) {
     });
 }
 
-void Application::WakeWordInvoke(const std::string& wake_word) {
-    RequestChatWake(wake_word);
-}
+void Application::WakeWordInvoke(const std::string& wake_word) { RequestChatWake(wake_word); }
 
 void Application::SetPendingAnnounce(const std::string& text) {
     std::lock_guard<std::mutex> lock(mutex_);
     pending_announce_ = text;
+}
+
+void Application::PushPendingAnnounce(const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pending_announce_.empty()) {
+        pending_announce_ = text;
+        return;
+    }
+    if (pending_announce_ != text) {
+        pending_announce_ += "\n";
+        pending_announce_ += text;
+    }
+}
+
+std::string Application::PeekPendingAnnounce() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return pending_announce_;
 }
 
 std::string Application::TakePendingAnnounce() {
@@ -1662,12 +1701,20 @@ std::string Application::TakePendingAnnounce() {
     return text;
 }
 
-void Application::HandleExternalTextMessage(const std::string& text) {
+std::string Application::AckPendingAnnounce() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_announce_.clear();
+    return "已播报";
+}
+
+void Application::HandleExternalTextMessage(const std::string& text, const std::string& announce) {
     if (text.empty()) {
         return;
     }
 
-    SetPendingAnnounce(text);
+    if (!announce.empty()) {
+        PushPendingAnnounce(announce);
+    }
 
     Schedule([this, text]() {
         auto state = GetDeviceState();
@@ -1677,9 +1724,10 @@ void Application::HandleExternalTextMessage(const std::string& text) {
                 ESP_LOGE(TAG, "Protocol not initialized");
                 return;
             }
-            // Set pending text before opening channel — OnAudioChannelOpened may run sync.
+            // Keep pending text until StartListeningAudio (listen/start then detect).
             pending_text_to_send_ = text;
             listening_mode_ = kListeningModeAutoStop;
+            Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
             if (!protocol_->IsAudioChannelOpened()) {
                 SetDeviceState(kDeviceStateConnecting);
                 if (!protocol_->OpenAudioChannel()) {
@@ -1690,6 +1738,7 @@ void Application::HandleExternalTextMessage(const std::string& text) {
                     return;
                 }
             }
+            SetListeningMode(kListeningModeAutoStop);
         } else if (state == kDeviceStateSpeaking) {
             // Queue for the next listening cycle; do not abort in-flight TTS (breaks playback).
             pending_text_to_send_ = text;
@@ -1736,7 +1785,8 @@ void Application::RegisterChatRelayCallback(ChatRelayCallback callback) {
     chat_relay_callback_ = std::move(callback);
 }
 
-void Application::RelayChat(const std::string& event, const std::string& role, const std::string& text) {
+void Application::RelayChat(const std::string& event, const std::string& role,
+                            const std::string& text) {
     if (!chat_relay_callback_) {
         return;
     }

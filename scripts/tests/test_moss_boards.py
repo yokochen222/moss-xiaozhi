@@ -146,6 +146,25 @@ class MossBoardIdentityTests(unittest.TestCase):
         self.assertIn("MossDesktopPreparePlayback(codec)", tts_body)
         self.assertNotIn("codec != nullptr && !codec->output_enabled()", tts_body)
 
+    def test_onvif_reasserts_pa_even_when_i2s_already_on(self):
+        service = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        out_start = service.find("void AudioService::AudioOutputTask")
+        self.assertGreater(out_start, 0)
+        out_body = service[out_start : service.find("void AudioService::", out_start + 1)]
+        else_body = out_body[out_body.find("#else") : out_body.find("#endif")]
+        self.assertIn("PreparePlayback()", else_body)
+        self.assertNotIn("if (!codec_->output_enabled())", else_body)
+
+        app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        tts = app.find('if (strcmp(state->valuestring, "start") == 0)')
+        tts_body = app[tts : app.find('else if (strcmp(state->valuestring, "stop") == 0)', tts)]
+        self.assertIn("PreparePlayback()", tts_body)
+
+        box = (ROOT / "main/audio/codecs/box_audio_codec.cc").read_text(encoding="utf-8")
+        self.assertIn("void BoxAudioCodec::PreparePlayback()", box)
+        self.assertIn("ApplyPaPin(true)", box)
+        self.assertIn("PA %s (GPIO%d)", box)
+
     def test_ov2640_camera_guard_restores_mic_during_tts(self):
         src = (ROOT / "main/mcp_server.cc").read_text(encoding="utf-8")
         start = src.find("class MossCameraVoiceGuard")
@@ -219,6 +238,23 @@ class MossCmakeSourceIsolationTests(unittest.TestCase):
 
 
 class MossBoardMcpLayoutTests(unittest.TestCase):
+    def test_yunxiangji_registers_query_and_ack_tools(self):
+        src = (ROOT / "main/mcp/tools/yunxiangji.cc").read_text(encoding="utf-8")
+        self.assertIn("self.yunxiangji.take", src)
+        self.assertIn("self.yunxiangji.ack", src)
+        self.assertIn("PeekPendingAnnounce", src)
+        self.assertIn("AckPendingAnnounce", src)
+        self.assertNotIn("TakePendingAnnounce", src)
+        self.assertIn("void RegisterYunxiangjiTools()", src)
+        app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        self.assertIn("RegisterYunxiangjiTools()", app)
+        invoke = app.find("void Application::ContinueWakeWordInvoke")
+        self.assertGreater(invoke, 0)
+        body = app[invoke : app.find("void Application::HandleStateChangedEvent", invoke)]
+        self.assertIn("pending_text_to_send_", body)
+        self.assertIn("pending text waits for listen/start", body)
+        self.assertNotIn("SendTextChat(text)", body)
+
     def test_shared_mcp_stays_in_mcp_tools(self):
         tools = ROOT / "main/mcp/tools"
         for name in (
@@ -345,6 +381,21 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         for route in ("/camera/stream", "/gimbal/control", "/face_track/control"):
             self.assertNotIn(route, shared, route)
             self.assertIn(route, ov2640, route)
+
+    def test_chat_say_keeps_announce_local_and_cloud_text_short(self):
+        src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")
+        start = src.find("esp_err_t HandleChatSay")
+        body = src[start : src.find("esp_err_t HandleChatSync", start)]
+        self.assertIn('"announce"', body)
+        self.assertIn("HandleExternalTextMessage(text, announce)", body)
+        app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        fn = app.find("void Application::HandleExternalTextMessage")
+        self.assertGreater(fn, 0)
+        end = app.find("bool Application::CanEnterSleepMode", fn)
+        handle = app[fn:end]
+        self.assertIn("PushPendingAnnounce(announce)", handle)
+        self.assertNotIn("SetPendingAnnounce(text)", handle)
+        self.assertIn("pending_text_to_send_ = text", handle)
 
     def test_idle_wake_reports_connecting_not_stale_idle(self):
         src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")
@@ -573,6 +624,10 @@ class MossWakeTtsTests(unittest.TestCase):
         self.assertIn("kDeviceStateConnecting", body)
         self.assertIn("kDeviceStateListening", body)
         self.assertIn("kDeviceStateSpeaking", body)
+        dropped = body[body.find("IsPendingAudioDropped()") :]
+        recover = dropped[dropped.find("if (state ==") : dropped.find("} else {")]
+        self.assertIn("kDeviceStateListening", recover)
+        self.assertIn("kDeviceStateConnecting", recover)
 
     def test_voice_processing_start_does_not_drop_queued_tts(self):
         src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
@@ -581,6 +636,47 @@ class MossWakeTtsTests(unittest.TestCase):
         body = src[start : src.find("void AudioService::EnableAudioTesting", start)]
         self.assertIn("if (IsPlaybackIdle())", body)
         self.assertIn("ResetDecoder()", body)
+
+    def test_pending_text_sent_after_listen_start_not_on_channel_open(self):
+        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        opened = src.find("protocol_->OnAudioChannelOpened")
+        self.assertGreater(opened, 0)
+        opened_body = src[opened : src.find("protocol_->OnAudioChannelClosed", opened)]
+        self.assertNotIn("protocol_->SendTextChat", opened_body)
+        self.assertIn("pending text waiting for listen/start", opened_body)
+
+        listen = src.find("void Application::StartListeningAudio")
+        self.assertGreater(listen, 0)
+        listen_body = src[
+            listen : src.find("void Application::ConfigureWakeWordForListening", listen)
+        ]
+        self.assertLess(listen_body.find("SendStartListening"), listen_body.find("SendTextChat"))
+        self.assertIn("StartListeningAudio: sending pending text", listen_body)
+        self.assertLess(listen_body.find("SendUdpHolePunch"), listen_body.find("SendTextChat"))
+
+        mqtt = (ROOT / "main/protocols/mqtt_protocol.cc").read_text(encoding="utf-8")
+        self.assertIn("void MqttProtocol::SendUdpHolePunch()", mqtt)
+        self.assertIn("UDP hole punch sent", mqtt)
+        open_fn = mqtt.find("bool MqttProtocol::OpenAudioChannel()")
+        self.assertGreater(open_fn, 0)
+        open_body = mqtt[open_fn : mqtt.find("std::string MqttProtocol::GetHelloMessage", open_fn)]
+        self.assertIn("SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE)", open_body)
+        self.assertLess(open_body.find("SetPowerSaveLevel"), open_body.find("udp->Connect"))
+        self.assertLess(open_body.find("udp->Connect"), open_body.find("SendUdpHolePunch()"))
+
+        handle = src.find("void Application::HandleExternalTextMessage")
+        self.assertGreater(handle, 0)
+        handle_body = src[handle : src.find("bool Application::CanEnterSleepMode", handle)]
+        self.assertIn("SetListeningMode(kListeningModeAutoStop)", handle_body)
+        self.assertGreater(
+            handle_body.find("SetListeningMode(kListeningModeAutoStop)", handle_body.find("OpenAudioChannel")),
+            handle_body.find("OpenAudioChannel"),
+        )
+
+        listening = src.find("case kDeviceStateListening:")
+        self.assertGreater(listening, 0)
+        listening_body = src[listening : src.find("case kDeviceStateSpeaking:", listening)]
+        self.assertIn("pending_text_to_send_.empty()", listening_body)
 
 
 class MossLcdDmaTests(unittest.TestCase):

@@ -61,6 +61,9 @@ public:
     virtual void CloseAudioChannel(bool send_goodbye = true) = 0;
     virtual bool IsAudioChannelOpened() const = 0;
     virtual bool SendAudio(std::unique_ptr<AudioStreamPacket> packet) = 0;
+    // MQTT/UDP: send DTX so the server has a return path before any mic uplink.
+    // Wake-word audio already does this; idle text-chat does not.
+    virtual void SendUdpHolePunch() {}
     virtual void SendWakeWordDetected(const std::string& wake_word);
     virtual void SendStartListening(ListeningMode mode);
     virtual void SendStopListening();

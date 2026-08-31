@@ -3,10 +3,10 @@
 
 #include "audio_codec.h"
 
+#include <driver/gpio.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
 #include <mutex>
-
 
 class BoxAudioCodec : public AudioCodec {
 private:
@@ -22,9 +22,12 @@ private:
     std::mutex data_if_mutex_;
     int reference_gain_channel_ = -1;
     float reference_gain_ = 0.0f;
+    gpio_num_t pa_pin_ = GPIO_NUM_NC;
+    bool pa_pin_high_ = false;
 
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
                               gpio_num_t din);
+    void ApplyPaPin(bool enable);
 
     virtual int Read(int16_t* dest, int samples) override;
     virtual int Write(const int16_t* data, int samples) override;
@@ -40,6 +43,7 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual void PreparePlayback() override;
 };
 
-#endif // _BOX_AUDIO_CODEC_H
+#endif  // _BOX_AUDIO_CODEC_H

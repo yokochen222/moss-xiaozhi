@@ -120,12 +120,18 @@ public:
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
     // External MQTT codesuccess / text wake trigger.
-    void HandleExternalTextMessage(const std::string& text);
+    // `text` is sent to the cloud (keep short). Optional `announce` is local
+    // pending reminder content for self.yunxiangji.* and is not uploaded.
+    void HandleExternalTextMessage(const std::string& text, const std::string& announce = "");
     void SetPendingAnnounce(const std::string& text);
+    void PushPendingAnnounce(const std::string& text);
+    std::string PeekPendingAnnounce();
     std::string TakePendingAnnounce();
+    std::string AckPendingAnnounce();
 
-    using ChatRelayCallback = std::function<void(const std::string& event, const std::string& role,
-                                                 const std::string& text, const std::string& state)>;
+    using ChatRelayCallback =
+        std::function<void(const std::string& event, const std::string& role,
+                           const std::string& text, const std::string& state)>;
     void RegisterChatRelayCallback(ChatRelayCallback callback);
 
     /**

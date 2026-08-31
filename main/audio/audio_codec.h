@@ -1,14 +1,14 @@
 #ifndef _AUDIO_CODEC_H
 #define _AUDIO_CODEC_H
 
-#include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
 #include <driver/i2s_std.h>
 #include <esp_idf_version.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 
-#include <vector>
-#include <string>
 #include <functional>
+#include <string>
+#include <vector>
 
 #include "board.h"
 #include "sdkconfig.h"
@@ -29,11 +29,14 @@ class AudioCodec {
 public:
     AudioCodec();
     virtual ~AudioCodec();
-    
+
     virtual void SetOutputVolume(int volume);
     virtual void SetInputGain(float gain);
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
+    // Re-assert speaker amp before PCM. Duplex boards keep I2S TX for wake, so
+    // output_enabled() can already be true while the PA GPIO is low.
+    virtual void PreparePlayback();
 
     virtual void OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);
@@ -87,4 +90,4 @@ public:
 };
 #endif
 
-#endif // _AUDIO_CODEC_H
+#endif  // _AUDIO_CODEC_H

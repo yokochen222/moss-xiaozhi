@@ -3,10 +3,10 @@
 #include "board.h"
 #include "settings.h"
 
+#include <driver/i2s_common.h>
 #include <esp_log.h>
 #include <atomic>
 #include <cstring>
-#include <driver/i2s_common.h>
 #include "sdkconfig.h"
 
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
@@ -42,9 +42,7 @@ void MossDesktopHoldSharedI2c(bool hold) {
     }
 }
 
-bool MossDesktopSharedI2cHeld() {
-    return shared_i2c_hold.load(std::memory_order_acquire) > 0;
-}
+bool MossDesktopSharedI2cHeld() { return shared_i2c_hold.load(std::memory_order_acquire) > 0; }
 
 void MossDesktopSetNs4150Pa(bool enable) {
     if (MossDesktopSharedI2cHeld()) {
@@ -96,11 +94,9 @@ void MossDesktopReleasePlayback(AudioCodec* codec) {
 }
 #endif
 
-AudioCodec::AudioCodec() {
-}
+AudioCodec::AudioCodec() {}
 
-AudioCodec::~AudioCodec() {
-}
+AudioCodec::~AudioCodec() {}
 
 void AudioCodec::OutputData(std::vector<int16_t>& data) {
     Write(data.data(), data.size());
@@ -120,7 +116,8 @@ void AudioCodec::Start() {
     Settings settings("audio", false);
     output_volume_ = settings.GetInt("output_volume", output_volume_);
     if (output_volume_ <= 0) {
-        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", output_volume_);
+        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)",
+                 output_volume_);
         output_volume_ = 10;
     }
 
@@ -130,7 +127,7 @@ void AudioCodec::Start() {
 void AudioCodec::SetOutputVolume(int volume) {
     output_volume_ = volume;
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
-    
+
     Settings settings("audio", true);
     settings.SetInt("output_volume", output_volume_);
 }
@@ -154,4 +151,10 @@ void AudioCodec::EnableOutput(bool enable) {
     }
     output_enabled_ = enable;
     ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
+}
+
+void AudioCodec::PreparePlayback() {
+    if (!output_enabled()) {
+        EnableOutput(true);
+    }
 }

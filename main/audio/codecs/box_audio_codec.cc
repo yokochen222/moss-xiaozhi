@@ -1,8 +1,9 @@
 #include "box_audio_codec.h"
 
-#include <esp_log.h>
+#include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -21,6 +22,13 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
     input_gain_ = input_gain;
     reference_gain_channel_ = reference_gain_channel;
     reference_gain_ = reference_gain;
+    pa_pin_ = pa_pin;
+
+    if (pa_pin_ != GPIO_NUM_NC) {
+        gpio_reset_pin(pa_pin_);
+        gpio_set_direction(pa_pin_, GPIO_MODE_OUTPUT);
+        gpio_set_level(pa_pin_, 0);
+    }
 
     CreateDuplexChannels(mclk, bclk, ws, dout, din);
 
@@ -83,6 +91,17 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
     ESP_LOGI(TAG, "BoxAudioDevice initialized");
 }
 
+void BoxAudioCodec::ApplyPaPin(bool enable) {
+    if (pa_pin_ == GPIO_NUM_NC) {
+        return;
+    }
+    gpio_set_level(pa_pin_, enable ? 1 : 0);
+    if (pa_pin_high_ != enable) {
+        pa_pin_high_ = enable;
+        ESP_LOGI(TAG, "PA %s (GPIO%d)", enable ? "on" : "off", static_cast<int>(pa_pin_));
+    }
+}
+
 BoxAudioCodec::~BoxAudioCodec() {
     ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
     esp_codec_dev_delete(output_dev_);
@@ -97,7 +116,8 @@ BoxAudioCodec::~BoxAudioCodec() {
     audio_codec_delete_data_if(data_if_);
 }
 
-void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din) {
+void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws,
+                                         gpio_num_t dout, gpio_num_t din) {
     assert(input_sample_rate_ == output_sample_rate_);
 
     i2s_chan_config_t chan_cfg = {
@@ -112,73 +132,55 @@ void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle_, &rx_handle_));
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg = {
-            .sample_rate_hz = (uint32_t)output_sample_rate_,
-            .clk_src = I2S_CLK_SRC_DEFAULT,
-            .ext_clk_freq_hz = 0,
-            .mclk_multiple = I2S_MCLK_MULTIPLE_256
-        },
-        .slot_cfg = {
-            .data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
-            .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
-            .slot_mode = I2S_SLOT_MODE_STEREO,
-            .slot_mask = I2S_STD_SLOT_BOTH,
-            .ws_width = I2S_DATA_BIT_WIDTH_16BIT,
-            .ws_pol = false,
-            .bit_shift = true,
-            .left_align = true,
-            .big_endian = false,
-            .bit_order_lsb = false
-        },
-        .gpio_cfg = {
-            .mclk = mclk,
-            .bclk = bclk,
-            .ws = ws,
-            .dout = dout,
-            .din = I2S_GPIO_UNUSED,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv = false
-            }
-        }
-    };
+        .clk_cfg = {.sample_rate_hz = (uint32_t)output_sample_rate_,
+                    .clk_src = I2S_CLK_SRC_DEFAULT,
+                    .ext_clk_freq_hz = 0,
+                    .mclk_multiple = I2S_MCLK_MULTIPLE_256},
+        .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
+                     .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
+                     .slot_mode = I2S_SLOT_MODE_STEREO,
+                     .slot_mask = I2S_STD_SLOT_BOTH,
+                     .ws_width = I2S_DATA_BIT_WIDTH_16BIT,
+                     .ws_pol = false,
+                     .bit_shift = true,
+                     .left_align = true,
+                     .big_endian = false,
+                     .bit_order_lsb = false},
+        .gpio_cfg = {.mclk = mclk,
+                     .bclk = bclk,
+                     .ws = ws,
+                     .dout = dout,
+                     .din = I2S_GPIO_UNUSED,
+                     .invert_flags = {.mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
 
     i2s_tdm_config_t tdm_cfg = {
-        .clk_cfg = {
-            .sample_rate_hz = (uint32_t)input_sample_rate_,
-            .clk_src = I2S_CLK_SRC_DEFAULT,
-            .ext_clk_freq_hz = 0,
-            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-            .bclk_div = 8,
-        },
-        .slot_cfg = {
-            .data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
-            .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
-            .slot_mode = I2S_SLOT_MODE_STEREO,
-            .slot_mask = i2s_tdm_slot_mask_t(I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
-            .ws_width = I2S_TDM_AUTO_WS_WIDTH,
-            .ws_pol = false,
-            .bit_shift = true,
-            .left_align = false,
-            .big_endian = false,
-            .bit_order_lsb = false,
-            .skip_mask = false,
-            .total_slot = I2S_TDM_AUTO_SLOT_NUM
-        },
-        .gpio_cfg = {
-            .mclk = mclk,
-            .bclk = bclk,
-            .ws = ws,
-            .dout = I2S_GPIO_UNUSED,
-            .din = din,
-            .invert_flags = {
-                .mclk_inv = false,
-                .bclk_inv = false,
-                .ws_inv = false
-            }
-        }
-    };
+        .clk_cfg =
+            {
+                .sample_rate_hz = (uint32_t)input_sample_rate_,
+                .clk_src = I2S_CLK_SRC_DEFAULT,
+                .ext_clk_freq_hz = 0,
+                .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+                .bclk_div = 8,
+            },
+        .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
+                     .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
+                     .slot_mode = I2S_SLOT_MODE_STEREO,
+                     .slot_mask = i2s_tdm_slot_mask_t(I2S_TDM_SLOT0 | I2S_TDM_SLOT1 |
+                                                      I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
+                     .ws_width = I2S_TDM_AUTO_WS_WIDTH,
+                     .ws_pol = false,
+                     .bit_shift = true,
+                     .left_align = false,
+                     .big_endian = false,
+                     .bit_order_lsb = false,
+                     .skip_mask = false,
+                     .total_slot = I2S_TDM_AUTO_SLOT_NUM},
+        .gpio_cfg = {.mclk = mclk,
+                     .bclk = bclk,
+                     .ws = ws,
+                     .dout = I2S_GPIO_UNUSED,
+                     .din = din,
+                     .invert_flags = {.mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(rx_handle_, &tdm_cfg));
@@ -240,6 +242,9 @@ void BoxAudioCodec::EnableInput(bool enable) {
 void BoxAudioCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == output_enabled_) {
+        if (enable) {
+            ApplyPaPin(true);
+        }
         return;
     }
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
@@ -259,8 +264,10 @@ void BoxAudioCodec::EnableOutput(bool enable) {
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        ApplyPaPin(true);
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        ApplyPaPin(false);
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
         MossDesktopSetNs4150Pa(false);
 #endif
@@ -268,16 +275,27 @@ void BoxAudioCodec::EnableOutput(bool enable) {
     AudioCodec::EnableOutput(enable);
 }
 
+void BoxAudioCodec::PreparePlayback() {
+    if (!output_enabled()) {
+        EnableOutput(true);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        return;
+    }
+    ApplyPaPin(true);
+}
+
 int BoxAudioCodec::Read(int16_t* dest, int samples) {
     if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(
+            esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
     }
     return samples;
 }
 
 int BoxAudioCodec::Write(const int16_t* data, int samples) {
     if (output_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(
+            esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }
     return samples;
 }

@@ -72,7 +72,7 @@
 
 双工 I2S：麦克风还在跑时 **两板都不得关 TX**。关掉 TX 会卡住 ES7210，唤醒变聋。onvif 在 `CheckAndUpdateAudioPowerState` 里跳过 `EnableOutput(false)`；ov2640 关 PCA9685 功放时同样只关 PA、不关 I2S。禁止只给其中一块加 MIC 增益来「修」唤醒。
 
-ov2640 的 PA 和 I2S 是分开的：idle 听唤醒时 TX 可开、功放关掉。出声时必须再 `MossDesktopPreparePlayback`，**不能**因为 `output_enabled()` 已是 true 就跳过，否则 TTS 进 DAC 但喇叭没电。onvif 功放跟 `EnableOutput` 绑在 GPIO48，TX 开着就有声，不要把 ov2640 这套 PA 逻辑抄过去。
+ov2640 的 PA 和 I2S 是分开的：idle 听唤醒时 TX 可开、功放关掉。出声时必须再 `MossDesktopPreparePlayback`，**不能**因为 `output_enabled()` 已是 true 就跳过，否则 TTS 进 DAC 但喇叭没电。onvif 功放在 GPIO48，同样不能只看 `output_enabled()`：双工会一直开着 TX，必须再 `PreparePlayback()` 把 GPIO48 拉高。
 
 ### 2.3 显示
 
@@ -99,7 +99,7 @@ moss-ov2640: 以上全 true（onboard_preview 目前仍为 false）
 - `main/api/api.cc`：`/camera` `/gimbal` `/face_track` 路由
 - `main/CMakeLists.txt`：`device/ov2640/*`、云台、人脸、`camera_handlers.cc`
 
-onvif 功放在 GPIO48，直接 `EnableOutput(true)` 即可。
+onvif 功放在 GPIO48，出声走 `PreparePlayback()` 拉高，不要只抄 ov2640 的 PCA9685 PA。
 
 ---
 

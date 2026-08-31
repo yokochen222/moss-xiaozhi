@@ -1,9 +1,9 @@
 #include "audio_service.h"
-#include "audio_codec.h"
+#include <esp_log.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <esp_log.h>
+#include "audio_codec.h"
 #include "sdkconfig.h"
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -353,11 +353,7 @@ void AudioService::AudioOutputTask() {
         // wake but turns the amp off. Always unmute before PCM, even if TX is up.
         MossDesktopPreparePlayback(codec_);
 #else
-        if (!codec_->output_enabled()) {
-            codec_->EnableOutput(true);
-            // Match ov2640: let NS4150B / analog path settle before the first PCM.
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+        codec_->PreparePlayback();
 #endif
 
         if (playback_muted_.load(std::memory_order_relaxed)) {
@@ -986,10 +982,7 @@ void AudioService::PlaySound(const std::string_view& ogg) {
 #if CONFIG_BOARD_TYPE_MOSS_OV2640
     MossDesktopPreparePlayback(codec_);
 #else
-    if (!codec_->output_enabled()) {
-        codec_->EnableOutput(true);
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+    codec_->PreparePlayback();
 #endif
 
     const auto* buf = reinterpret_cast<const uint8_t*>(ogg.data());

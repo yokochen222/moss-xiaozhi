@@ -16,9 +16,11 @@ namespace chat {
 namespace {
 
 std::string JsonString(cJSON* obj, const char* key) {
-    if (!obj) return "";
+    if (!obj)
+        return "";
     cJSON* item = cJSON_GetObjectItem(obj, key);
-    if (cJSON_IsString(item) && item->valuestring) return item->valuestring;
+    if (cJSON_IsString(item) && item->valuestring)
+        return item->valuestring;
     return "";
 }
 
@@ -54,7 +56,8 @@ esp_err_t HandleChatWake(httpd_req_t* req) {
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{\"ok\":false}";
-    if (printed) cJSON_free(printed);
+    if (printed)
+        cJSON_free(printed);
     return http_util::SendJson(req, json, ok ? "200 OK" : "409 Conflict");
 }
 
@@ -62,12 +65,15 @@ esp_err_t HandleChatSay(httpd_req_t* req) {
     const std::string body = http_util::ReadBody(req);
     cJSON* json = cJSON_Parse(body.c_str());
     std::string text = JsonString(json, "text");
-    if (text.empty()) text = JsonString(json, "prompt");
-    if (json) cJSON_Delete(json);
+    if (text.empty())
+        text = JsonString(json, "prompt");
+    std::string announce = JsonString(json, "announce");
+    if (json)
+        cJSON_Delete(json);
     if (text.empty()) {
         return http_util::SendError(req, "400 Bad Request", "missing text");
     }
-    Application::GetInstance().HandleExternalTextMessage(text);
+    Application::GetInstance().HandleExternalTextMessage(text, announce);
     return http_util::SendJson(req, "{\"ok\":true}");
 }
 
@@ -101,7 +107,8 @@ esp_err_t HandleChatSync(httpd_req_t* req) {
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{\"seq\":0,\"lines\":[]}";
-    if (printed) cJSON_free(printed);
+    if (printed)
+        cJSON_free(printed);
     return http_util::SendJson(req, json);
 }
 
