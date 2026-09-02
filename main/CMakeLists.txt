@@ -321,6 +321,7 @@ if(CONFIG_BOARD_FAMILY_MOSS)
         "config/ext_mqtt_config.cc"
         "config/moss_config_service.cc"
         "config/moss_chat_log.cc"
+        "config/yunxiangji_outbox.cc"
         "config/moss_hw.cc"
         "config/device_config.cc"
         "config/product.cc"

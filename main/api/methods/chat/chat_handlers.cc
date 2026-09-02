@@ -3,12 +3,14 @@
 #include "api/http_util.h"
 #include "application.h"
 #include "config/moss_chat_log.h"
+#include "config/yunxiangji_outbox.h"
 #include "device_state_machine.h"
 
 #include <cJSON.h>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace api_methods {
 namespace chat {
@@ -104,12 +106,86 @@ esp_err_t HandleChatSync(httpd_req_t* req) {
         }
         cJSON_AddItemToArray(arr, item);
     }
+    cJSON_AddItemToObject(obj, "yunxiangji_creates", YunxiangjiOutbox::GetInstance().ToJsonArray());
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{\"seq\":0,\"lines\":[]}";
     if (printed)
         cJSON_free(printed);
     return http_util::SendJson(req, json);
+}
+
+esp_err_t HandleYunxiangjiOutboxGet(httpd_req_t* req) {
+    cJSON* obj = cJSON_CreateObject();
+    cJSON_AddItemToObject(obj, "items", YunxiangjiOutbox::GetInstance().ToJsonArray());
+    char* printed = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    std::string json = printed ? printed : "{\"items\":[]}";
+    if (printed)
+        cJSON_free(printed);
+    return http_util::SendJson(req, json);
+}
+
+esp_err_t HandleYunxiangjiOutboxAck(httpd_req_t* req) {
+    const std::string body = http_util::ReadBody(req);
+    cJSON* json = cJSON_Parse(body.c_str());
+    std::vector<std::string> ids;
+    cJSON* arr = json ? cJSON_GetObjectItem(json, "ids") : nullptr;
+    if (cJSON_IsArray(arr)) {
+        const int n = cJSON_GetArraySize(arr);
+        for (int i = 0; i < n; ++i) {
+            cJSON* item = cJSON_GetArrayItem(arr, i);
+            if (cJSON_IsString(item) && item->valuestring) {
+                ids.emplace_back(item->valuestring);
+            }
+        }
+    }
+    cJSON* one = json ? cJSON_GetObjectItem(json, "id") : nullptr;
+    if (cJSON_IsString(one) && one->valuestring) {
+        ids.emplace_back(one->valuestring);
+    }
+    if (json)
+        cJSON_Delete(json);
+    YunxiangjiOutbox::GetInstance().Ack(ids);
+    return http_util::SendJson(req, "{\"ok\":true}");
+}
+
+esp_err_t HandleYunxiangjiInboxPut(httpd_req_t* req) {
+    const std::string body = http_util::ReadBody(req);
+    cJSON* json = cJSON_Parse(body.c_str());
+    if (!json) {
+        return http_util::SendError(req, "400 Bad Request", "invalid json");
+    }
+    cJSON* arr = cJSON_GetObjectItem(json, "items");
+    if (!cJSON_IsArray(arr) && cJSON_IsArray(json)) {
+        arr = json;
+    }
+    std::vector<YunxiangjiInboxItem> items;
+    if (cJSON_IsArray(arr)) {
+        const int n = cJSON_GetArraySize(arr);
+        for (int i = 0; i < n; ++i) {
+            cJSON* row = cJSON_GetArrayItem(arr, i);
+            if (!cJSON_IsObject(row)) {
+                continue;
+            }
+            YunxiangjiInboxItem item;
+            item.id = JsonString(row, "id");
+            item.content = JsonString(row, "content");
+            item.title = JsonString(row, "title");
+            item.status = JsonString(row, "status");
+            item.at = JsonString(row, "at");
+            item.device_create_id = JsonString(row, "deviceCreateId");
+            if (item.id.empty() && item.content.empty()) {
+                continue;
+            }
+            items.push_back(item);
+        }
+    }
+    if (json) {
+        cJSON_Delete(json);
+    }
+    YunxiangjiInbox::GetInstance().Replace(std::move(items));
+    return http_util::SendJson(req, "{\"ok\":true}");
 }
 
 }  // namespace chat

@@ -2,17 +2,18 @@
 #include "api/http_util.h"
 #include "application.h"
 #include "config/device_config.h"
-#include "config/product.h"
 #include "config/ext_mqtt_config.h"
 #include "config/moss_chat_log.h"
 #include "config/moss_config_service.h"
+#include "config/product.h"
+#include "config/yunxiangji_outbox.h"
 #include "device_state_machine.h"
 
 #include <cJSON.h>
+#include <wifi_manager.h>
 #include <chrono>
 #include <functional>
 #include <future>
-#include <wifi_manager.h>
 
 namespace api_methods {
 namespace config {
@@ -28,11 +29,11 @@ struct DeviceConfigResponse {
 DeviceConfigResponse RunOnMainThread(std::function<DeviceConfigResponse()> task) {
     std::promise<DeviceConfigResponse> promise;
     auto future = promise.get_future();
-    Application::GetInstance().Schedule([task = std::move(task), &promise]() mutable {
-        promise.set_value(task());
-    });
+    Application::GetInstance().Schedule(
+        [task = std::move(task), &promise]() mutable { promise.set_value(task()); });
     if (future.wait_for(std::chrono::seconds(8)) != std::future_status::ready) {
-        return {false, "device config timeout", "{\"ok\":false,\"message\":\"device config timeout\"}"};
+        return {false, "device config timeout",
+                "{\"ok\":false,\"message\":\"device config timeout\"}"};
     }
     return future.get();
 }
@@ -57,6 +58,8 @@ esp_err_t HandleHealth(httpd_req_t* req) {
         obj, "voice",
         DeviceStateMachine::GetStateName(Application::GetInstance().GetDeviceState()));
     cJSON_AddNumberToObject(obj, "chat_seq", MossChatLog::GetInstance().Seq());
+    cJSON_AddNumberToObject(obj, "yunxiangji_outbox",
+                            static_cast<double>(YunxiangjiOutbox::GetInstance().Size()));
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{}";

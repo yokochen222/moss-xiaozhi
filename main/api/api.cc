@@ -1,25 +1,22 @@
 #include "api.h"
 #include "http_util.h"
-#include "methods/config/config_handlers.h"
-#include "methods/ir/ir_handlers.h"
-#include "methods/ir/ir_data_manager.h"
-#include "methods/hw/hw_handlers.h"
 #include "methods/chat/chat_handlers.h"
+#include "methods/config/config_handlers.h"
+#include "methods/hw/hw_handlers.h"
+#include "methods/ir/ir_data_manager.h"
+#include "methods/ir/ir_handlers.h"
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
 #include "methods/camera/camera_handlers.h"
 #endif
 
-#include <esp_log.h>
 #include <esp_http_server.h>
+#include <esp_log.h>
 
 #define TAG "ApiServer"
 
-ApiServer::ApiServer() : is_running_(false), port_(5500), server_(nullptr) {
-}
+ApiServer::ApiServer() : is_running_(false), port_(5500), server_(nullptr) {}
 
-ApiServer::~ApiServer() {
-    Stop();
-}
+ApiServer::~ApiServer() { Stop(); }
 
 ApiServer& ApiServer::GetInstance() {
     static ApiServer instance;
@@ -37,7 +34,7 @@ bool ApiServer::Start(int port) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port_;
     config.max_open_sockets = 7;
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 40;
     config.max_resp_headers = 16;
     config.backlog_conn = 5;
     config.lru_purge_enable = true;
@@ -55,7 +52,11 @@ bool ApiServer::Start(int port) {
         item.method = method;
         item.handler = handler;
         item.user_ctx = this;
-        httpd_register_uri_handler((httpd_handle_t)server_, &item);
+        const esp_err_t err = httpd_register_uri_handler((httpd_handle_t)server_, &item);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "register %s method=%d failed: %s", uri, static_cast<int>(method),
+                     esp_err_to_name(err));
+        }
     };
 
     add("/health", HTTP_GET, api_methods::config::HandleHealth);
@@ -79,6 +80,12 @@ bool ApiServer::Start(int port) {
     add("/chat/wake", HTTP_POST, api_methods::chat::HandleChatWake);
     add("/chat/say", HTTP_POST, api_methods::chat::HandleChatSay);
     add("/chat/sync", HTTP_GET, api_methods::chat::HandleChatSync);
+    add("/yunxiangji/outbox", HTTP_GET, api_methods::chat::HandleYunxiangjiOutboxGet);
+    add("/yunxiangji/outbox/ack", HTTP_POST, api_methods::chat::HandleYunxiangjiOutboxAck);
+    add("/yunxiangji/inbox", HTTP_POST, api_methods::chat::HandleYunxiangjiInboxPut);
+    add("/yunxiangji/inbox", HTTP_PUT, api_methods::chat::HandleYunxiangjiInboxPut);
+    add("/yunxiangji/inbox/", HTTP_POST, api_methods::chat::HandleYunxiangjiInboxPut);
+    add("/yunxiangji/inbox/", HTTP_PUT, api_methods::chat::HandleYunxiangjiInboxPut);
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
     add("/camera/stream", HTTP_GET, api_methods::camera::HandleStream);
     add("/camera/snapshot", HTTP_GET, api_methods::camera::HandleSnapshot);

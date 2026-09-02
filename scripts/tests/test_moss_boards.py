@@ -229,6 +229,7 @@ class MossCmakeSourceIsolationTests(unittest.TestCase):
         self.assertNotIn("mcp/tools/*.cc", family)
         self.assertIn("config/product.cc", family)
         self.assertIn("mcp/tools/yunxiangji.cc", family)
+        self.assertIn("config/yunxiangji_outbox.cc", family)
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/moss", family)
         self.assertNotIn("74hc595_driver.cc", family)
         self.assertNotIn("pca9685_driver.cc", family)
@@ -242,10 +243,28 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         src = (ROOT / "main/mcp/tools/yunxiangji.cc").read_text(encoding="utf-8")
         self.assertIn("self.yunxiangji.take", src)
         self.assertIn("self.yunxiangji.ack", src)
+        self.assertIn("self.yunxiangji.create", src)
+        self.assertIn("self.yunxiangji.list", src)
+        self.assertIn("self.yunxiangji.cancel", src)
+        self.assertIn("self.yunxiangji.delete", src)
+        self.assertIn("YunxiangjiOutbox", src)
+        self.assertIn("YunxiangjiInbox", src)
+        self.assertIn("yunxiangji.create:", src)
+        self.assertIn("yunxiangji.cancel:", src)
+        self.assertIn("yunxiangji.delete:", src)
+        self.assertIn("提醒你喝水", src)
+        self.assertIn("禁止只写「喝水」", src)
+        self.assertIn("inMinutes", src)
+        self.assertIn("FormatYunxiangjiSchedule", src)
+        self.assertIn("queued create %s when=", src)
+        self.assertIn("相对时间必须用 inSeconds 或 inMinutes", src)
         self.assertIn("TakePendingAnnounce", src)
         self.assertIn("AckPendingAnnounce", src)
+        self.assertIn("RelayChat", src)
         self.assertIn("static bool registered = false", src)
         self.assertIn("void RegisterYunxiangjiTools()", src)
+        mcp = (ROOT / "main/mcp_server.cc").read_text(encoding="utf-8")
+        self.assertIn("strtol(value->valuestring", mcp)
         app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         self.assertIn("RegisterYunxiangjiTools()", app)
         invoke = app.find("void Application::ContinueWakeWordInvoke")
@@ -342,6 +361,7 @@ class MossLanControlPlaneTests(unittest.TestCase):
         body = src[start:end]
         self.assertIn("voice", body)
         self.assertIn("chat_seq", body)
+        self.assertIn("yunxiangji_outbox", body)
         self.assertIn("CachedMac()", body)
         self.assertIn("MossChatLog::GetInstance().Seq()", body)
         self.assertNotIn("ExtMqttSettings::Load()", body)
@@ -353,7 +373,11 @@ class MossLanControlPlaneTests(unittest.TestCase):
         self.assertIn('add("/chat/wake", HTTP_POST', src)
         self.assertIn('add("/chat/say", HTTP_POST', src)
         self.assertIn('add("/chat/sync", HTTP_GET', src)
-        self.assertIn("max_uri_handlers = 32", src)
+        self.assertIn('add("/yunxiangji/outbox", HTTP_GET', src)
+        self.assertIn('add("/yunxiangji/outbox/ack", HTTP_POST', src)
+        self.assertIn('add("/yunxiangji/inbox", HTTP_POST', src)
+        self.assertIn('add("/yunxiangji/inbox", HTTP_PUT', src)
+        self.assertIn("max_uri_handlers = 40", src)
         self.assertIn("max_open_sockets = 7", src)
 
 
@@ -376,6 +400,9 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
             '"/chat/wake"',
             '"/chat/say"',
             '"/chat/sync"',
+            '"/yunxiangji/outbox"',
+            '"/yunxiangji/outbox/ack"',
+            '"/yunxiangji/inbox"',
         ):
             self.assertIn(route, shared, route)
         for route in ("/camera/stream", "/gimbal/control", "/face_track/control"):
@@ -388,6 +415,11 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         body = src[start : src.find("esp_err_t HandleChatSync", start)]
         self.assertIn('"announce"', body)
         self.assertIn("HandleExternalTextMessage(text, announce)", body)
+        sync = src[src.find("esp_err_t HandleChatSync") :]
+        self.assertIn("yunxiangji_creates", sync)
+        self.assertIn("HandleYunxiangjiOutboxGet", sync)
+        self.assertIn("HandleYunxiangjiOutboxAck", sync)
+        self.assertIn("HandleYunxiangjiInboxPut", src)
         app = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         fn = app.find("void Application::HandleExternalTextMessage")
         self.assertGreater(fn, 0)

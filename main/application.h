@@ -134,6 +134,7 @@ public:
         std::function<void(const std::string& event, const std::string& role,
                            const std::string& text, const std::string& state)>;
     void RegisterChatRelayCallback(ChatRelayCallback callback);
+    void RelayChat(const std::string& event, const std::string& role, const std::string& text);
 
     /**
      * Reset protocol resources (thread-safe)
@@ -238,7 +239,6 @@ private:
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
     bool IsVadBargeInEnabled() const;
-    void RelayChat(const std::string& event, const std::string& role, const std::string& text);
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);
