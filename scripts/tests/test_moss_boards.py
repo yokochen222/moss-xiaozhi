@@ -489,164 +489,103 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
 
 
 class MossBargeInTests(unittest.TestCase):
-    def test_realtime_tts_holds_uplink_instead_of_sending_echo(self):
+    def test_realtime_tts_sends_uplink_for_asr_onset(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         start = src.find("if (bits & MAIN_EVENT_SEND_AUDIO)")
         self.assertGreater(start, 0)
         body = src[start : src.find("if (bits & MAIN_EVENT_WAKE_WORD_DETECTED)", start)]
         speaking = body[body.find("kDeviceStateSpeaking") : body.find("#else")]
-        self.assertIn("HoldSpeakingUplink()", speaking)
-        self.assertIn("UpdateSpeakingBargeIn()", speaking)
-        self.assertNotIn("SendUplinkFromQueue();", speaking)
+        self.assertIn("SendUplinkFromQueue()", speaking)
+        self.assertNotIn("HoldSpeakingUplink()", body)
+        self.assertNotIn("UpdateSpeakingBargeIn()", body)
 
-    def test_vad_during_tts_uses_near_end_energy_not_vad_alone(self):
+    def test_vad_during_tts_uses_silence_arm_then_sustain(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         start = src.find("if (bits & MAIN_EVENT_VAD_CHANGE)")
         self.assertGreater(start, 0)
         vad = src[start : src.find("if (bits & MAIN_EVENT_VAD_INTERRUPT_CONFIRM)", start)]
-        self.assertIn("UpdateSpeakingBargeIn()", vad)
-        self.assertNotIn("MaybeStartVadInterruptTimer(true)", vad)
+        self.assertIn("vad_interrupt_armed_ = true", vad)
+        self.assertIn("MaybeStartVadInterruptTimer()", vad)
+        self.assertNotIn("IsConfirmedNearEndSpeech()", vad)
+        self.assertNotIn("UpdateSpeakingBargeIn()", vad)
 
-        update = src[
-            src.find("void Application::UpdateSpeakingBargeIn") : src.find(
-                "void Application::MaybeStartVadInterruptTimer"
-            )
-        ]
-        self.assertIn("IsConfirmedNearEndSpeech()", update)
-        self.assertNotIn("ShouldEarlyMuteForBargeIn()", update)
-        self.assertNotIn("VAD barge-in early mute", update)
-        self.assertIn("barge_in_ratio_hits_", update)
-        self.assertIn("SetPlaybackDuckQ8(102)", update)
-        self.assertIn("pct >= 16", update)
-        self.assertIn("vad_interrupt_armed_", update)
-        self.assertIn("120 * 1000", update)
-        self.assertIn("timer_active", update)
-        self.assertIn("PlaybackLevel() >= 200", update)
-        self.assertIn("vad_interrupt_armed_ = false", update)
-
-    def test_speaking_start_records_guard_clock_and_echo_profile(self):
+    def test_speaking_start_arms_after_silence_and_keeps_vad(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         speaking = src[
             src.find("case kDeviceStateSpeaking:") : src.find("case kDeviceStateWifiConfiguring:")
         ]
         self.assertIn("speaking_started_us_ = esp_timer_get_time()", speaking)
-        self.assertIn("ResetEchoProfile()", speaking)
+        self.assertIn("vad_interrupt_armed_ = !audio_service_.IsVoiceDetected()", speaking)
+        self.assertIn("EnableVoiceProcessing(true)", speaking)
+        self.assertNotIn("ResetEchoProfile()", speaking)
 
-    def test_aec_on_does_not_skip_barge_in_confirm(self):
+    def test_barge_in_confirm_is_sustained_vad(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         confirm = src[
             src.find("void Application::HandleVadInterruptConfirm") : src.find(
-                "void Application::HoldSpeakingUplink"
+                "void Application::SendUplinkFromQueue"
             )
         ]
         self.assertIn("AbortSpeaking", confirm)
-        self.assertIn("HoldSpeakingUplink()", confirm)
-        self.assertIn("IsConfirmedNearEndSpeech()", confirm)
-        self.assertIn("residual * 4 < barge_in_candidate_residual_ * 3", confirm)
-        self.assertNotIn("IsPlaybackMuted() && barge_in_candidate_residual_", confirm)
-        self.assertIn("SetPlaybackMuted(false)", confirm)
+        self.assertIn("IsVoiceDetected()", confirm)
+        self.assertIn("barge_in_listen_ = true", confirm)
+        self.assertNotIn("IsConfirmedNearEndSpeech()", confirm)
+        self.assertNotIn("SetPlaybackMuted", confirm)
         self.assertNotIn("IsVadBargeInEnabled()", confirm)
         start_timer = src[
             src.find("void Application::MaybeStartVadInterruptTimer") : src.find(
                 "void Application::HandleVadInterruptConfirm"
             )
         ]
-        self.assertNotIn("IsVadBargeInEnabled()", start_timer)
-        self.assertIn("IsConfirmedNearEndSpeech()", start_timer)
-        self.assertIn("EchoProfileReady()", start_timer)
-        self.assertIn("kVadInterruptGuardUs = 350 * 1000", start_timer)
-        self.assertIn("kPostTtsSentenceGuardUs = 280 * 1000", start_timer)
-        self.assertIn("unarmed_path ? 120 : 80", start_timer)
-        self.assertIn("SetPlaybackMuted(true)", start_timer)
-        self.assertIn("kRejectCooldownUs = 400 * 1000", start_timer)
+        self.assertIn("kVadInterruptGuardUs = 1500 * 1000", start_timer)
+        self.assertIn("sustain_ms = 550", start_timer)
+        self.assertIn("sustain_ms = 950", start_timer)
+        self.assertIn("sustain_ms = 750", start_timer)
+        self.assertNotIn("SetPlaybackMuted", start_timer)
         sentence_start = src.find('else if (strcmp(state->valuestring, "sentence_start") == 0)')
         stt = src.find('else if (strcmp(type->valuestring, "stt") == 0)', sentence_start)
         self.assertGreater(sentence_start, 0)
         self.assertGreater(stt, sentence_start)
         sentence = src[sentence_start:stt]
-        self.assertIn("vad_interrupt_armed_ = false", sentence)
-        self.assertIn("CancelVadInterruptTimer()", sentence)
+        self.assertNotIn("CancelVadInterruptTimer()", sentence)
+        self.assertNotIn("vad_interrupt_armed_ = false", sentence)
 
-    def test_hold_uplink_keeps_onset_without_near_end_energy(self):
+    def test_barge_in_resends_listen_start(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
-        hold = src[
-            src.find("void Application::HoldSpeakingUplink") : src.find(
-                "void Application::FlushBargeInHold"
-            )
+        listening = src[
+            src.find("case kDeviceStateListening:") : src.find("case kDeviceStateSpeaking:")
         ]
-        self.assertNotIn("IsLikelyNearEndSpeech()", hold)
-        self.assertIn("kBargeInHoldMaxPackets = 32", hold)
-
-    def test_barge_in_preroll_flushes_after_listen_start(self):
-        src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
+        self.assertIn("keep_preroll = barge_in_listen_", listening)
+        self.assertIn("keep_preroll", listening)
         start = src[
             src.find("void Application::StartListeningAudio") : src.find(
                 "void Application::ConfigureWakeWordForListening"
             )
         ]
-        listen = start.find("SendStartListening")
-        flush_call = start.find("FlushBargeInHold(true)")
-        self.assertGreater(listen, 0)
-        self.assertGreater(flush_call, listen)
-        flush = src[
-            src.find("void Application::FlushBargeInHold") : src.find(
-                "void Application::SendUplinkFromQueue"
-            )
-        ]
-        self.assertIn("kOnsetPadPackets = 8", flush)
-        self.assertIn("kMaxSendPackets = 20", flush)
-        self.assertIn("back_floor", flush)
-        self.assertIn("onset_need", flush)
-        self.assertIn("kFallbackPackets = 16", flush)
-        self.assertIn("barge_in_flush_residual_", flush)
-        self.assertIn("HoldSpeakingUplink()", flush)
-        self.assertNotIn("kMinSpeechAbs", flush)
-        self.assertNotIn("kOnsetPadPackets = 6", flush)
-        self.assertNotIn("kMaxSendPackets = 16", flush)
-        confirm = src[
-            src.find("void Application::HandleVadInterruptConfirm") : src.find(
-                "void Application::HoldSpeakingUplink"
-            )
-        ]
-        self.assertIn("barge_in_flush_residual_ = residual", confirm)
+        self.assertIn("SendStartListening", start)
+        self.assertNotIn("FlushBargeInHold", start)
 
-    def test_audio_service_learns_echo_floor_before_barge_in(self):
-        header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
+    def test_afe_uses_ov2640_barge_in_pipeline(self):
         src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
-        self.assertIn("IsLikelyNearEndSpeech()", header)
-        self.assertIn("IsConfirmedNearEndSpeech()", header)
-        self.assertIn("ShouldEarlyMuteForBargeIn()", header)
-        self.assertIn("ResetEchoProfile()", header)
-        self.assertIn("echo_learn_frames_", header)
-        self.assertNotIn("echo_coupling_", header)
-        self.assertIn("NotePlaybackPcm", src)
-        self.assertIn("NoteResidualPcm", src)
-        self.assertIn("NoteCapturePcm", src)
-        self.assertNotIn("AdaptEchoCoupling", src)
-        self.assertIn("kEchoLearnFrames", src)
-        self.assertIn("near_end_latched_", src)
-        self.assertIn("floor / 3", src)
-        self.assertIn("kMinResidualPctOfPlayback = 20", src)
-        self.assertIn("kPlaybackStaleUs = 300 * 1000", src)
-        self.assertIn("packet->residual = PcmMeanAbs", src)
-        self.assertIn("vTaskDelay(pdMS_TO_TICKS(10))", src)
-        self.assertIn("SetPlaybackMuted", header)
-        self.assertIn("SetPlaybackDuckQ8", header)
-        self.assertIn("playback_muted_", src)
-        self.assertIn("playback_duck_q8_", src)
-        self.assertIn("if (playback_muted_.load(std::memory_order_relaxed))", src)
+        header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
+        self.assertIn("if (!IsWakeWordRunning())", src)
+        self.assertIn(".enable_dtx         = false", header)
         afe = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
-        self.assertIn("aec_nlp_level = AEC_NLP_LEVEL_NORMAL", afe)
-        self.assertNotIn("aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR", afe)
-        self.assertNotIn("vad_delay_ms", afe)
+        self.assertIn("aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR", afe)
+        self.assertNotIn("aec_nlp_level = AEC_NLP_LEVEL_NORMAL", afe)
+        self.assertIn("vad_mode = VAD_MODE_3", afe)
+        self.assertIn("vad_min_speech_ms = 250", afe)
+        self.assertIn("vad_delay_ms = 256", afe)
+        self.assertIn("afe_linear_gain = 1.0f", afe)
+        self.assertIn("device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)", afe)
         self.assertNotIn("AFE_TYPE_SR", afe)
 
     def test_barge_in_is_shared_not_forked_per_board(self):
         markers = (
-            "ShouldEarlyMuteForBargeIn",
-            "HoldSpeakingUplink",
-            "SetPlaybackMuted",
-            "kOnsetPadPackets",
+            "MaybeStartVadInterruptTimer",
+            "vad_interrupt_armed_",
+            "AEC_NLP_LEVEL_VERYAGGR",
+            "vad_delay_ms",
         )
         for leaf in ("moss-onvif", "moss-ov2640"):
             board_dir = ROOT / "main/boards/moss" / leaf

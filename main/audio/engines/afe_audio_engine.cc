@@ -133,14 +133,17 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
-    // VERYAGGR NLP treats double-talk as leftover echo and zeros "还有"/"我是"
-    // in the uplink (24/24 preroll still ASR-clipped). NORMAL keeps near-end;
-    // barge-in energy ratio + mute-on-candidate reject PA leak.
-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_NORMAL;
+    // Strong NLP so loud TTS echo does not look like near-end speech to VAD.
+    // Onset is kept by vad_delay_ms (not by post-hoc preroll trim).
+    afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
-    afe_config->vad_mode = VAD_MODE_0;
+    // Less sensitive than MODE_0 — speaker leakage is less likely to trip VAD.
+    afe_config->vad_mode = VAD_MODE_3;
     afe_config->vad_min_noise_ms = 100;
+    afe_config->vad_min_speech_ms = 250;
+    // Cache pre-speech audio so barge-in / ASR does not lose the first syllables.
+    afe_config->vad_delay_ms = 256;
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
     }
@@ -336,8 +339,9 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        const bool enable_aec = (bits & kWakeWordEnabled) ||
-                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
+        // Idle wake-word capture must not run aggressive NLP: it suppresses
+        // quiet "mo si". Keep AEC for duplex voice processing (barge-in / realtime).
+        const bool enable_aec = device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
         } else {

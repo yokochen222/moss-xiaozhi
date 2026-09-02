@@ -71,7 +71,7 @@
         .application_mode   = ESP_OPUS_ENC_APPLICATION_AUDIO,                                                     \
         .complexity         = 0,                                                                                  \
         .enable_fec         = false,                                                                              \
-        .enable_dtx         = true,                                                                               \
+        .enable_dtx         = false,                                                                               \
         .enable_vbr         = true,                                                                               \
     }
 

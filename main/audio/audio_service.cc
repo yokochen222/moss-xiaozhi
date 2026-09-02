@@ -704,8 +704,9 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         if (!InitializeAudioEngine()) {
             return;
         }
-        // Already capturing (e.g. realtime AEC / VAD barge-in): do not reset the
-        // decoder pipeline or drop ~120ms of mic input — that loses speech onset.
+        // Already capturing (realtime AEC / wake-word): do not sleep 120ms or
+        // reset the resampler. That overflows I2S and drops the first utterance
+        // after wake and the onset of a barge-in.
         if (IsAudioProcessorRunning()) {
             audio_engine_->EnableVoiceProcessing(true);
             return;
@@ -715,8 +716,8 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         if (IsPlaybackIdle()) {
             ResetDecoder();
         }
-        audio_input_need_warmup_ = true;
-        {
+        if (!IsWakeWordRunning()) {
+            audio_input_need_warmup_ = true;
             std::lock_guard<std::mutex> lock(input_resampler_mutex_);
             if (input_resampler_ != nullptr) {
                 esp_ae_rate_cvt_reset(input_resampler_);
@@ -753,9 +754,9 @@ constexpr int kEchoFloorInit = 250;
 constexpr int kQuietPlayback = 45;
 constexpr int kMinNearEndAbs = 200;
 constexpr int kPauseNearEndAbs = 260;
-constexpr int kMinResidualPctOfPlayback = 20;
+constexpr int kMinResidualPctOfPlayback = 18;
 constexpr int kPlaybackStaleUs = 300 * 1000;
-constexpr int kEchoLearnFrames = 10;  // ~600ms of 60ms AFE frames during TTS onset
+constexpr int kEchoLearnFrames = 6;  // ~360ms of 60ms AFE frames during TTS onset
 }  // namespace
 
 int AudioService::PcmMeanAbs(const int16_t* data, size_t samples) {

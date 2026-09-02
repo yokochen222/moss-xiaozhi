@@ -8,7 +8,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -177,24 +176,14 @@ private:
     bool pending_listening_start_ =
         false;  // Waiting for playback to drain before starting listening (auto mode)
 #if CONFIG_ENABLE_VAD_INTERRUPT
-    // Silence-arm + sustained speech while TTS is playing (see MaybeStartVadInterruptTimer).
+    // ov2640-style barge-in: silence-arm + sustained VAD while TTS is playing.
     int64_t speaking_started_us_ = 0;
-    int64_t last_tts_sentence_us_ = 0;
-    int64_t vad_silence_started_us_ = 0;
-    int64_t last_barge_in_reject_us_ = 0;
-    int barge_in_candidate_residual_ = 0;
-    int barge_in_flush_residual_ = 0;
-    int barge_in_ratio_hits_ = 0;
     bool vad_interrupt_armed_ = false;
     bool barge_in_listen_ = false;
-    std::deque<std::unique_ptr<AudioStreamPacket>> barge_in_hold_;
     esp_timer_handle_t vad_interrupt_timer_ = nullptr;
     void CancelVadInterruptTimer();
-    void UpdateSpeakingBargeIn();
-    void MaybeStartVadInterruptTimer(bool unarmed_path = false);
+    void MaybeStartVadInterruptTimer();
     void HandleVadInterruptConfirm();
-    void HoldSpeakingUplink();
-    void FlushBargeInHold(bool send);
 #endif
     void SendUplinkFromQueue();
     int clock_ticks_ = 0;
