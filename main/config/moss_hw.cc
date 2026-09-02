@@ -9,16 +9,20 @@
 namespace {
 
 std::string JsonString(cJSON* obj, const char* key) {
-    if (!obj) return "";
+    if (!obj)
+        return "";
     cJSON* item = cJSON_GetObjectItem(obj, key);
-    if (cJSON_IsString(item) && item->valuestring) return item->valuestring;
+    if (cJSON_IsString(item) && item->valuestring)
+        return item->valuestring;
     return "";
 }
 
 int JsonInt(cJSON* obj, const char* key, int fallback) {
-    if (!obj) return fallback;
+    if (!obj)
+        return fallback;
     cJSON* item = cJSON_GetObjectItem(obj, key);
-    if (cJSON_IsNumber(item)) return item->valueint;
+    if (cJSON_IsNumber(item))
+        return item->valueint;
     return fallback;
 }
 
@@ -28,8 +32,10 @@ HwApplyResult MossHwApply(cJSON* payload) {
     const std::string device = JsonString(payload, "device");
     const std::string action = JsonString(payload, "action");
     int speed = JsonInt(payload, "speed", DeviceConfig::DefaultMotorSpeedPercent());
-    if (speed < 1) speed = 1;
-    if (speed > 100) speed = 100;
+    if (speed < 1)
+        speed = 1;
+    if (speed > 100)
+        speed = 100;
 
     auto eye_on = []() {
         auto& eye = LampEyeDevice::GetInstance();
@@ -55,8 +61,8 @@ HwApplyResult MossHwApply(cJSON* payload) {
         result.ok = action == "off" ? panel.TurnOffBottomLed() : panel.TurnOnBottomLed();
     } else if (device == "motor") {
         auto& motor = EyeMotorDevice::GetInstance();
-        if (action == "forward") {
-            result.ok = motor.StartForward(static_cast<uint8_t>(speed));
+        if (action == "forward" || action == "on" || action == "start") {
+            result.ok = motor.StartOscillate(static_cast<uint8_t>(speed));
         } else if (action == "backward") {
             result.ok = motor.StartBackward(static_cast<uint8_t>(speed));
         } else {
@@ -76,9 +82,10 @@ HwApplyResult MossHwApply(cJSON* payload) {
             const bool eye_ok = eye_on();
             const bool bar_ok = bar.StartFlow();
             const bool panel_ok = panel.TurnOnAll();
-            const bool motor_ok = motor.StartForward(static_cast<uint8_t>(speed));
+            const bool motor_ok = motor.StartOscillate(static_cast<uint8_t>(speed));
             result.ok = eye_ok && bar_ok && panel_ok && motor_ok;
-            if (!result.ok) result.message = "partial failure";
+            if (!result.ok)
+                result.message = "partial failure";
         }
     } else {
         result.message = "unknown device";

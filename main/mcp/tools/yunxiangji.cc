@@ -16,15 +16,16 @@ namespace {
 
 const char* kCreateDescription =
     "添加一条云享记定时提醒。用户说「提醒我…」「到点叫我…」时必须调用本工具，不要只口头答应。"
-    "content 是到点后口头播报的完整句子，必须保留人称和动作，不要只抽关键词。"
-    "主信息是「提醒谁、做什么」；时间只写入时间参数，不能代替内容。"
-    "相对时间必须用 inSeconds 或 inMinutes，禁止把延迟写进 hour/minute，禁止只口头答应。"
-    "用户说「五分钟后提醒我喝水」：inMinutes=5 或 inSeconds=300，content "
-    "写成「提醒你喝水」或「该提醒你喝水了」，"
-    "禁止只写「喝水」，不要填 year/month/day/hour/minute。"
+    "content 是给到点口播用的备忘意图：谁被提醒、做什么、必要上下文。必须先做词汇推理，不要只抽一个动词。"
+    "错误：用户说「一分钟提醒我喝水」却存 content=「喝水」。"
+    "正确：inSeconds=60，content=「到点提醒你起身喝水」。"
+    "称谓规则：用户说「提醒我」时用「你」，或用当前人设里对用户的称呼（例如忆梦、上校）；"
+    "禁止使用历史对话里其他人的名字；用户没报的名字一律不要写进 content。"
+    "content 要写得具体，像一条备忘，不要小学生造句，也不要写成到点必须照读的播报稿。"
+    "时间只进时间参数，不能写进 content。"
+    "相对时间必须用 inSeconds 或 inMinutes，禁止把延迟写进 hour/minute。"
+    "用户说「五分钟后提醒我喝水」：inMinutes=5 或 inSeconds=300，不要填 year/month/day/hour/minute。"
     "用户说「一分钟后提醒我喝水」：inSeconds=60。"
-    "用户说「提醒上校开会」：content 写「提醒上校开会」，不要改成「开会」。"
-    "对用户说话时把「我」换成「你」，不要编造用户没提到的对象。"
     "添加成功后会出现在电脑云享记列表。绝对时间用用户本地时区的 datetime（YYYY-MM-DD HH:mm:ss），"
     "或 year/month/day/hour/minute/second；未用的年月日时分请省略。";
 
@@ -265,7 +266,7 @@ void YunxiangjiTool::Register() {
             item.minute = properties["minute"].value<int>();
             item.second = properties["second"].value<int>();
             if (item.content.empty()) {
-                return "缺少提醒内容。请写完整句子，例如「提醒你喝水」，不要只写「喝水」。";
+                return "缺少提醒内容。请写成具体备忘，例如「到点提醒你起身喝水」，禁止只写「喝水」，禁止用历史对话里的其他人名。";
             }
             if (item.in_seconds <= 0 && in_minutes > 0) {
                 item.in_seconds = in_minutes * 60;
@@ -352,23 +353,28 @@ void YunxiangjiTool::Register() {
 
     McpServer::GetInstance().AddTool(
         "self.yunxiangji.take",
-        "查询待播报的云享记提醒内容。每次对话开始若消息是「请调用工具查询提醒内容」，必须先调用本工"
-        "具，且整轮只调用一次。"
-        "返回 none 表示没有待播报或已经播报过，不要向用户播报、不要寒暄、不要重复查询、不要再说话。"
-        "否则把返回内容完整口头播报给用户恰好一次，不要改写、不要再说第二遍，然后立刻调用 "
-        "self.yunxiangji.ack。ack 之后禁止再播报同一句话。",
+        "查询待播报的云享记备忘。仅当本轮用户消息是「请调用工具查询提醒内容」时才调用，且整轮只调用一次。"
+        "其它对话一律不要调用本工具。"
+        "返回 none：没有待播报或已经播报过。此时禁止说话、禁止 ack、禁止调用灯或任何其它工具。"
+        "否则按返回的备忘做口播：用当前人设对用户的称呼（没有就用「你」），禁止用历史对话里其他人的名字。"
+        "说一两句自然、具体、人称一致的话，点明到点该做什么，像助手提醒，不要小学生造句，不要照读原文，不要编造备忘没有的事。"
+        "同一时间点若有多条，才合并成一段说完。只有一条时不要加别的待办。"
+        "说完立刻调用一次 self.yunxiangji.ack，然后结束。禁止再播报原文、禁止再 ack、禁止调用灯/电机/其它工具。",
         PropertyList(), [](const PropertyList&) -> ReturnValue {
             std::string text = Application::GetInstance().TakePendingAnnounce();
             if (text.empty()) {
                 return "none";
             }
-            return text;
+            return std::string("待播报备忘：") + text +
+                   "\n口播：用当前人设称呼（没有则用「你」），禁止历史对话中的其他人名。"
+                   "按备忘说一两句自然具体的话，点明到点该做什么，不要小学生造句，不要照读原文。"
+                   "说完立刻 ack 一次，不要开灯，不要再说话。";
         });
 
     McpServer::GetInstance().AddTool(
         "self.yunxiangji.ack",
-        "标记待播报云享记为已播报。口头播报一次后必须立刻调用。"
-        "返回「已播报」。调用后不要再向用户说话、不要重复同一句、不要寒暄，直接结束本轮。",
+        "标记本轮云享记已播报。口播结束后立刻调用，整轮最多一次。"
+        "调用后禁止再次调用本工具，禁止调用灯/电机/其它工具，禁止再把提醒说一遍，直接结束本轮。",
         PropertyList(), [](const PropertyList&) -> ReturnValue {
             return Application::GetInstance().AckPendingAnnounce();
         });

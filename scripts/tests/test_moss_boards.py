@@ -252,8 +252,15 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         self.assertIn("yunxiangji.create:", src)
         self.assertIn("yunxiangji.cancel:", src)
         self.assertIn("yunxiangji.delete:", src)
-        self.assertIn("提醒你喝水", src)
+        self.assertIn("到点提醒你起身喝水", src)
         self.assertIn("禁止只写「喝水」", src)
+        self.assertIn("词汇推理", src)
+        self.assertIn("禁止用历史对话里其他人的名字", src)
+        self.assertIn("一两句自然", src)
+        self.assertIn("不要照读原文", src)
+        self.assertIn("待播报备忘", src)
+        self.assertIn("其它对话一律不要调用本工具", src)
+        self.assertNotIn("不要改写", src)
         self.assertIn("inMinutes", src)
         self.assertIn("FormatYunxiangjiSchedule", src)
         self.assertIn("queued create %s when=", src)
@@ -432,6 +439,8 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         self.assertIn("ShouldSkipExternalDetect", handle)
         self.assertIn("interrupt speaking for announce", handle)
         self.assertIn("inject announce while awake", handle)
+        self.assertIn("skip recently acked announce", handle)
+        self.assertIn("skip duplicate announce push", handle)
         self.assertIn("AbortSpeaking", handle)
         self.assertIn("ResetDecoder", handle)
         self.assertNotIn("CONFIG_BOARD_TYPE_MOSS", handle)
@@ -451,6 +460,8 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         self.assertIn("skip already-sent detect", app_all)
         self.assertIn("TakePendingAnnounce", app_all)
         self.assertIn("last_taken_announce_", app_all)
+        self.assertIn("first_spoken_announce_", app_all)
+        self.assertIn("IsMcpTtsLine", app_all)
 
     def test_idle_wake_reports_connecting_not_stale_idle(self):
         src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")
@@ -486,6 +497,19 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         for device in ('"eye"', '"bar"', '"panel"', '"bottom"', '"motor"', '"all"'):
             self.assertIn(device, src, device)
         self.assertIn('result.message = "unknown device"', src)
+
+    def test_eye_motor_default_on_oscillates_without_mcp_copy(self):
+        hw = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
+        self.assertIn("motor.StartOscillate", hw)
+        self.assertNotIn("motor.StartForward", hw)
+        mcp = (ROOT / "main/mcp/tools/eye_motor.cc").read_text(encoding="utf-8")
+        self.assertIn("StartOscillate(speed)", mcp)
+        self.assertNotIn("8秒", mcp)
+        self.assertNotIn("8000", mcp)
+        onvif = (ROOT / "main/device/eye_motor.h").read_text(encoding="utf-8")
+        ov2640 = onvif
+        self.assertGreaterEqual(onvif.count("OSC_PHASE_MS = 8000"), 2)
+        self.assertIn("StartOscillate", ov2640)
 
 
 class MossBargeInTests(unittest.TestCase):

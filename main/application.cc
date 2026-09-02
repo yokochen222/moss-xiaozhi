@@ -78,6 +78,50 @@ std::string NormalizeAnnounceText(const std::string& text) {
     }
     return out;
 }
+
+size_t AnnounceGlyphCount(const std::string& text) {
+    size_t n = 0;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if ((c & 0x80) == 0) {
+            i += 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            i += 4;
+        } else {
+            i += 1;
+        }
+        ++n;
+    }
+    return n;
+}
+
+bool SimilarAnnounceText(const std::string& left, const std::string& right) {
+    const std::string a = NormalizeAnnounceText(left);
+    const std::string b = NormalizeAnnounceText(right);
+    if (a.empty() || b.empty()) {
+        return false;
+    }
+    if (a == b) {
+        return true;
+    }
+    // Short fragments like「水」would false-match almost any later sentence.
+    if (AnnounceGlyphCount(a) < 4 || AnnounceGlyphCount(b) < 4) {
+        return false;
+    }
+    return a.find(b) != std::string::npos || b.find(a) != std::string::npos;
+}
+
+bool IsMcpTtsLine(const std::string& text) {
+    size_t i = 0;
+    while (i < text.size() && static_cast<unsigned char>(text[i]) <= 0x20) {
+        ++i;
+    }
+    return i < text.size() && text[i] == '%';
+}
 }  // namespace
 
 Application::Application() {
@@ -775,11 +819,23 @@ void Application::InitializeProtocol() {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
                     Schedule([this, display, message = std::string(text->valuestring),
                               glyphs = std::move(glyphs), bpp]() {
-                        // The model often restates the reminder after ack. Drop the
-                        // second identical utterance so the speaker only plays it once.
+                        if (IsMcpTtsLine(message)) {
+                            // Tool traces must reach the desktop (ack sync) but
+                            // must not be spoken or counted as the reminder line.
+                            if (protocol_) {
+                                protocol_->SetPendingAudioDropped(true);
+                            }
+                            display->SetChatMessage("assistant", message.c_str());
+                            RelayChat("message", "assistant", message);
+                            return;
+                        }
+                        // Only drop a true restatement of the same reminder, not
+                        // follow-up color or later 拜拜.
                         if (ShouldDropDuplicateAnnounceTts(message)) {
                             ESP_LOGI(TAG, "drop duplicate reminder TTS: %s", message.c_str());
-                            SuppressAnnounceReplay();
+                            if (protocol_) {
+                                protocol_->SetPendingAudioDropped(true);
+                            }
                             return;
                         }
                         // Some server paths emit sentence_start before tts/start; without
@@ -1156,6 +1212,13 @@ void Application::HandleStateChangedEvent() {
             std::lock_guard<std::mutex> lock(mutex_);
             last_external_detect_text_.clear();
             ResetYunxiangjiSessionLocked();
+            // Do not re-send the wake detect after goodbye if this reminder
+            // was already taken and acked.
+            if (pending_text_to_send_ == kYunxiangjiWakeText &&
+                !last_acked_announce_.empty() &&
+                esp_timer_get_time() - last_acked_us_ <= 10LL * 60 * 1000 * 1000) {
+                pending_text_to_send_.clear();
+            }
         }
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
@@ -1515,7 +1578,9 @@ void Application::WakeWordInvoke(const std::string& wake_word) { RequestChatWake
 
 void Application::ResetYunxiangjiSessionLocked() {
     last_taken_announce_.clear();
+    first_spoken_announce_.clear();
     yunxiangji_tts_played_ = false;
+    yunxiangji_acked_ = false;
     external_detect_sent_ = false;
     suppress_announce_replay_.store(false, std::memory_order_relaxed);
 }
@@ -1545,17 +1610,28 @@ bool Application::ShouldSkipExternalDetect(const std::string& text) const {
 
 bool Application::ShouldDropDuplicateAnnounceTts(const std::string& spoken) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (last_taken_announce_.empty() || spoken.empty()) {
+    if (last_taken_announce_.empty() || spoken.empty() || IsMcpTtsLine(spoken)) {
         return false;
     }
-    if (NormalizeAnnounceText(spoken) != NormalizeAnnounceText(last_taken_announce_)) {
+    const bool similar = SimilarAnnounceText(spoken, last_taken_announce_) ||
+                         SimilarAnnounceText(spoken, first_spoken_announce_);
+    if (!yunxiangji_tts_played_) {
+        first_spoken_announce_ = spoken;
+        yunxiangji_tts_played_ = true;
         return false;
     }
-    if (yunxiangji_tts_played_) {
-        return true;
+    return similar;
+}
+
+bool Application::IsRecentlyAckedAnnounce(const std::string& text) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (last_acked_announce_.empty() || text.empty()) {
+        return false;
     }
-    yunxiangji_tts_played_ = true;
-    return false;
+    if (esp_timer_get_time() - last_acked_us_ > 10LL * 60 * 1000 * 1000) {
+        return false;
+    }
+    return SimilarAnnounceText(text, last_acked_announce_);
 }
 
 void Application::SetPendingAnnounce(const std::string& text) {
@@ -1569,6 +1645,16 @@ bool Application::PushPendingAnnounce(const std::string& text) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     const std::string incoming = NormalizeAnnounceText(text);
+    if (incoming.empty()) {
+        return false;
+    }
+    if (!last_acked_announce_.empty() &&
+        esp_timer_get_time() - last_acked_us_ <= 10LL * 60 * 1000 * 1000) {
+        if (SimilarAnnounceText(text, last_acked_announce_)) {
+            ESP_LOGI(TAG, "PushPendingAnnounce: skip recently acked content");
+            return false;
+        }
+    }
     if (pending_announce_.empty()) {
         pending_announce_ = text;
         return true;
@@ -1585,6 +1671,7 @@ void Application::PrepareAnnounceInterrupt() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         last_taken_announce_.clear();
+        first_spoken_announce_.clear();
         yunxiangji_tts_played_ = false;
     }
     last_external_detect_text_.clear();
@@ -1611,26 +1698,51 @@ std::string Application::PeekPendingAnnounce() {
 
 std::string Application::TakePendingAnnounce() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (yunxiangji_acked_) {
+        pending_announce_.clear();
+        return {};
+    }
     std::string text = pending_announce_;
     pending_announce_.clear();
     if (!text.empty()) {
         last_taken_announce_ = text;
+        first_spoken_announce_.clear();
         yunxiangji_tts_played_ = false;
     }
     return text;
 }
 
 std::string Application::AckPendingAnnounce() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pending_announce_.clear();
-    if (!last_taken_announce_.empty()) {
+    bool already = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        already = yunxiangji_acked_;
+        pending_announce_.clear();
+        yunxiangji_acked_ = true;
         yunxiangji_tts_played_ = true;
+        if (!last_taken_announce_.empty()) {
+            last_acked_announce_ = last_taken_announce_;
+            last_acked_us_ = esp_timer_get_time();
+        }
     }
-    return "已播报。不要再口头播报，不要再说同一句话，不要调用灯或其它工具，直接结束本轮。";
+    if (already) {
+        return "ok";
+    }
+    SuppressAnnounceReplay();
+    Schedule([this]() {
+        if (pending_text_to_send_ == kYunxiangjiWakeText) {
+            pending_text_to_send_.clear();
+        }
+    });
+    return "已播报。整轮禁止再次调用任何工具，不要再说话，直接结束。";
 }
 
 void Application::HandleExternalTextMessage(const std::string& text, const std::string& announce) {
     if (text.empty()) {
+        return;
+    }
+    if (!announce.empty() && IsRecentlyAckedAnnounce(announce)) {
+        ESP_LOGI(TAG, "HandleExternalTextMessage: skip recently acked announce");
         return;
     }
 
@@ -1639,10 +1751,16 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
         {
             std::lock_guard<std::mutex> lock(mutex_);
             last_taken_announce_.clear();
+            first_spoken_announce_.clear();
             yunxiangji_tts_played_ = false;
+            yunxiangji_acked_ = false;
         }
         suppress_announce_replay_.store(false, std::memory_order_relaxed);
         interrupt = PushPendingAnnounce(announce);
+        if (!interrupt) {
+            ESP_LOGI(TAG, "HandleExternalTextMessage: skip duplicate announce push");
+            return;
+        }
     }
 
     Schedule([this, text, interrupt]() {
