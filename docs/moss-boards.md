@@ -59,11 +59,13 @@
 | 项 | 值 | 说明 |
 |---|---|---|
 | MIC 模拟增益 | `AUDIO_CODEC_INPUT_GAIN` = 37.5 dB | ES7210 MIC1，不是扬声器音量 |
-| AEC 参考增益 | `AUDIO_CODEC_REFERENCE_GAIN` = 30.0 dB | 必须与 MIC 电平匹配 |
+| AEC 参考增益 | `AUDIO_CODEC_REFERENCE_GAIN` = 37.5 dB | 必须与 MIC 同增益，否则线性 AEC 消不干净 |
 | 参考声道 | `AUDIO_CODEC_REFERENCE_CHANNEL` = 2 | |
 | 出厂唤醒词 | `mo si` / `MOSS` | 两板 `config.json` 相同 |
 | 出厂灵敏度 | `CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20` | 数值越小越灵敏；1–99 |
 | 引擎 | MultiNet 自定义唤醒 + 设备端 AEC | `CONFIG_USE_CUSTOM_WAKE_WORD` + `CONFIG_USE_DEVICE_AEC` |
+
+全双工（AEC 开）走 ESP-SR `AFE_TYPE_FD` + `AEC_MODE_FD_HIGH_PERF`，NLP 用官方默认 `AEC_NLP_LEVEL_AGGR`。官方 AEC 就是为了「自己播放时仍能识别」：TTS 期间用 AEC 残差做近端检测，进入门限确认约 220 ms 后打断（确认用更低迟滞，失败必须松开采集锁才能再试）；TTS 自然结束后必须先等残差落到静音并丢掉余响预卷，再等新语音连帧，不能按固定毫秒开门，否则会把「查询天气」拼成「查询。」。
 
 `PUT /config/device` 的 `wake_word` **只改词条和灵敏度**，不得改 MIC 增益、不得改扬声器音量。灵敏度存在唤醒词 NVS，扬声器音量走 codec NVS，互不覆盖。
 

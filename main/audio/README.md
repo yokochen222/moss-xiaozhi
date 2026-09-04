@@ -19,9 +19,10 @@ that instance, so enabling both no longer creates two AFE pipelines. For custom
 MultiNet wake words, AFE fetch output is passed to `CustomWakeWord`; MultiNet is
 not created on the smaller targets.
 
-The AFE configuration currently uses `FD_LOW_COST` AEC with
-`AEC_NLP_LEVEL_VERYAGGR`. WebRTC/NSNet noise suppression is intentionally
-disabled because the project does not ship an NSNet model.
+The AFE configuration currently uses `FD_HIGH_PERF` AEC with
+`AEC_NLP_LEVEL_AGGR` (ESP-SR default). `VERYAGGR` also suppresses the user's
+voice during TTS and makes barge-in deaf. WebRTC/NSNet noise suppression is
+intentionally disabled because the project does not ship an NSNet model.
 
 When wake-word audio upload is enabled, the most recent two seconds of PCM are
 stored in a single 64 KB PSRAM ring buffer. WakeNet and MultiNet share the same

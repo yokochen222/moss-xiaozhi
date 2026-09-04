@@ -31,6 +31,7 @@ public:
     void EnableWakeWordDetection(bool enable) override;
     void EnableVoiceProcessing(bool enable) override;
     void EnableDeviceAec(bool enable) override;
+    void ResetVadSpeechState() override;
 
     bool HasWakeWord() const override;
     bool IsWakeWordDetectionEnabled() const override;
@@ -75,6 +76,9 @@ private:
     std::atomic<bool> reset_pending_{false};
     // Deferred WakeNet/AEC toggles, applied by ProcessingTask (see ApplyAfeControls)
     std::atomic<bool> afe_control_dirty_{false};
+    // -1 unknown, 0 off, 1 on. Re-calling enable_aec resets the filter and
+    // makes the next TTS look like near-end (res ≈ playback).
+    int aec_applied_ = -1;
     // Deferred output_buffer_ clear, performed by the output-producing task
     std::atomic<bool> output_reset_pending_{false};
     // Incremented whenever an active AFE session is invalidated. ProcessingTask

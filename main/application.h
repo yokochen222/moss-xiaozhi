@@ -179,6 +179,7 @@ private:
         false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ =
         false;  // Waiting for playback to drain before starting listening (auto mode)
+    bool resume_listen_after_tts_ = false;  // TTS stop: send listen/start now so the cloud does not goodbye
 #if CONFIG_ENABLE_VAD_INTERRUPT
     // ov2640-style barge-in: silence-arm + sustained VAD while TTS is playing.
     int64_t speaking_started_us_ = 0;
