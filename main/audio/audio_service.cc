@@ -769,10 +769,11 @@ constexpr int kNearEndConfirmMargin = 60;
 constexpr int kPlaybackStaleUs = 300 * 1000;
 constexpr int kEchoLearnMinFrames = 10;  // 600 ms of 60 ms playback
 constexpr int kEchoConvergedFrames = 5;
+constexpr int kEchoSentenceGuardFrames = 10;  // 600 ms, once per MQTT sentence
 constexpr int kEchoQuietAbs = 180;
 constexpr int kEchoQuietFrames = 8;  // 480 ms; 300 ms still encoded "查询。"
 constexpr int kNewSpeechAbs = 400;
-constexpr int kNewSpeechFrames = 4;  // 240 ms rise after quiet; VAD follows echo
+constexpr int kNewSpeechFrames = 2;  // 120 ms of loud; onset lives in preroll
 constexpr int64_t kEchoTailMaxUs = 1500 * 1000;
 }  // namespace
 
@@ -824,10 +825,21 @@ void AudioService::ResetEchoProfile() {
     echo_playback_frames_.store(0, std::memory_order_relaxed);
     echo_converged_streak_.store(0, std::memory_order_relaxed);
     echo_ready_.store(false, std::memory_order_relaxed);
+    echo_sentence_guard_frames_.store(0, std::memory_order_relaxed);
     near_end_latched_.store(false, std::memory_order_relaxed);
     last_playback_us_.store(0, std::memory_order_relaxed);
     mic_level_.store(0, std::memory_order_relaxed);
     ref_level_.store(0, std::memory_order_relaxed);
+}
+
+void AudioService::NoteTtsSentenceStart() {
+    if (!hold_uplink_encode_.load(std::memory_order_relaxed) ||
+        !echo_ready_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    echo_sentence_guard_frames_.store(kEchoSentenceGuardFrames, std::memory_order_relaxed);
+    ESP_LOGI(TAG, "AEC sentence onset, ignore near-end %d ms",
+             kEchoSentenceGuardFrames * OPUS_FRAME_DURATION_MS);
 }
 
 void AudioService::NotePlaybackPcm(const int16_t* data, size_t samples) {
@@ -918,14 +930,20 @@ void AudioService::AdaptEchoFloor(int playback, int residual) {
         }
         return;
     }
-    // Do not let the floor collapse between syllables (log: floor 842 -> 40,
-    // then leak 423 aborted TTS). TTS leak is at least kTtsLeakPctOfPlayback.
+    // TTS PCM peaks 20%+ every syllable (log: 578→6086). Do not treat that
+    // as a new sentence. Official duplex uses vad_mute_playback so VAD does
+    // not see the speaker; we only ignore near-end for one MQTT sentence
+    // onset (~300 ms AEC transient), then the 32% leak floor applies.
     int floor = echo_floor_.load(std::memory_order_relaxed);
     const int leak = playback * kTtsLeakPctOfPlayback / 100;
+    int guard = echo_sentence_guard_frames_.load(std::memory_order_relaxed);
+    if (guard > 0) {
+        echo_sentence_guard_frames_.store(guard - 1, std::memory_order_relaxed);
+    }
     if (floor < leak) {
         floor = leak;
     }
-    echo_floor_.store(floor, std::memory_order_relaxed);
+    echo_floor_.store(std::max(floor, 80), std::memory_order_relaxed);
 }
 
 void AudioService::NoteResidualPcm(const int16_t* data, size_t samples) {
@@ -959,6 +977,9 @@ bool AudioService::IsNearEndSpeechWithMargin(int margin) const {
         // Do not reject res>=50% of playback: AGGR NLP + real barge-in sits
         // around 40–60% (log: res=1140/pb=2682) and the 50% cap went deaf.
         if (!echo_ready_.load(std::memory_order_relaxed)) {
+            return false;
+        }
+        if (echo_sentence_guard_frames_.load(std::memory_order_relaxed) > 0) {
             return false;
         }
         const int leak = playback * kTtsLeakPctOfPlayback / 100;
@@ -1048,7 +1069,9 @@ void AudioService::StartBargeCaptureFromPrerollLocked() {
     if (barge_capture_active_) {
         return;
     }
-    barge_capture_ = pcm_preroll_;
+    if (barge_capture_.empty()) {
+        barge_capture_ = pcm_preroll_;
+    }
     barge_capture_active_ = true;
 }
 
@@ -1091,7 +1114,6 @@ bool AudioService::HasBargeInCapture() const {
 void AudioService::ReleaseBargeInCapture() {
     std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
     barge_capture_active_ = false;
-    barge_capture_.clear();
 }
 
 void AudioService::FlushBargeInPcmToEncodeQueue() {
@@ -1154,6 +1176,23 @@ void AudioService::GateUplinkUntilEchoQuiet() {
     }
 }
 
+void AudioService::EncodePrerollDroppingQuiet() {
+    std::deque<std::vector<int16_t>> frames;
+    {
+        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
+        frames.swap(pcm_preroll_);
+    }
+    // Official VAD cache exists because the first loud/VAD frame is already
+    // late. Trimming at kNewSpeechAbs=400 cut "你都" off "你会些什么？".
+    while (!frames.empty() &&
+           PcmMeanAbs(frames.front().data(), frames.front().size()) < kEchoQuietAbs) {
+        frames.pop_front();
+    }
+    for (auto& frame : frames) {
+        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
+    }
+}
+
 bool AudioService::ConsumeEchoTailGate(std::vector<int16_t>& data) {
     auto gate = echo_tail_gate_.load(std::memory_order_relaxed);
     if (gate == EchoTailGate::Off) {
@@ -1193,18 +1232,7 @@ bool AudioService::ConsumeEchoTailGate(std::vector<int16_t>& data) {
             if (now >= deadline && residual >= start + 150 && residual >= kNewSpeechAbs) {
                 echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
                 keep_preroll();
-                std::deque<std::vector<int16_t>> frames;
-                {
-                    std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-                    frames.swap(pcm_preroll_);
-                }
-                while (!frames.empty() &&
-                       PcmMeanAbs(frames.front().data(), frames.front().size()) < kNewSpeechAbs) {
-                    frames.pop_front();
-                }
-                for (auto& frame : frames) {
-                    PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
-                }
+                EncodePrerollDroppingQuiet();
                 ESP_LOGI(TAG, "echo tail deadline open res=%d start=%d", residual, start);
                 return true;
             }
@@ -1214,35 +1242,21 @@ bool AudioService::ConsumeEchoTailGate(std::vector<int16_t>& data) {
     }
 
     // WaitSpeech: a new residual rise after silence. Do not use VAD here —
-    // vad_min_noise_ms=1000 keeps SPEECH on the echo tail.
+    // vad_min_noise_ms=1000 keeps SPEECH on the echo tail. Keep the rolling
+    // preroll across dips so the first syllable is still there when we open.
     if (residual >= kNewSpeechAbs) {
         const int n = echo_quiet_frames_.fetch_add(1, std::memory_order_relaxed) + 1;
         keep_preroll();
         if (n >= kNewSpeechFrames) {
             echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
             echo_quiet_frames_.store(0, std::memory_order_relaxed);
-            std::deque<std::vector<int16_t>> frames;
-            {
-                std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-                frames.swap(pcm_preroll_);
-            }
-            while (!frames.empty() &&
-                   PcmMeanAbs(frames.front().data(), frames.front().size()) < kNewSpeechAbs) {
-                frames.pop_front();
-            }
-            for (auto& frame : frames) {
-                PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
-            }
+            EncodePrerollDroppingQuiet();
             ESP_LOGI(TAG, "echo tail speech res=%d", residual);
             return true;
         }
         return true;
     }
     echo_quiet_frames_.store(0, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        pcm_preroll_.clear();
-    }
     keep_preroll();
     return true;
 }

@@ -65,7 +65,7 @@
 | 出厂灵敏度 | `CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20` | 数值越小越灵敏；1–99 |
 | 引擎 | MultiNet 自定义唤醒 + 设备端 AEC | `CONFIG_USE_CUSTOM_WAKE_WORD` + `CONFIG_USE_DEVICE_AEC` |
 
-全双工（AEC 开）走 ESP-SR `AFE_TYPE_FD` + `AEC_MODE_FD_HIGH_PERF`，NLP 用官方默认 `AEC_NLP_LEVEL_AGGR`。官方 AEC 就是为了「自己播放时仍能识别」：TTS 期间用 AEC 残差做近端检测，进入门限确认约 220 ms 后打断（确认用更低迟滞，失败必须松开采集锁才能再试）；TTS 自然结束后必须先等残差落到静音并丢掉余响预卷，再等新语音连帧，不能按固定毫秒开门，否则会把「查询天气」拼成「查询。」。
+全双工（AEC 开）走 ESP-SR `AFE_TYPE_FD` + `AEC_MODE_FD_HIGH_PERF`，NLP 用官方默认 `AEC_NLP_LEVEL_AGGR`，VAD 开 `vad_mute_playback`（让检测看不到喇叭）。TTS 期间用 AEC 残差确认近端，约 220 ms 后打断。新一句 MQTT `sentence_start` 后忽略约 600 ms（AEC 起音残差会跟着播放跳，约 300 ms），只触发一次，禁止用 PCM 播放能量沿续窗（语音每个音节都会跳 20%+，整段会变聋）。禁止用每句去清 `speaking_started_us_`。TTS 自然结束后先等残差静音并丢掉余响预卷，开门时只丢掉真正静音帧。连续 fetch 不要拼接 `vad_cache`。
 
 `PUT /config/device` 的 `wake_word` **只改词条和灵敏度**，不得改 MIC 增益、不得改扬声器音量。灵敏度存在唤醒词 NVS，扬声器音量走 codec NVS，互不覆盖。
 

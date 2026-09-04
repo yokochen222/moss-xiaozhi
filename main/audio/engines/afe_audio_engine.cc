@@ -143,8 +143,10 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->vad_mode = VAD_MODE_1;
     afe_config->vad_min_noise_ms = 1000;
     afe_config->vad_min_speech_ms = 128;
-    // Official default 128. Do not splice vad_cache into a continuous fetch
-    // stream — that duplicates PCM and ASR hears stutter / repeated chars.
+    // Official default 128. AFE fetch may return vad_cache on VAD start to
+    // cover that delay; splicing it into every fetch duplicates PCM and ASR
+    // hears stutter. Gated uplink (TTS hold / echo tail) keeps pcm preroll
+    // instead, and must not trim the onset as "too quiet".
     afe_config->vad_delay_ms = 128;
     // Official: mute playback in the VAD path so TTS does not look like speech.
     afe_config->vad_mute_playback = true;

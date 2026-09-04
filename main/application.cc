@@ -857,6 +857,7 @@ void Application::InitializeProtocol() {
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
                         RelayChat("message", "assistant", message);
+                        audio_service_.NoteTtsSentenceStart();
                     });
                 }
             }

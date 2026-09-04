@@ -615,6 +615,7 @@ class MossBargeInTests(unittest.TestCase):
         self.assertNotIn("speaking_started_us_ = esp_timer_get_time()", sentence)
         self.assertNotIn("CancelVadInterruptTimer()", sentence)
         self.assertNotIn("vad_interrupt_armed_ = false", sentence)
+        self.assertIn("NoteTtsSentenceStart()", sentence)
 
     def test_barge_in_resends_listen_start(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
@@ -636,13 +637,16 @@ class MossBargeInTests(unittest.TestCase):
         header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
         self.assertIn("echo_ready_", src)
         self.assertIn("kEchoLearnMinFrames", src)
-        self.assertIn("kEchoConvergedFrames", src)
+        self.assertIn("kEchoSentenceGuardFrames = 10", src)
+        self.assertIn("NoteTtsSentenceStart", src)
+        self.assertNotIn("kPlaybackJumpPct", src)
+        self.assertNotIn("AEC playback jump", src)
         self.assertIn("kTtsLeakPctOfPlayback = 32", src)
         self.assertIn("kNearEndEnterMargin = 150", src)
         self.assertIn("kNearEndConfirmMargin = 60", src)
         self.assertIn("kEchoQuietFrames = 8", src)
         self.assertIn("kNewSpeechAbs = 400", src)
-        self.assertIn("kNewSpeechFrames = 4", src)
+        self.assertIn("kNewSpeechFrames = 2", src)
         self.assertNotIn("kEchoLearnMaxFrames", src)
         self.assertNotIn("echo_learn_frames_", src)
         near = src[
@@ -655,12 +659,26 @@ class MossBargeInTests(unittest.TestCase):
         self.assertNotIn("echo_mic_floor_", near)
         self.assertNotIn("residual * 2", near)
         self.assertIn("ReleaseBargeInCapture", src)
+        start_cap = src[
+            src.find("void AudioService::StartBargeCaptureFromPrerollLocked") : src.find(
+                "void AudioService::PushHeldPcmFrame"
+            )
+        ]
+        self.assertIn("barge_capture_.empty()", start_cap)
+        release = src[
+            src.find("void AudioService::ReleaseBargeInCapture") : src.find(
+                "void AudioService::FlushBargeInPcmToEncodeQueue"
+            )
+        ]
+        self.assertNotIn("barge_capture_.clear()", release)
         gate = src[
             src.find("bool AudioService::ConsumeEchoTailGate") : src.find(
                 "void AudioService::EnableDeviceAec"
             )
         ]
         self.assertIn("pcm_preroll_.clear()", gate)
+        self.assertIn("EncodePrerollDroppingQuiet", gate)
+        self.assertIn("kEchoQuietAbs", src[src.find("void AudioService::EncodePrerollDroppingQuiet") : src.find("bool AudioService::ConsumeEchoTailGate")])
         self.assertNotIn("voice_detected_", gate)
         self.assertIn("GateUplinkUntilEchoQuiet", src)
         self.assertIn("ConsumeEchoTailGate", src)

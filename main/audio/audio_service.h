@@ -135,6 +135,11 @@ public:
     bool ShouldEarlyMuteForBargeIn() const;
     bool EchoProfileReady() const;
     void ResetEchoProfile();
+    // New TTS sentence: AEC residual tracks the louder onset for ~300 ms
+    // (log: res=2093/pb=4023 aborted). Ignore near-end for one window only.
+    // Do not key this off PCM energy jumps — speech always has those.
+    // Do not reset speaking_started_us_ (that made list playback deaf).
+    void NoteTtsSentenceStart();
     int PlaybackLevel() const;
     int ResidualLevel() const;
     int EchoFloor() const;
@@ -161,7 +166,7 @@ public:
     void FlushBargeInPcmToEncodeQueue();
     bool HasBargeInCapture() const;
     // Failed 220 ms confirm must drop the latch so a later near-end can fire
-    // VAD again (capture stayed active and the list went deaf).
+    // VAD again. Keep the PCM: clearing it cut the onset ("会些什么？").
     void ReleaseBargeInCapture();
     void GateUplinkForMs(int ms);
     // After TTS: drop residual until it goes quiet, then wait for new speech.
@@ -228,7 +233,7 @@ private:
 
     bool audio_engine_initialized_ = false;
     bool voice_detected_ = false;
-    static constexpr size_t kPcmPrerollFrames = 8;         // 480 ms before VAD
+    static constexpr size_t kPcmPrerollFrames = 10;        // 600 ms before VAD (covers 你都)
     static constexpr size_t kBargeCaptureMaxFrames = 40;   // 2.4 s cap after VAD
     std::atomic<bool> hold_uplink_encode_{false};
     mutable std::mutex pcm_preroll_mutex_;
@@ -237,6 +242,7 @@ private:
     bool barge_capture_active_ = false;
     void PushHeldPcmFrame(std::vector<int16_t>&& data);
     void StartBargeCaptureFromPrerollLocked();
+    void EncodePrerollDroppingQuiet();
     bool IsNearEndSpeechWithMargin(int margin) const;
     std::atomic<int> playback_level_{0};
     std::atomic<int> residual_level_{0};
@@ -245,6 +251,7 @@ private:
     std::atomic<int> echo_playback_frames_{0};
     std::atomic<int> echo_converged_streak_{0};
     std::atomic<bool> echo_ready_{false};
+    std::atomic<int> echo_sentence_guard_frames_{0};
     std::atomic<int64_t> uplink_gate_until_us_{0};
     enum class EchoTailGate : uint8_t { Off, WaitQuiet, WaitSpeech };
     std::atomic<EchoTailGate> echo_tail_gate_{EchoTailGate::Off};
