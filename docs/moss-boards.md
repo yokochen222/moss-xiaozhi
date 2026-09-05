@@ -64,7 +64,39 @@
 | 出厂灵敏度 | `CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20` | 数值越小越灵敏；1–99 |
 | 引擎 | MultiNet 自定义唤醒 + 设备端 AEC | `CONFIG_USE_CUSTOM_WAKE_WORD` + `CONFIG_USE_DEVICE_AEC` |
 
-全双工（AEC 开）对齐小智立创实战派：`AFE_TYPE_VC` + `AEC_MODE_VOIP_HIGH_PERF` + `VAD_MODE_0`。Realtime 下 TTS 期间继续把 AEC 后的麦送上云端，由云端打断；本地 VAD 只改听筒灯，不拿来掐 TTS（AFE VAD 会把喇叭当成说话）。采集与官方相同：`mask(0)|mask(1)` 喂 `MR`，第二路是喇叭回灌不是第二颗麦。不上行 `vad_cache`，避免首字重复。
+#### 全双工 AEC / VAD（已实机验证，2026-09-05）
+
+对齐 `78/xiaozhi-esp32` 立创实战派 `lichuang-dev` + `AfeAudioEngine`。**当前手感正常：TTS 说完、对着喇叭能打断、ASR 不再首字重复。** 再改音频先读本节，不要发明第二套门限。
+
+硬件（和立创一样，不是「缺一颗麦所以要软件参考」）：
+
+- 物理人声麦只有 **MIC1**。MIC2 可以不焊，AFE 也不用。
+- 第二路是 **ES7210 MIC3 ← ES8311 喇叭回灌**，不是第二颗麦。
+- TDM 槽序是 MIC1, MIC3, MIC2, MIC4（xiaozhi #2036）。`mask(0)|mask(1)` 因此是 MIC1 + MIC3，AFE 格式永远 `MR`，不是 `MMR`。
+- 虾哥：对话 AEC 只用一个 M + 一个 R（speaker 回路）。`AFE_TYPE_VC` 不支持两个 M。
+
+软件（必须保持）：
+
+| 项 | 官方 / MOSS 现状 |
+|---|---|
+| AFE | `AFE_TYPE_VC` + `AEC_MODE_VOIP_HIGH_PERF` + `AEC_NLP_LEVEL_VERYAGGR` + `VAD_MODE_0` + `vad_min_noise_ms=100` |
+| 采集 | `BoxAudioCodec` `mask(0)\|mask(1)`，只给 MIC1 设 `AUDIO_CODEC_INPUT_GAIN` |
+| 全双工 | AEC 开 → `kListeningModeRealtime`；TTS 期间 **保持** voice processing，把 AEC 后的麦送上云端 |
+| 半双工 | AEC 关 → TTS 期间关麦 |
+| 打断 | 云端听上行后 abort。`CONFIG_ENABLE_VAD_INTERRUPT=n` |
+| 上行 | `HandleVoiceResult` 只送 `result->data`，**不要**再拼 `vad_cache` |
+
+禁止（都会把已验证手感打回去）：
+
+- 用 DAC PCM 覆盖 R 通道（软件参考）。立创也是一颗模拟麦；R 是模拟回灌。覆盖会毁掉参考。
+- 打开 `CONFIG_ENABLE_VAD_INTERRUPT`，或在 speaking 里用 AFE VAD 掐 TTS。`VAD_MODE_0` 会把喇叭残余当成 SPEECH（日志里 `res=50~100` 仍会 `VAD barge-in confirmed`）。
+- 把 `vad_cache` 拼进 Opus 上行 → ASR 首字重复（「给给」「你你」）。
+- 能量门、echo floor、残差比去「确认是不是人在说话」。AEC 残差低仍会误判。
+- 改成 `AFE_TYPE_FD` / `AEC_MODE_FD_*` / `vad_min_speech_ms` / `vad_mute_playback` 来「修」打断。
+
+真机日志对照：TTS 时 `ref` 应跟着播放走（不是 5）；`res` 远小于 `pb` 表示 AEC 在干活。此时若再自打断，查的是本地 VAD，不是增益。
+
+锁：`scripts/tests/test_moss_boards.py`（`MossBargeInTests`）。两板 `config.json` 必须 `CONFIG_ENABLE_VAD_INTERRUPT=n`。
 
 `PUT /config/device` 的 `wake_word` **只改词条和灵敏度**，不得改 MIC 增益、不得改扬声器音量。灵敏度存在唤醒词 NVS，扬声器音量走 codec NVS，互不覆盖。
 

@@ -52,6 +52,11 @@ same engine. On AFE targets, AEC stays active while wake-word detection is activ
 so playback reference remains available for wake-up during device playback. It
 also stays active during voice processing when device AEC is requested.
 
+Realtime barge-in is cloud-side: keep sending AEC-cleaned uplink during TTS.
+Do not abort TTS from local AFE VAD (`CONFIG_ENABLE_VAD_INTERRUPT` stays off).
+Do not prepend `vad_cache` onto the Opus uplink (duplicate first syllables).
+Do not copy DAC PCM onto channel R; R is the ES7210 MIC3 analog loopback.
+
 ## Output data flow
 
 ```mermaid

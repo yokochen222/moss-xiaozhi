@@ -653,6 +653,15 @@ class MossBargeInTests(unittest.TestCase):
                 for marker in markers:
                     self.assertNotIn(marker, text, f"{path.name} {marker}")
 
+    def test_aec_vad_verified_contract_is_documented_for_agents(self):
+        docs = (ROOT / "docs/moss-boards.md").read_text(encoding="utf-8")
+        self.assertIn("已实机验证", docs)
+        self.assertIn("CONFIG_ENABLE_VAD_INTERRUPT=n", docs)
+        self.assertIn("vad_cache", docs)
+        self.assertIn("用 DAC PCM 覆盖 R 通道", docs)
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Do not re-enable local VAD barge-in", agents)
+
 
 class MossWakeTtsTests(unittest.TestCase):
     def test_tts_start_keeps_packets_queued_before_scheduled_callback(self):

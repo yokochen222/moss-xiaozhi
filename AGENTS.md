@@ -48,7 +48,9 @@ When adding a board or variant, update every relevant link in that chain. Includ
 
 This fork ships two MOSS boards: `moss/moss-onvif` and `moss/moss-ov2640`. Shared desktop-client code is gated by `CONFIG_BOARD_FAMILY_MOSS`. Camera/gimbal/face-track sources compile only for `CONFIG_BOARD_TYPE_MOSS_OV2640`. Do not OTA across their partition tables; first flash uses `erase-flash`. Desktop routing uses the firmware `board` field (`moss-onvif` / `moss-ov2640`), not `product=moss-xiaozhi`.
 
-**Board diff for agents (read before changing either board):** [`docs/moss-boards.md`](docs/moss-boards.md). Aside from gimbal and the onboard camera, user-facing behavior and analog wake/mic defaults must stay identical. Mic gain and AEC reference live in `main/boards/moss/moss_shared_audio.h` — do not fork them in a board `config.h`.
+**Board diff for agents (read before changing either board):** [`docs/moss-boards.md`](docs/moss-boards.md). Aside from gimbal and the onboard camera, user-facing behavior and analog wake/mic defaults must stay identical. Mic gain lives in `main/boards/moss/moss_shared_audio.h` — do not fork it in a board `config.h`.
+
+**AEC / VAD (verified):** duplex matches official lichuang-dev. Do not re-enable local VAD barge-in, do not prepend `vad_cache`, do not overwrite the analog MIC3 loopback with DAC PCM. Details and the do-not list are in `docs/moss-boards.md` §2.2.
 
 ## Commands
 
