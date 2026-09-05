@@ -7,7 +7,7 @@
             "name": "moss-ov2640",
             "sdkconfig_append": [
                 "CONFIG_USE_DEVICE_AEC=y",
-                "CONFIG_ENABLE_VAD_INTERRUPT=y",
+                "CONFIG_ENABLE_VAD_INTERRUPT=n",
                 "CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n",
                 "CONFIG_USE_AFE_WAKE_WORD=n",
                 "CONFIG_USE_CUSTOM_WAKE_WORD=y",

@@ -121,67 +121,35 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     for (int i = 0; i < ref_num; ++i) {
         input_format.push_back('R');
     }
+    ESP_LOGI(TAG, "AFE input_format=%s channels=%d ref=%d", input_format.c_str(),
+             codec_->input_channels(), ref_num);
 
     char* vad_model_name =
         models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_VADN_PREFIX, nullptr);
     afe_config_t* afe_config =
-        afe_config_init(input_format.c_str(), models_, AFE_TYPE_FD, AFE_MODE_HIGH_PERF);
+        afe_config_init(input_format.c_str(), models_, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
     if (afe_config == nullptr) {
         ESP_LOGE(TAG, "Failed to create AFE configuration");
         return false;
     }
 
+    // Match 78/xiaozhi-esp32 lichuang-dev AfeAudioEngine: VC + VOIP AEC + VAD_MODE_0.
     afe_config->aec_init = codec_->input_reference();
-    // ESP-SR: VOIP AEC is deprecated; NLP only runs in FD modes. Official
-    // default is AGGR. VERYAGGR also wipes double-talk so barge-in is deaf.
-    afe_config->aec_mode = AEC_MODE_FD_HIGH_PERF;
-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_AGGR;
+    afe_config->aec_mode = AEC_MODE_VOIP_HIGH_PERF;
+    afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
     afe_config->ns_init = false;
     afe_config->vad_init = kUseAfeForVoiceProcessing;
-    // Official: larger mode = easier to trigger. MODE_3 was firing on TTS leak.
-    // Coze duplex example uses MODE_1.
-    afe_config->vad_mode = VAD_MODE_1;
-    afe_config->vad_min_noise_ms = 1000;
-    afe_config->vad_min_speech_ms = 128;
-    // Official default 128. AFE fetch may return vad_cache on VAD start to
-    // cover that delay; splicing it into every fetch duplicates PCM and ASR
-    // hears stutter. Gated uplink (TTS hold / echo tail) keeps pcm preroll
-    // instead, and must not trim the onset as "too quiet".
-    afe_config->vad_delay_ms = 128;
-    // Official: mute playback in the VAD path so TTS does not look like speech.
-    afe_config->vad_mute_playback = true;
+    afe_config->vad_mode = VAD_MODE_0;
+    afe_config->vad_min_noise_ms = 100;
     if (vad_model_name != nullptr) {
         afe_config->vad_model_name = vad_model_name;
     }
     afe_config->wakenet_init = wake_detector_ == WakeDetector::kWakeNet;
     afe_config->wakenet_model_name =
         wake_detector_ == WakeDetector::kWakeNet ? wakenet_model_name : nullptr;
-    // Higher mode = easier to trigger (with higher false-alarm rate).
     afe_config->wakenet_mode = DET_MODE_95;
     afe_config->agc_init = false;
-    // Analog mic is already 37.5 dB. Extra digital gain triples AEC residual
-    // and NLP artifacts into the ASR uplink.
-    afe_config->afe_linear_gain = 1.0f;
-    if (afe_config->aec_init) {
-        // Official default: 4. Longer filters cost CPU and do not fix gain mismatch.
-        afe_config->aec_filter_length = 4;
-    }
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
-
-    // ADF recorder_sr: check() then print. check() may rewrite conflicts;
-    // re-assert FD+NLP because VOIP makes NLP a no-op.
-    afe_config_check(afe_config);
-    afe_config->afe_type = AFE_TYPE_FD;
-    afe_config->aec_mode = AEC_MODE_FD_HIGH_PERF;
-    afe_config->aec_nlp_level = AEC_NLP_LEVEL_AGGR;
-    afe_config->vad_mute_playback = true;
-    afe_config->vad_delay_ms = 128;
-    afe_config->vad_mode = VAD_MODE_1;
-    afe_config->vad_min_noise_ms = 1000;
-    afe_config->vad_min_speech_ms = 128;
-    if (afe_config->aec_init) {
-        afe_config->aec_filter_length = 4;
-    }
     afe_config_print(afe_config);
 
     afe_iface_ = esp_afe_handle_from_config(afe_config);
@@ -191,7 +159,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config_free(afe_config);
 
     if (afe_iface_ == nullptr || afe_data_ == nullptr) {
-        ESP_LOGE(TAG, "Failed to create FD AFE instance");
+        ESP_LOGE(TAG, "Failed to create AFE instance");
         afe_iface_ = nullptr;
         afe_data_ = nullptr;
         return false;
@@ -202,7 +170,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     }
     if (codec_->input_reference()) {
         afe_iface_->disable_aec(afe_data_);
-        aec_applied_ = 0;
+        aec_applied_ = false;
     }
     afe_iface_->print_pipeline(afe_data_);
 
@@ -224,7 +192,7 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     const char* detector = wake_detector_ == WakeDetector::kWakeNet
                                ? "WakeNet"
                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
-    ESP_LOGI(TAG, "Initialized AFE type=FD aec=FD_HIGH_PERF nlp=AGGR filter=4 detector: %s, NS: off, feed: %d, fetch: %d", detector,
+    ESP_LOGI(TAG, "Initialized AFE type=VC aec=VOIP_HIGH_PERF nlp=VERYAGGR detector: %s, NS: off, feed: %d, fetch: %d", detector,
              afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     return true;
 }
@@ -272,10 +240,6 @@ void AfeAudioEngine::EnableWakeWordDetection(bool enable) {
 }
 
 void AfeAudioEngine::EnableVoiceProcessing(bool enable) {
-    const bool already = (xEventGroupGetBits(event_group_) & kVoiceProcessingEnabled) != 0;
-    if (enable == already) {
-        return;
-    }
     if (enable) {
         xEventGroupSetBits(event_group_, kVoiceProcessingEnabled);
     } else {
@@ -291,13 +255,6 @@ void AfeAudioEngine::EnableDeviceAec(bool enable) {
         ESP_LOGW(TAG, "Device AEC requires a playback reference channel");
     }
     UpdateAecState();
-}
-
-void AfeAudioEngine::ResetVadSpeechState() {
-    is_speaking_ = false;
-    if (afe_iface_ != nullptr && afe_data_ != nullptr && afe_iface_->reset_vad != nullptr) {
-        afe_iface_->reset_vad(afe_data_);
-    }
 }
 
 bool AfeAudioEngine::HasWakeWord() const { return wake_detector_ != WakeDetector::kNone; }
@@ -373,19 +330,16 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        // Idle wake-word capture must not run aggressive NLP: it suppresses
-        // quiet "mo si". Keep AEC for duplex voice processing (barge-in / realtime).
-        const bool enable_aec = device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
-        const int want = enable_aec ? 1 : 0;
-        if (aec_applied_ != want) {
+        // xiaozhi lichuang: AEC on for wake and for duplex voice processing.
+        const bool enable_aec = (bits & kWakeWordEnabled) ||
+                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
+        if (enable_aec != aec_applied_) {
             if (enable_aec) {
                 afe_iface_->enable_aec(afe_data_);
-                ESP_LOGI(TAG, "AEC enabled (FD NLP) for voice processing");
             } else {
                 afe_iface_->disable_aec(afe_data_);
-                ESP_LOGI(TAG, "AEC disabled (idle wake)");
             }
-            aec_applied_ = want;
+            aec_applied_ = enable_aec;
         }
     }
 }

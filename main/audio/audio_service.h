@@ -3,12 +3,11 @@
 
 #include <memory>
 #include <atomic>
-#include <cstdint>
 #include <deque>
-#include <vector>
 #include <condition_variable>
 #include <chrono>
 #include <mutex>
+#include <vector>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -39,8 +38,6 @@
  */
 
 #define OPUS_FRAME_DURATION_MS 60
-// Barge-in flushes ~1–2 s of PCM preroll after TTS decode stops. Size 2 dropped
-// the onset while OpusCodecTask was busy decoding ("Encode queue is full").
 #define MAX_ENCODE_TASKS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
@@ -124,22 +121,15 @@ public:
     // True when post-AEC mic energy is clearly above the learned TTS echo floor.
     // Used so speaker leak cannot barge-in; VAD alone is not enough on loud PA boards.
     bool IsLikelyNearEndSpeech() const;
-    // Enter-threshold only. Confirm uses IsSustainedNearEndSpeech (hysteresis);
-    // the same high bar on the 220 ms snapshot missed real barge-in (log:
-    // res=1140/need=1134, then ignored and never retried).
+    // Enter-threshold only. Confirm / start must not use the sticky drop level,
+    // or a brief echo spike can abort TTS after residual has already fallen.
     bool IsConfirmedNearEndSpeech() const;
-    bool IsSustainedNearEndSpeech() const;
     // Floor gate without the playback ratio. Mute the PA here so NLP stops
     // eating onset; confirm still waits for the ratio gate. Do not use raw
     // mic/ref: echo already has mic~3k/ref~28k and false-mutes TTS.
     bool ShouldEarlyMuteForBargeIn() const;
     bool EchoProfileReady() const;
     void ResetEchoProfile();
-    // New TTS sentence: AEC residual tracks the louder onset for ~300 ms
-    // (log: res=2093/pb=4023 aborted). Ignore near-end for one window only.
-    // Do not key this off PCM energy jumps — speech always has those.
-    // Do not reset speaking_started_us_ (that made list playback deaf).
-    void NoteTtsSentenceStart();
     int PlaybackLevel() const;
     int ResidualLevel() const;
     int EchoFloor() const;
@@ -159,19 +149,6 @@ public:
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
-    // TTS decode and mic encode share one Opus task. Hold encode while speaking
-    // and keep PCM; flush on barge-in so the cloud gets a continuous utterance.
-    void SetHoldUplinkEncode(bool hold);
-    void ClearPcmPreroll();
-    void FlushBargeInPcmToEncodeQueue();
-    bool HasBargeInCapture() const;
-    // Failed 220 ms confirm must drop the latch so a later near-end can fire
-    // VAD again. Keep the PCM: clearing it cut the onset ("会些什么？").
-    void ReleaseBargeInCapture();
-    void GateUplinkForMs(int ms);
-    // After TTS: drop residual until it goes quiet, then wait for new speech.
-    // A wall-clock mute still encoded "上校" into "上你都会些什么？".
-    void GateUplinkUntilEchoQuiet();
 
     void SetPlaybackMuted(bool muted);
     bool IsPlaybackMuted() const;
@@ -182,6 +159,11 @@ public:
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
+    // TTS: do not encode speaker leak. Keep near-end PCM and encode on barge-in.
+    void BeginSpeakingCapture();
+    void EndSpeakingCapture();
+    void FlushSpeakingCaptureToSendQueue();
+    bool HasNearEndCapture() const;
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
@@ -233,31 +215,10 @@ private:
 
     bool audio_engine_initialized_ = false;
     bool voice_detected_ = false;
-    static constexpr size_t kPcmPrerollFrames = 10;        // 600 ms before VAD (covers 你都)
-    static constexpr size_t kBargeCaptureMaxFrames = 40;   // 2.4 s cap after VAD
-    std::atomic<bool> hold_uplink_encode_{false};
-    mutable std::mutex pcm_preroll_mutex_;
-    std::deque<std::vector<int16_t>> pcm_preroll_;
-    std::deque<std::vector<int16_t>> barge_capture_;
-    bool barge_capture_active_ = false;
-    void PushHeldPcmFrame(std::vector<int16_t>&& data);
-    void StartBargeCaptureFromPrerollLocked();
-    void EncodePrerollDroppingQuiet();
-    bool IsNearEndSpeechWithMargin(int margin) const;
     std::atomic<int> playback_level_{0};
     std::atomic<int> residual_level_{0};
     std::atomic<int> echo_floor_{250};
-    std::atomic<int> echo_mic_floor_{200};
-    std::atomic<int> echo_playback_frames_{0};
-    std::atomic<int> echo_converged_streak_{0};
-    std::atomic<bool> echo_ready_{false};
-    std::atomic<int> echo_sentence_guard_frames_{0};
-    std::atomic<int64_t> uplink_gate_until_us_{0};
-    enum class EchoTailGate : uint8_t { Off, WaitQuiet, WaitSpeech };
-    std::atomic<EchoTailGate> echo_tail_gate_{EchoTailGate::Off};
-    std::atomic<int> echo_quiet_frames_{0};
-    std::atomic<int64_t> echo_tail_deadline_us_{0};
-    std::atomic<int> echo_tail_start_residual_{0};
+    std::atomic<int> echo_learn_frames_{0};
     mutable std::atomic<bool> near_end_latched_{false};
     std::atomic<int64_t> last_playback_us_{0};
     std::atomic<bool> playback_muted_{false};
@@ -271,6 +232,10 @@ private:
 #endif
     std::atomic<bool> service_stopped_{true};
     std::atomic<bool> audio_input_need_warmup_{false};
+    std::atomic<bool> speaking_capture_{false};
+    std::atomic<bool> capture_latched_{false};
+    std::mutex capture_mutex_;
+    std::vector<int16_t> speaking_capture_pcm_;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
@@ -291,7 +256,7 @@ private:
     void NoteResidualPcm(const int16_t* data, size_t samples);
     void NoteCapturePcm(const int16_t* data, size_t samples, int channels);
     void AdaptEchoFloor(int playback, int residual);
-    bool ConsumeEchoTailGate(std::vector<int16_t>& data);
+    void MaybeAppendSpeakingCapture(const std::vector<int16_t>& pcm);
 };
 
 #endif

@@ -5,7 +5,8 @@
 
 // ES7210 MIC1 analog gain (dB). Raise if wake is deaf; lower if false-wake or clipping.
 #define AUDIO_CODEC_INPUT_GAIN 37.5f
-// ES7210 AEC reference-channel gain (dB). Must match MIC or linear AEC under-subtracts
-// (Espressif ADF: 自问自答 / gain mismatch).
-#define AUDIO_CODEC_REFERENCE_GAIN 37.5f
-#define AUDIO_CODEC_REFERENCE_CHANNEL 2
+
+// Same as 78/xiaozhi-esp32 lichuang-dev BoxAudioCodec:
+// AFE is always MR (one M + one R). MIC1 is the only analog mic. MIC2 is unused.
+// TDM slot order is MIC1, MIC3, MIC2, MIC4 (#2036), so mask(0)|mask(1) is
+// MIC1 + MIC3 ES8311 speaker loopback — not a second microphone.

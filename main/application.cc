@@ -38,9 +38,8 @@ constexpr int kConnectingTimeoutTicks = 20;
 constexpr const char* kYunxiangjiWakeText = "请调用工具查询提醒内容";
 std::atomic<int> g_tts_downlink_logs{0};
 #if CONFIG_ENABLE_VAD_INTERRUPT
-// AEC settle after the first TTS PCM, not 1.5s from speaking (short greetings
-// finished before the old 950 ms confirm could ever fire).
-constexpr int64_t kSpeakingBargeInGuardUs = 400 * 1000;
+// TTS / AEC settle before local VAD or cloud ASR may barge-in.
+constexpr int64_t kSpeakingBargeInGuardUs = 1500 * 1000;
 #endif
 
 std::string NormalizeAnnounceText(const std::string& text) {
@@ -82,50 +81,6 @@ std::string NormalizeAnnounceText(const std::string& text) {
         i += static_cast<size_t>(n);
     }
     return out;
-}
-
-size_t AnnounceGlyphCount(const std::string& text) {
-    size_t n = 0;
-    for (size_t i = 0; i < text.size();) {
-        const unsigned char c = static_cast<unsigned char>(text[i]);
-        if ((c & 0x80) == 0) {
-            i += 1;
-        } else if ((c & 0xE0) == 0xC0) {
-            i += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            i += 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            i += 4;
-        } else {
-            i += 1;
-        }
-        ++n;
-    }
-    return n;
-}
-
-bool SimilarAnnounceText(const std::string& left, const std::string& right) {
-    const std::string a = NormalizeAnnounceText(left);
-    const std::string b = NormalizeAnnounceText(right);
-    if (a.empty() || b.empty()) {
-        return false;
-    }
-    if (a == b) {
-        return true;
-    }
-    // Short fragments like「水」would false-match almost any later sentence.
-    if (AnnounceGlyphCount(a) < 4 || AnnounceGlyphCount(b) < 4) {
-        return false;
-    }
-    return a.find(b) != std::string::npos || b.find(a) != std::string::npos;
-}
-
-bool IsMcpTtsLine(const std::string& text) {
-    size_t i = 0;
-    while (i < text.size() && static_cast<unsigned char>(text[i]) <= 0x20) {
-        ++i;
-    }
-    return i < text.size() && text[i] == '%';
 }
 }  // namespace
 
@@ -366,14 +321,10 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            const auto state = GetDeviceState();
-            if (state == kDeviceStateSpeaking) {
-                // Never uplink or keep Opus during TTS. Decode shares the Opus
-                // task; encoding residual filled a 2-slot queue and dropped the
-                // onset. PCM preroll is flushed after local barge-in confirm.
-                while (audio_service_.PopPacketFromSendQueue())
-                    ;
-            } else if (state != kDeviceStateListening || pending_listening_start_) {
+            // xiaozhi: always drain the encode queue. Realtime duplex relies on
+            // AEC-cleaned uplink during TTS (cloud barge-in). Dropping here
+            // clips the onset and duplicates after a later flush.
+            if (GetDeviceState() == kDeviceStateListening && pending_listening_start_) {
                 while (audio_service_.PopPacketFromSendQueue())
                     ;
             } else {
@@ -819,23 +770,11 @@ void Application::InitializeProtocol() {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
                     Schedule([this, display, message = std::string(text->valuestring),
                               glyphs = std::move(glyphs), bpp]() {
-                        if (IsMcpTtsLine(message)) {
-                            // Tool traces must reach the desktop (ack sync) but
-                            // must not be spoken or counted as the reminder line.
-                            if (protocol_) {
-                                protocol_->SetPendingAudioDropped(true);
-                            }
-                            display->SetChatMessage("assistant", message.c_str());
-                            RelayChat("message", "assistant", message);
-                            return;
-                        }
-                        // Only drop a true restatement of the same reminder, not
-                        // follow-up color or later 拜拜.
+                        // The model often restates the reminder after ack. Drop the
+                        // second identical utterance so the speaker only plays it once.
                         if (ShouldDropDuplicateAnnounceTts(message)) {
                             ESP_LOGI(TAG, "drop duplicate reminder TTS: %s", message.c_str());
-                            if (protocol_) {
-                                protocol_->SetPendingAudioDropped(true);
-                            }
+                            SuppressAnnounceReplay();
                             return;
                         }
                         // Some server paths emit sentence_start before tts/start; without
@@ -857,7 +796,6 @@ void Application::InitializeProtocol() {
                         display->AddTextGlyphs(glyphs, bpp);
                         display->SetChatMessage("assistant", message.c_str());
                         RelayChat("message", "assistant", message);
-                        audio_service_.NoteTtsSentenceStart();
                     });
                 }
             }
@@ -1213,13 +1151,6 @@ void Application::HandleStateChangedEvent() {
             std::lock_guard<std::mutex> lock(mutex_);
             last_external_detect_text_.clear();
             ResetYunxiangjiSessionLocked();
-            // Do not re-send the wake detect after goodbye if this reminder
-            // was already taken and acked.
-            if (pending_text_to_send_ == kYunxiangjiWakeText &&
-                !last_acked_announce_.empty() &&
-                esp_timer_get_time() - last_acked_us_ <= 10LL * 60 * 1000 * 1000) {
-                pending_text_to_send_.clear();
-            }
         }
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
@@ -1229,6 +1160,7 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::STANDBY);
             display->ClearChatMessages();    // Clear messages first
             display->SetEmotion("neutral");  // Then set emotion (wechat mode checks child count)
+            audio_service_.EndSpeakingCapture();
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
 #ifdef CONFIG_BOARD_TYPE_MOSS_OV2640
@@ -1243,7 +1175,7 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateListening: {
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
-            const bool keep_preroll = barge_in_listen_ || audio_service_.HasBargeInCapture();
+            const bool keep_preroll = barge_in_listen_;
             barge_in_listen_ = false;
 #else
             const bool keep_preroll = false;
@@ -1251,29 +1183,24 @@ void Application::HandleStateChangedEvent() {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
-            if (keep_preroll) {
-                audio_service_.FlushBargeInPcmToEncodeQueue();
-                audio_service_.GateUplinkForMs(0);
+            if (!keep_preroll) {
+                audio_service_.EndSpeakingCapture();
             } else {
-                audio_service_.ClearPcmPreroll();
-                while (audio_service_.PopPacketFromSendQueue())
-                    ;
-                audio_service_.GateUplinkUntilEchoQuiet();
+                audio_service_.FlushSpeakingCaptureToSendQueue();
             }
-            audio_service_.SetHoldUplinkEncode(false);
 
-            // Keep the AEC processor running across speaking -> listening
-            // (realtime). Barge-in must re-send listen start even when it stays up.
+            // Never listen/start while TTS is still in the speaker: realtime
+            // uplink of that leak is the self-reply loop ("你好，上校").
             if (resume_listen_after_tts_) {
                 resume_listen_after_tts_ = false;
-                StartListeningAudio();
+                if (!audio_service_.IsPlaybackIdle() && pending_text_to_send_.empty()) {
+                    pending_listening_start_ = true;
+                } else {
+                    StartListeningAudio();
+                }
             } else if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
                 keep_preroll) {
-                // Pending text-chat (reminder /chat/say) must send listen/start
-                // then detect; deferring until drain used to skip start and leave
-                // the first TTS with MQTT text but no UDP audio.
-                if (listening_mode_ == kListeningModeAutoStop && !audio_service_.IsPlaybackIdle() &&
-                    pending_text_to_send_.empty()) {
+                if (!audio_service_.IsPlaybackIdle() && pending_text_to_send_.empty()) {
                     pending_listening_start_ = true;
                 } else {
                     StartListeningAudio();
@@ -1288,9 +1215,9 @@ void Application::HandleStateChangedEvent() {
         }
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
-            audio_service_.SetHoldUplinkEncode(true);
-            audio_service_.ResetEchoProfile();
-            audio_service_.ClearPcmPreroll();
+            while (audio_service_.PopPacketFromSendQueue())
+                ;
+            audio_service_.BeginSpeakingCapture();
 
             if (listening_mode_ != kListeningModeRealtime) {
 #if CONFIG_ENABLE_VAD_INTERRUPT
@@ -1311,9 +1238,7 @@ void Application::HandleStateChangedEvent() {
 #if CONFIG_ENABLE_VAD_INTERRUPT
             CancelVadInterruptTimer();
             speaking_started_us_ = esp_timer_get_time();
-            // Do not wait for VAD silence: leak + min_noise=1000 keeps VAD in
-            // SPEECH, so a rising-edge arm never happens and TTS is deaf.
-            vad_interrupt_armed_ = IsVadBargeInEnabled();
+            vad_interrupt_armed_ = IsVadBargeInEnabled() && !audio_service_.IsVoiceDetected();
 #endif
             break;
         case kDeviceStateWifiConfiguring:
@@ -1341,11 +1266,11 @@ void Application::MaybeStartVadInterruptTimer() {
     if (!IsVadBargeInEnabled()) {
         return;
     }
-    const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
-    if (elapsed < kSpeakingBargeInGuardUs) {
+    if (audio_service_.IsPlaybackIdle()) {
         return;
     }
-    if (!audio_service_.EchoProfileReady() || !audio_service_.IsConfirmedNearEndSpeech()) {
+    const int64_t elapsed = esp_timer_get_time() - speaking_started_us_;
+    if (elapsed < kSpeakingBargeInGuardUs) {
         return;
     }
     if (vad_interrupt_timer_ == nullptr) {
@@ -1355,13 +1280,9 @@ void Application::MaybeStartVadInterruptTimer() {
         return;
     }
 
-    int volume = 70;
-    if (auto* codec = Board::GetInstance().GetAudioCodec()) {
-        volume = codec->output_volume();
-    }
-    int64_t sustain_ms = 220;
+    int64_t sustain_ms = 200;
 
-    ESP_LOGI(TAG, "VAD barge-in candidate (vol=%d), confirming in %d ms", volume,
+    ESP_LOGI(TAG, "VAD barge-in candidate, confirming in %d ms",
              static_cast<int>(sustain_ms));
     esp_timer_start_once(vad_interrupt_timer_, sustain_ms * 1000);
 }
@@ -1373,15 +1294,12 @@ void Application::HandleVadInterruptConfirm() {
     if (!IsVadBargeInEnabled()) {
         return;
     }
-    if (!audio_service_.IsSustainedNearEndSpeech()) {
-        ESP_LOGI(TAG, "VAD barge-in ignored: residual is TTS echo pb=%d res=%d floor=%d",
-                 audio_service_.PlaybackLevel(), audio_service_.ResidualLevel(),
-                 audio_service_.EchoFloor());
-        audio_service_.ReleaseBargeInCapture();
-        vad_interrupt_armed_ = true;
+    if (!audio_service_.IsVoiceDetected() || audio_service_.IsPlaybackIdle()) {
         return;
     }
-    ESP_LOGI(TAG, "VAD barge-in confirmed");
+    ESP_LOGI(TAG, "VAD barge-in confirmed pb=%d res=%d mic=%d ref=%d",
+             audio_service_.PlaybackLevel(), audio_service_.ResidualLevel(),
+             audio_service_.MicLevel(), audio_service_.RefLevel());
     AbortSpeaking(kAbortReasonVadInterrupt);
     audio_service_.ResetDecoder();
     barge_in_listen_ = true;
@@ -1604,9 +1522,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) { RequestChatWake
 
 void Application::ResetYunxiangjiSessionLocked() {
     last_taken_announce_.clear();
-    first_spoken_announce_.clear();
     yunxiangji_tts_played_ = false;
-    yunxiangji_acked_ = false;
     external_detect_sent_ = false;
     suppress_announce_replay_.store(false, std::memory_order_relaxed);
 }
@@ -1636,28 +1552,17 @@ bool Application::ShouldSkipExternalDetect(const std::string& text) const {
 
 bool Application::ShouldDropDuplicateAnnounceTts(const std::string& spoken) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (last_taken_announce_.empty() || spoken.empty() || IsMcpTtsLine(spoken)) {
+    if (last_taken_announce_.empty() || spoken.empty()) {
         return false;
     }
-    const bool similar = SimilarAnnounceText(spoken, last_taken_announce_) ||
-                         SimilarAnnounceText(spoken, first_spoken_announce_);
-    if (!yunxiangji_tts_played_) {
-        first_spoken_announce_ = spoken;
-        yunxiangji_tts_played_ = true;
+    if (NormalizeAnnounceText(spoken) != NormalizeAnnounceText(last_taken_announce_)) {
         return false;
     }
-    return similar;
-}
-
-bool Application::IsRecentlyAckedAnnounce(const std::string& text) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (last_acked_announce_.empty() || text.empty()) {
-        return false;
+    if (yunxiangji_tts_played_) {
+        return true;
     }
-    if (esp_timer_get_time() - last_acked_us_ > 10LL * 60 * 1000 * 1000) {
-        return false;
-    }
-    return SimilarAnnounceText(text, last_acked_announce_);
+    yunxiangji_tts_played_ = true;
+    return false;
 }
 
 void Application::SetPendingAnnounce(const std::string& text) {
@@ -1671,16 +1576,6 @@ bool Application::PushPendingAnnounce(const std::string& text) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     const std::string incoming = NormalizeAnnounceText(text);
-    if (incoming.empty()) {
-        return false;
-    }
-    if (!last_acked_announce_.empty() &&
-        esp_timer_get_time() - last_acked_us_ <= 10LL * 60 * 1000 * 1000) {
-        if (SimilarAnnounceText(text, last_acked_announce_)) {
-            ESP_LOGI(TAG, "PushPendingAnnounce: skip recently acked content");
-            return false;
-        }
-    }
     if (pending_announce_.empty()) {
         pending_announce_ = text;
         return true;
@@ -1697,7 +1592,6 @@ void Application::PrepareAnnounceInterrupt() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         last_taken_announce_.clear();
-        first_spoken_announce_.clear();
         yunxiangji_tts_played_ = false;
     }
     last_external_detect_text_.clear();
@@ -1724,51 +1618,26 @@ std::string Application::PeekPendingAnnounce() {
 
 std::string Application::TakePendingAnnounce() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (yunxiangji_acked_) {
-        pending_announce_.clear();
-        return {};
-    }
     std::string text = pending_announce_;
     pending_announce_.clear();
     if (!text.empty()) {
         last_taken_announce_ = text;
-        first_spoken_announce_.clear();
         yunxiangji_tts_played_ = false;
     }
     return text;
 }
 
 std::string Application::AckPendingAnnounce() {
-    bool already = false;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        already = yunxiangji_acked_;
-        pending_announce_.clear();
-        yunxiangji_acked_ = true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_announce_.clear();
+    if (!last_taken_announce_.empty()) {
         yunxiangji_tts_played_ = true;
-        if (!last_taken_announce_.empty()) {
-            last_acked_announce_ = last_taken_announce_;
-            last_acked_us_ = esp_timer_get_time();
-        }
     }
-    if (already) {
-        return "ok";
-    }
-    SuppressAnnounceReplay();
-    Schedule([this]() {
-        if (pending_text_to_send_ == kYunxiangjiWakeText) {
-            pending_text_to_send_.clear();
-        }
-    });
-    return "已播报。整轮禁止再次调用任何工具，不要再说话，直接结束。";
+    return "已播报。不要再口头播报同一句话，不要说再见，不要结束会话，保持聆听等用户说话。";
 }
 
 void Application::HandleExternalTextMessage(const std::string& text, const std::string& announce) {
     if (text.empty()) {
-        return;
-    }
-    if (!announce.empty() && IsRecentlyAckedAnnounce(announce)) {
-        ESP_LOGI(TAG, "HandleExternalTextMessage: skip recently acked announce");
         return;
     }
 
@@ -1777,16 +1646,10 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
         {
             std::lock_guard<std::mutex> lock(mutex_);
             last_taken_announce_.clear();
-            first_spoken_announce_.clear();
             yunxiangji_tts_played_ = false;
-            yunxiangji_acked_ = false;
         }
         suppress_announce_replay_.store(false, std::memory_order_relaxed);
         interrupt = PushPendingAnnounce(announce);
-        if (!interrupt) {
-            ESP_LOGI(TAG, "HandleExternalTextMessage: skip duplicate announce push");
-            return;
-        }
     }
 
     Schedule([this, text, interrupt]() {

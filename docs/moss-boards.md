@@ -52,20 +52,19 @@
 
 ### 2.2 唤醒词与麦克风（手感必须一致）
 
-模拟增益和 AEC 参考增益写在 **唯一** 头文件，两板 `config.h` 只 include，不准再 `#define`：
+模拟增益写在 **唯一** 头文件，两板 `config.h` 只 include，不准再 `#define`：
 
 `main/boards/moss/moss_shared_audio.h`
 
 | 项 | 值 | 说明 |
 |---|---|---|
 | MIC 模拟增益 | `AUDIO_CODEC_INPUT_GAIN` = 37.5 dB | ES7210 MIC1，不是扬声器音量 |
-| AEC 参考增益 | `AUDIO_CODEC_REFERENCE_GAIN` = 37.5 dB | 必须与 MIC 同增益，否则线性 AEC 消不干净 |
-| 参考声道 | `AUDIO_CODEC_REFERENCE_CHANNEL` = 2 | |
+| AEC 参考 | ES7210 MIC3 电气回灌（TDM slot 1） | 官方也只用一颗模拟麦；MIC2 不用。AFE 是 `MR`：MIC1=M，MIC3 喇叭回路=R |
 | 出厂唤醒词 | `mo si` / `MOSS` | 两板 `config.json` 相同 |
 | 出厂灵敏度 | `CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20` | 数值越小越灵敏；1–99 |
 | 引擎 | MultiNet 自定义唤醒 + 设备端 AEC | `CONFIG_USE_CUSTOM_WAKE_WORD` + `CONFIG_USE_DEVICE_AEC` |
 
-全双工（AEC 开）走 ESP-SR `AFE_TYPE_FD` + `AEC_MODE_FD_HIGH_PERF`，NLP 用官方默认 `AEC_NLP_LEVEL_AGGR`，VAD 开 `vad_mute_playback`（让检测看不到喇叭）。TTS 期间用 AEC 残差确认近端，约 220 ms 后打断。新一句 MQTT `sentence_start` 后忽略约 600 ms（AEC 起音残差会跟着播放跳，约 300 ms），只触发一次，禁止用 PCM 播放能量沿续窗（语音每个音节都会跳 20%+，整段会变聋）。禁止用每句去清 `speaking_started_us_`。TTS 自然结束后先等残差静音并丢掉余响预卷，开门时只丢掉真正静音帧。连续 fetch 不要拼接 `vad_cache`。
+全双工（AEC 开）对齐小智立创实战派：`AFE_TYPE_VC` + `AEC_MODE_VOIP_HIGH_PERF` + `VAD_MODE_0`。Realtime 下 TTS 期间继续把 AEC 后的麦送上云端，由云端打断；本地 VAD 只改听筒灯，不拿来掐 TTS（AFE VAD 会把喇叭当成说话）。采集与官方相同：`mask(0)|mask(1)` 喂 `MR`，第二路是喇叭回灌不是第二颗麦。不上行 `vad_cache`，避免首字重复。
 
 `PUT /config/device` 的 `wake_word` **只改词条和灵敏度**，不得改 MIC 增益、不得改扬声器音量。灵敏度存在唤醒词 NVS，扬声器音量走 codec NVS，互不覆盖。
 

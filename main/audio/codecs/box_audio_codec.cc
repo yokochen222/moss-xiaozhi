@@ -208,6 +208,9 @@ void BoxAudioCodec::EnableInput(bool enable) {
             .mclk_multiple = 0,
         };
         if (input_reference_) {
+            // xiaozhi lichuang-dev / #2036: TDM slot order is MIC1, MIC3, MIC2, MIC4.
+            // mask(0)|mask(1) = MIC1 (the only analog mic AFE uses) + MIC3 speaker
+            // loopback as R. MIC2 is unused; AFE_TYPE_VC is always MR, never MMR.
             fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
         }
         // ES7210 shares I2C1 with PCA9685 / OV2640 SCCB. One NACK must not abort the chip.

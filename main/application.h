@@ -146,7 +146,7 @@ private:
     Application();
     ~Application();
 
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
@@ -164,11 +164,7 @@ private:
     std::string pending_announce_;
     std::string last_external_detect_text_;
     std::string last_taken_announce_;
-    std::string first_spoken_announce_;
-    std::string last_acked_announce_;
-    int64_t last_acked_us_ = 0;
     bool yunxiangji_tts_played_ = false;
-    bool yunxiangji_acked_ = false;
     bool external_detect_sent_ = false;
     std::atomic<bool> suppress_announce_replay_{false};
 
@@ -219,7 +215,6 @@ private:
     void SendOrQueueExternalDetect(const std::string& text);
     bool ShouldSkipExternalDetect(const std::string& text) const;
     bool ShouldDropDuplicateAnnounceTts(const std::string& spoken);
-    bool IsRecentlyAckedAnnounce(const std::string& text) const;
     void SuppressAnnounceReplay();
     bool IsAnnounceReplaySuppressed() const;
 

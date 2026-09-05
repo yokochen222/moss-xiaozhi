@@ -11,18 +11,20 @@ engine.
 
 | Target | Engine | Wake word | Uplink processing |
 | --- | --- | --- | --- |
-| ESP32-S3 / ESP32-P4 / ESP32-S31 | `AfeAudioEngine` | WakeNet inside AFE, or MultiNet fed from AFE output | FD AEC + VAD when audio processing is enabled |
+| ESP32-S3 / ESP32-P4 / ESP32-S31 | `AfeAudioEngine` | WakeNet inside AFE, or MultiNet fed from AFE output | VC + VOIP AEC + VAD_MODE_0 when audio processing is enabled |
 | ESP32 / ESP32-C3 / ESP32-C5 / ESP32-C6 | `LiteAudioEngine` | Standalone WakeNet when configured | Raw mono PCM |
 
-`AfeAudioEngine` owns a single FD AFE instance. WakeNet and voice uplink share
-that instance, so enabling both no longer creates two AFE pipelines. For custom
-MultiNet wake words, AFE fetch output is passed to `CustomWakeWord`; MultiNet is
-not created on the smaller targets.
+`AfeAudioEngine` owns a single AFE instance (`AFE_TYPE_VC`). WakeNet and voice
+uplink share that instance, so enabling both no longer creates two AFE
+pipelines. For custom MultiNet wake words, AFE fetch output is passed to
+`CustomWakeWord`; MultiNet is not created on the smaller targets.
 
-The AFE configuration currently uses `FD_HIGH_PERF` AEC with
-`AEC_NLP_LEVEL_AGGR` (ESP-SR default). `VERYAGGR` also suppresses the user's
-voice during TTS and makes barge-in deaf. WebRTC/NSNet noise suppression is
-intentionally disabled because the project does not ship an NSNet model.
+The AFE configuration matches 78/xiaozhi-esp32 lichuang-dev: `AFE_TYPE_VC`,
+`AEC_MODE_VOIP_HIGH_PERF`, `AEC_NLP_LEVEL_VERYAGGR`, `VAD_MODE_0`,
+`vad_min_noise_ms = 100`. WebRTC/NSNet noise suppression is intentionally
+disabled because the project does not ship an NSNet model. Input format is
+always `MR`: one analog mic plus the ES7210 MIC3 speaker loopback. The second
+analog mic (MIC2) is unused.
 
 When wake-word audio upload is enabled, the most recent two seconds of PCM are
 stored in a single 64 KB PSRAM ring buffer. WakeNet and MultiNet share the same

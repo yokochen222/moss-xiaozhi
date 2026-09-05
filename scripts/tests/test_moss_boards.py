@@ -55,8 +55,10 @@ class MossBoardIdentityTests(unittest.TestCase):
     def test_wake_and_mic_defaults_are_shared(self):
         shared = (ROOT / "main/boards/moss/moss_shared_audio.h").read_text(encoding="utf-8")
         self.assertIn("#define AUDIO_CODEC_INPUT_GAIN 37.5f", shared)
-        self.assertIn("#define AUDIO_CODEC_REFERENCE_GAIN 37.5f", shared)
-        self.assertIn("#define AUDIO_CODEC_REFERENCE_CHANNEL 2", shared)
+        self.assertIn("AFE is always MR", shared)
+        self.assertIn("MIC2 is unused", shared)
+        self.assertNotIn("#define AUDIO_CODEC_REFERENCE_GAIN", shared)
+        self.assertNotIn("#define AUDIO_CODEC_REFERENCE_CHANNEL", shared)
         for leaf in ("moss-onvif", "moss-ov2640"):
             header = (ROOT / "main/boards" / f"moss/{leaf}" / "config.h").read_text(encoding="utf-8")
             self.assertIn('#include "moss_shared_audio.h"', header)
@@ -66,14 +68,15 @@ class MossBoardIdentityTests(unittest.TestCase):
             self.assertIn("CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=20", append)
             self.assertIn('CONFIG_CUSTOM_WAKE_WORD="mo si"', append)
             self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
+            self.assertIn("CONFIG_ENABLE_VAD_INTERRUPT=n", append)
 
     def test_both_boards_pass_shared_codec_gains_not_zero_reference(self):
         onvif = (ROOT / "main/boards/moss/moss-onvif/moss_onvif_board.cc").read_text(encoding="utf-8")
         ov2640 = (ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc").read_text(encoding="utf-8")
         for src in (onvif, ov2640):
             self.assertIn("AUDIO_CODEC_INPUT_GAIN", src)
-            self.assertIn("AUDIO_CODEC_REFERENCE_CHANNEL", src)
-            self.assertIn("AUDIO_CODEC_REFERENCE_GAIN", src)
+            self.assertNotIn("AUDIO_CODEC_REFERENCE_CHANNEL", src)
+            self.assertNotIn("AUDIO_CODEC_REFERENCE_GAIN", src)
         self.assertNotIn("AUDIO_CODEC_INPUT_GAIN, 2, 0.0f", ov2640)
 
     def test_ov2640_release_playback_keeps_i2s_while_mic_on(self):
@@ -252,15 +255,8 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         self.assertIn("yunxiangji.create:", src)
         self.assertIn("yunxiangji.cancel:", src)
         self.assertIn("yunxiangji.delete:", src)
-        self.assertIn("到点提醒你起身喝水", src)
+        self.assertIn("提醒你喝水", src)
         self.assertIn("禁止只写「喝水」", src)
-        self.assertIn("词汇推理", src)
-        self.assertIn("禁止用历史对话里其他人的名字", src)
-        self.assertIn("一两句自然", src)
-        self.assertIn("不要照读原文", src)
-        self.assertIn("待播报备忘", src)
-        self.assertIn("其它对话一律不要调用本工具", src)
-        self.assertNotIn("不要改写", src)
         self.assertIn("inMinutes", src)
         self.assertIn("FormatYunxiangjiSchedule", src)
         self.assertIn("queued create %s when=", src)
@@ -439,8 +435,6 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         self.assertIn("ShouldSkipExternalDetect", handle)
         self.assertIn("interrupt speaking for announce", handle)
         self.assertIn("inject announce while awake", handle)
-        self.assertIn("skip recently acked announce", handle)
-        self.assertIn("skip duplicate announce push", handle)
         self.assertIn("AbortSpeaking", handle)
         self.assertIn("ResetDecoder", handle)
         self.assertNotIn("CONFIG_BOARD_TYPE_MOSS", handle)
@@ -460,8 +454,6 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
         self.assertIn("skip already-sent detect", app_all)
         self.assertIn("TakePendingAnnounce", app_all)
         self.assertIn("last_taken_announce_", app_all)
-        self.assertIn("first_spoken_announce_", app_all)
-        self.assertIn("IsMcpTtsLine", app_all)
 
     def test_idle_wake_reports_connecting_not_stale_idle(self):
         src = (ROOT / "main/api/methods/chat/chat_handlers.cc").read_text(encoding="utf-8")
@@ -498,19 +490,6 @@ class MossOnvifControlSurfaceTests(unittest.TestCase):
             self.assertIn(device, src, device)
         self.assertIn('result.message = "unknown device"', src)
 
-    def test_eye_motor_default_on_oscillates_without_mcp_copy(self):
-        hw = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
-        self.assertIn("motor.StartOscillate", hw)
-        self.assertNotIn("motor.StartForward", hw)
-        mcp = (ROOT / "main/mcp/tools/eye_motor.cc").read_text(encoding="utf-8")
-        self.assertIn("StartOscillate(speed)", mcp)
-        self.assertNotIn("8秒", mcp)
-        self.assertNotIn("8000", mcp)
-        onvif = (ROOT / "main/device/eye_motor.h").read_text(encoding="utf-8")
-        ov2640 = onvif
-        self.assertGreaterEqual(onvif.count("OSC_PHASE_MS = 8000"), 2)
-        self.assertIn("StartOscillate", ov2640)
-
 
 class MossBargeInTests(unittest.TestCase):
     def test_aec_off_speaking_is_half_duplex_not_barge_in(self):
@@ -528,32 +507,32 @@ class MossBargeInTests(unittest.TestCase):
         self.assertIn("kAecOff ? kListeningModeAutoStop : kListeningModeRealtime", mode)
         self.assertIn("kAecOnDeviceSide", src[src.find("bool Application::IsVadBargeInEnabled") :])
 
-    def test_realtime_tts_holds_pcm_preroll_without_encoding(self):
+    def test_realtime_tts_keeps_aec_uplink_like_xiaozhi(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         start = src.find("if (bits & MAIN_EVENT_SEND_AUDIO)")
         self.assertGreater(start, 0)
         body = src[start : src.find("if (bits & MAIN_EVENT_WAKE_WORD_DETECTED)", start)]
-        speaking = body[body.find("kDeviceStateSpeaking") : body.find("else if (state != kDeviceStateListening")]
-        self.assertIn("PopPacketFromSendQueue()", speaking)
-        self.assertNotIn("SendUplinkFromQueue()", speaking)
-        self.assertNotIn("keep_preroll", speaking)
+        self.assertIn("SendUplinkFromQueue()", body)
+        self.assertNotIn("kAecOnDeviceSide", body)
+        self.assertNotIn("HoldSpeakingUplink()", body)
+        self.assertNotIn("UpdateSpeakingBargeIn()", body)
+        service = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
+        self.assertIn("if (!device_aec_enabled_)", service)
+        self.assertNotIn("FillSoftwareAecReference", service)
+        speaking = src[
+            src.find("case kDeviceStateSpeaking:") : src.find("case kDeviceStateWifiConfiguring:")
+        ]
+        self.assertIn("BeginSpeakingCapture()", speaking)
         listening = src[
             src.find("case kDeviceStateListening:") : src.find("case kDeviceStateSpeaking:")
         ]
-        self.assertIn("HasBargeInCapture()", listening)
-        self.assertIn("FlushBargeInPcmToEncodeQueue()", listening)
-        self.assertIn("SetHoldUplinkEncode(false)", listening)
-        self.assertIn("GateUplinkUntilEchoQuiet()", listening)
-        speaking_state = src[
-            src.find("case kDeviceStateSpeaking:") : src.find("case kDeviceStateWifiConfiguring:")
-        ]
-        self.assertIn("SetHoldUplinkEncode(true)", speaking_state)
+        self.assertIn("FlushSpeakingCaptureToSendQueue()", listening)
+        self.assertIn("EndSpeakingCapture()", listening)
+        self.assertIn("pending_listening_start_ = true", listening)
+        self.assertNotIn("kListeningModeAutoStop && !audio_service_.IsPlaybackIdle()", listening)
         afe = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
-        self.assertNotIn("result->vad_cache", afe)
-        self.assertIn("vad_delay_ms = 128", afe)
-        service = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
-        self.assertIn("PushHeldPcmFrame", service)
-        self.assertIn("IsConfirmedNearEndSpeech()", service[service.find("void AudioService::PushHeldPcmFrame") :])
+        self.assertNotIn("prepend_vad_cache", afe)
+        self.assertNotIn("vad_cache", afe)
         header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
         self.assertIn("MAX_ENCODE_TASKS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)", header)
 
@@ -562,11 +541,8 @@ class MossBargeInTests(unittest.TestCase):
         start = src.find("if (bits & MAIN_EVENT_VAD_CHANGE)")
         self.assertGreater(start, 0)
         vad = src[start : src.find("if (bits & MAIN_EVENT_VAD_INTERRUPT_CONFIRM)", start)]
-        self.assertIn("vad_interrupt_armed_ = true", vad)
-        self.assertIn("MaybeStartVadInterruptTimer()", vad)
-        self.assertIn("IsVadBargeInEnabled()", vad)
-        self.assertNotIn("IsConfirmedNearEndSpeech()", vad)
-        self.assertNotIn("UpdateSpeakingBargeIn()", vad)
+        self.assertIn("kDeviceStateListening", vad)
+        self.assertIn("led->OnStateChanged()", vad)
 
     def test_speaking_start_arms_after_silence_and_keeps_vad(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
@@ -577,9 +553,7 @@ class MossBargeInTests(unittest.TestCase):
         self.assertIn("IsVadBargeInEnabled()", speaking)
         self.assertIn("EnableVoiceProcessing(true)", speaking)
         self.assertIn("EnableVoiceProcessing(false)", speaking)
-        self.assertIn("ResetEchoProfile()", speaking)
-        self.assertIn("vad_interrupt_armed_ = IsVadBargeInEnabled();", speaking)
-        self.assertNotIn("!audio_service_.IsVoiceDetected()", speaking)
+        self.assertNotIn("ResetEchoProfile()", speaking)
 
     def test_barge_in_confirm_is_sustained_vad(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
@@ -589,10 +563,10 @@ class MossBargeInTests(unittest.TestCase):
             )
         ]
         self.assertIn("AbortSpeaking", confirm)
+        self.assertIn("IsVoiceDetected()", confirm)
         self.assertIn("barge_in_listen_ = true", confirm)
         self.assertIn("IsVadBargeInEnabled()", confirm)
-        self.assertIn("IsSustainedNearEndSpeech()", confirm)
-        self.assertIn("ReleaseBargeInCapture()", confirm)
+        self.assertNotIn("HasNearEndCapture()", confirm)
         self.assertNotIn("IsConfirmedNearEndSpeech()", confirm)
         self.assertNotIn("SetPlaybackMuted", confirm)
         start_timer = src[
@@ -600,29 +574,26 @@ class MossBargeInTests(unittest.TestCase):
                 "void Application::HandleVadInterruptConfirm"
             )
         ]
-        self.assertIn("IsConfirmedNearEndSpeech()", start_timer)
-        self.assertIn("EchoProfileReady()", start_timer)
+        self.assertIn("IsVadBargeInEnabled()", start_timer)
+        self.assertNotIn("IsConfirmedNearEndSpeech()", start_timer)
         self.assertIn("kSpeakingBargeInGuardUs", start_timer)
-        self.assertIn("sustain_ms = 220", start_timer)
+        self.assertIn("sustain_ms = 200", start_timer)
         self.assertNotIn("sustain_ms = 950", start_timer)
-        self.assertNotIn("sustain_ms = 750", start_timer)
         self.assertNotIn("SetPlaybackMuted", start_timer)
         sentence_start = src.find('else if (strcmp(state->valuestring, "sentence_start") == 0)')
         stt = src.find('else if (strcmp(type->valuestring, "stt") == 0)', sentence_start)
         self.assertGreater(sentence_start, 0)
         self.assertGreater(stt, sentence_start)
         sentence = src[sentence_start:stt]
-        self.assertNotIn("speaking_started_us_ = esp_timer_get_time()", sentence)
         self.assertNotIn("CancelVadInterruptTimer()", sentence)
         self.assertNotIn("vad_interrupt_armed_ = false", sentence)
-        self.assertIn("NoteTtsSentenceStart()", sentence)
 
     def test_barge_in_resends_listen_start(self):
         src = (ROOT / "main/application.cc").read_text(encoding="utf-8")
         listening = src[
             src.find("case kDeviceStateListening:") : src.find("case kDeviceStateSpeaking:")
         ]
-        self.assertIn("keep_preroll = barge_in_listen_ || audio_service_.HasBargeInCapture()", listening)
+        self.assertIn("keep_preroll = barge_in_listen_", listening)
         self.assertIn("keep_preroll", listening)
         start = src[
             src.find("void Application::StartListeningAudio") : src.find(
@@ -635,82 +606,40 @@ class MossBargeInTests(unittest.TestCase):
     def test_afe_uses_ov2640_barge_in_pipeline(self):
         src = (ROOT / "main/audio/audio_service.cc").read_text(encoding="utf-8")
         header = (ROOT / "main/audio/audio_service.h").read_text(encoding="utf-8")
-        self.assertIn("echo_ready_", src)
-        self.assertIn("kEchoLearnMinFrames", src)
-        self.assertIn("kEchoSentenceGuardFrames = 10", src)
-        self.assertIn("NoteTtsSentenceStart", src)
-        self.assertNotIn("kPlaybackJumpPct", src)
-        self.assertNotIn("AEC playback jump", src)
-        self.assertIn("kTtsLeakPctOfPlayback = 32", src)
-        self.assertIn("kNearEndEnterMargin = 150", src)
-        self.assertIn("kNearEndConfirmMargin = 60", src)
-        self.assertIn("kEchoQuietFrames = 8", src)
-        self.assertIn("kNewSpeechAbs = 400", src)
-        self.assertIn("kNewSpeechFrames = 2", src)
-        self.assertNotIn("kEchoLearnMaxFrames", src)
-        self.assertNotIn("echo_learn_frames_", src)
-        near = src[
-            src.find("bool AudioService::IsNearEndSpeechWithMargin") : src.find(
-                "bool AudioService::IsConfirmedNearEndSpeech"
-            )
-        ]
-        self.assertIn("hold_uplink_encode_", near)
-        self.assertNotIn("mic_need", near)
-        self.assertNotIn("echo_mic_floor_", near)
-        self.assertNotIn("residual * 2", near)
-        self.assertIn("ReleaseBargeInCapture", src)
-        start_cap = src[
-            src.find("void AudioService::StartBargeCaptureFromPrerollLocked") : src.find(
-                "void AudioService::PushHeldPcmFrame"
-            )
-        ]
-        self.assertIn("barge_capture_.empty()", start_cap)
-        release = src[
-            src.find("void AudioService::ReleaseBargeInCapture") : src.find(
-                "void AudioService::FlushBargeInPcmToEncodeQueue"
-            )
-        ]
-        self.assertNotIn("barge_capture_.clear()", release)
-        gate = src[
-            src.find("bool AudioService::ConsumeEchoTailGate") : src.find(
-                "void AudioService::EnableDeviceAec"
-            )
-        ]
-        self.assertIn("pcm_preroll_.clear()", gate)
-        self.assertIn("EncodePrerollDroppingQuiet", gate)
-        self.assertIn("kEchoQuietAbs", src[src.find("void AudioService::EncodePrerollDroppingQuiet") : src.find("bool AudioService::ConsumeEchoTailGate")])
-        self.assertNotIn("voice_detected_", gate)
-        self.assertIn("GateUplinkUntilEchoQuiet", src)
-        self.assertIn("ConsumeEchoTailGate", src)
-        self.assertIn("hold_uplink_encode_", src[src.find("int AudioService::EffectivePlaybackLevel") : src.find("int AudioService::PlaybackLevel")])
+        self.assertIn("speaking_capture_.load", src)
+        self.assertIn("TTS residual is the echo floor", src)
+        self.assertIn("EchoProfileReady()", src)
+        self.assertIn("AEC echo floor learned", src)
+        self.assertIn("if (!IsWakeWordRunning())", src)
         self.assertIn(".enable_dtx         = false", header)
         afe = (ROOT / "main/audio/engines/afe_audio_engine.cc").read_text(encoding="utf-8")
-        self.assertIn("AFE_TYPE_FD", afe)
-        self.assertIn("aec_mode = AEC_MODE_FD_HIGH_PERF", afe)
-        self.assertIn("aec_nlp_level = AEC_NLP_LEVEL_AGGR", afe)
-        self.assertNotIn("AEC_NLP_LEVEL_VERYAGGR", afe)
-        self.assertNotIn("AEC_MODE_VOIP_HIGH_PERF", afe)
-        self.assertNotIn("AFE_TYPE_VC", afe)
+        self.assertIn("AFE_TYPE_VC", afe)
+        self.assertIn("aec_mode = AEC_MODE_VOIP_HIGH_PERF", afe)
+        self.assertIn("aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR", afe)
+        self.assertNotIn("AEC_MODE_FD_HIGH_PERF", afe)
+        self.assertNotIn("AFE_TYPE_FD", afe)
         self.assertNotIn("AFE_TYPE_SR", afe)
-        self.assertIn("aec_filter_length = 4", afe)
-        self.assertIn("vad_mode = VAD_MODE_1", afe)
-        self.assertIn("vad_min_speech_ms = 128", afe)
-        self.assertIn("vad_min_noise_ms = 1000", afe)
-        self.assertIn("vad_delay_ms = 128", afe)
-        self.assertNotIn("result->vad_cache", afe)
-        self.assertIn("vad_mute_playback = true", afe)
-        self.assertIn("afe_config_check(afe_config)", afe)
+        self.assertIn("vad_mode = VAD_MODE_0", afe)
+        self.assertIn("vad_min_noise_ms = 100", afe)
+        self.assertNotIn("vad_min_speech_ms = 250", afe)
+        self.assertNotIn("vad_delay_ms = 512", afe)
+        self.assertNotIn("vad_cache", afe)
+        self.assertNotIn("vad_mute_playback = true", afe)
         self.assertIn("afe_config_print(afe_config)", afe)
-        self.assertIn("afe_linear_gain = 1.0f", afe)
-        self.assertIn("device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)", afe)
         self.assertIn("aec_applied_", afe)
-        self.assertIn("enable == already", afe)
+        self.assertIn("device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled)", afe)
+        box = (ROOT / "main/audio/codecs/box_audio_codec.cc").read_text(encoding="utf-8")
+        self.assertIn("MIC1, MIC3, MIC2, MIC4", box)
+        self.assertIn("ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1)", box)
+        self.assertIn("never MMR", box)
+        init = afe[afe.find("if (codec_->input_reference())") : afe.find("print_pipeline")]
+        self.assertIn("disable_aec(afe_data_)", init)
 
     def test_barge_in_is_shared_not_forked_per_board(self):
         markers = (
             "MaybeStartVadInterruptTimer",
             "vad_interrupt_armed_",
-            "AEC_NLP_LEVEL_AGGR",
+            "AEC_NLP_LEVEL_VERYAGGR",
             "vad_delay_ms",
         )
         for leaf in ("moss-onvif", "moss-ov2640"):

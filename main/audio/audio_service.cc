@@ -90,12 +90,13 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
     audio_engine_->OnOutput([this](std::vector<int16_t>&& data) {
         NoteResidualPcm(data.data(), data.size());
-        if (hold_uplink_encode_.load(std::memory_order_relaxed)) {
-            PushHeldPcmFrame(std::move(data));
-            return;
-        }
-        if (ConsumeEchoTailGate(data)) {
-            return;
+        if (speaking_capture_.load(std::memory_order_relaxed)) {
+            MaybeAppendSpeakingCapture(data);
+            // xiaozhi realtime: keep AEC-cleaned uplink flowing during TTS so
+            // the cloud (and local VAD) can hear the user. Half-duplex holds.
+            if (!device_aec_enabled_) {
+                return;
+            }
         }
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
@@ -364,10 +365,8 @@ void AudioService::AudioOutputTask() {
 #endif
 
         if (playback_muted_.load(std::memory_order_relaxed)) {
-            NotePlaybackPcm(task->pcm.data(), task->pcm.size());
             std::fill(task->pcm.begin(), task->pcm.end(), 0);
         } else {
-            NotePlaybackPcm(task->pcm.data(), task->pcm.size());
             const int duck = playback_duck_q8_.load(std::memory_order_relaxed);
             if (duck > 0 && duck < 256) {
                 for (int16_t& s : task->pcm) {
@@ -375,6 +374,7 @@ void AudioService::AudioOutputTask() {
                 }
             }
         }
+        NotePlaybackPcm(task->pcm.data(), task->pcm.size());
         codec_->OutputData(task->pcm);
 
         /* Update the last output time */
@@ -758,23 +758,12 @@ void AudioService::EnableAudioTesting(bool enable) {
 
 namespace {
 constexpr int kEchoFloorInit = 250;
-constexpr int kEchoMicFloorInit = 200;
 constexpr int kQuietPlayback = 45;
-constexpr int kMinNearEndAbs = 180;
+constexpr int kMinNearEndAbs = 200;
 constexpr int kPauseNearEndAbs = 260;
-constexpr int kMinResidualPctOfPlayback = 16;
-constexpr int kTtsLeakPctOfPlayback = 32;  // AGGR leftover at vol=80 (log: 842/2767)
-constexpr int kNearEndEnterMargin = 150;
-constexpr int kNearEndConfirmMargin = 60;
+constexpr int kMinResidualPctOfPlayback = 24;
 constexpr int kPlaybackStaleUs = 300 * 1000;
-constexpr int kEchoLearnMinFrames = 10;  // 600 ms of 60 ms playback
-constexpr int kEchoConvergedFrames = 5;
-constexpr int kEchoSentenceGuardFrames = 10;  // 600 ms, once per MQTT sentence
-constexpr int kEchoQuietAbs = 180;
-constexpr int kEchoQuietFrames = 8;  // 480 ms; 300 ms still encoded "查询。"
-constexpr int kNewSpeechAbs = 400;
-constexpr int kNewSpeechFrames = 2;  // 120 ms of loud; onset lives in preroll
-constexpr int64_t kEchoTailMaxUs = 1500 * 1000;
+constexpr int kEchoLearnFrames = 4;  // ~240ms of real TTS, not pre-roll silence
 }  // namespace
 
 int AudioService::PcmMeanAbs(const int16_t* data, size_t samples) {
@@ -791,9 +780,9 @@ int AudioService::PcmMeanAbs(const int16_t* data, size_t samples) {
 
 int AudioService::EffectivePlaybackLevel() const {
     const int stored = playback_level_.load(std::memory_order_relaxed);
-    // TTS packet gaps (and sentence pauses) must not look like "playback
-    // stopped": residual then takes the quiet-path gate and aborts as user speech.
-    if (hold_uplink_encode_.load(std::memory_order_relaxed)) {
+    if (speaking_capture_.load(std::memory_order_relaxed)) {
+        // Packet gaps must not look like "speaker silent" or TTS leak
+        // takes the quiet-pause gate and aborts into a self-reply loop.
         return stored;
     }
     const int64_t last = last_playback_us_.load(std::memory_order_relaxed);
@@ -809,9 +798,75 @@ int AudioService::EffectivePlaybackLevel() const {
 
 int AudioService::PlaybackLevel() const { return EffectivePlaybackLevel(); }
 
-int AudioService::ResidualLevel() const { return residual_level_.load(std::memory_order_relaxed); }
-
 int AudioService::EchoFloor() const { return echo_floor_.load(std::memory_order_relaxed); }
+
+void AudioService::BeginSpeakingCapture() {
+    speaking_capture_.store(true, std::memory_order_relaxed);
+    capture_latched_.store(false, std::memory_order_relaxed);
+    near_end_latched_.store(false, std::memory_order_relaxed);
+    if (echo_floor_.load(std::memory_order_relaxed) <= kEchoFloorInit) {
+        echo_learn_frames_.store(kEchoLearnFrames, std::memory_order_relaxed);
+    }
+    std::lock_guard<std::mutex> lock(capture_mutex_);
+    speaking_capture_pcm_.clear();
+    speaking_capture_pcm_.reserve(16000 * 2);
+}
+
+void AudioService::EndSpeakingCapture() {
+    speaking_capture_.store(false, std::memory_order_relaxed);
+    capture_latched_.store(false, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(capture_mutex_);
+    speaking_capture_pcm_.clear();
+}
+
+bool AudioService::HasNearEndCapture() const {
+    return speaking_capture_.load(std::memory_order_relaxed) &&
+           capture_latched_.load(std::memory_order_relaxed);
+}
+
+void AudioService::MaybeAppendSpeakingCapture(const std::vector<int16_t>& pcm) {
+    if (pcm.empty()) {
+        return;
+    }
+    const bool near = IsLikelyNearEndSpeech() || IsConfirmedNearEndSpeech();
+    if (near) {
+        capture_latched_.store(true, std::memory_order_relaxed);
+    } else if (!capture_latched_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    constexpr size_t kMaxSamples = 16000 * 2;
+    std::lock_guard<std::mutex> lock(capture_mutex_);
+    speaking_capture_pcm_.insert(speaking_capture_pcm_.end(), pcm.begin(), pcm.end());
+    if (speaking_capture_pcm_.size() > kMaxSamples) {
+        const size_t extra = speaking_capture_pcm_.size() - kMaxSamples;
+        speaking_capture_pcm_.erase(speaking_capture_pcm_.begin(),
+                                    speaking_capture_pcm_.begin() + static_cast<std::ptrdiff_t>(extra));
+    }
+}
+
+void AudioService::FlushSpeakingCaptureToSendQueue() {
+    const bool latched = capture_latched_.exchange(false, std::memory_order_relaxed);
+    speaking_capture_.store(false, std::memory_order_relaxed);
+    std::vector<int16_t> pcm;
+    {
+        std::lock_guard<std::mutex> lock(capture_mutex_);
+        pcm.swap(speaking_capture_pcm_);
+    }
+    if (!latched || pcm.empty() || encoder_frame_size_ <= 0) {
+        return;
+    }
+    const size_t frame = static_cast<size_t>(encoder_frame_size_);
+    if (pcm.size() % frame != 0) {
+        pcm.resize((pcm.size() / frame + 1) * frame, 0);
+    }
+    for (size_t off = 0; off + frame <= pcm.size(); off += frame) {
+        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue,
+                              std::vector<int16_t>(pcm.begin() + static_cast<std::ptrdiff_t>(off),
+                                                   pcm.begin() + static_cast<std::ptrdiff_t>(off + frame)));
+    }
+}
+
+int AudioService::ResidualLevel() const { return residual_level_.load(std::memory_order_relaxed); }
 
 int AudioService::MicLevel() const { return mic_level_.load(std::memory_order_relaxed); }
 
@@ -821,40 +876,23 @@ void AudioService::ResetEchoProfile() {
     playback_level_.store(0, std::memory_order_relaxed);
     residual_level_.store(0, std::memory_order_relaxed);
     echo_floor_.store(kEchoFloorInit, std::memory_order_relaxed);
-    echo_mic_floor_.store(kEchoMicFloorInit, std::memory_order_relaxed);
-    echo_playback_frames_.store(0, std::memory_order_relaxed);
-    echo_converged_streak_.store(0, std::memory_order_relaxed);
-    echo_ready_.store(false, std::memory_order_relaxed);
-    echo_sentence_guard_frames_.store(0, std::memory_order_relaxed);
+    echo_learn_frames_.store(kEchoLearnFrames, std::memory_order_relaxed);
     near_end_latched_.store(false, std::memory_order_relaxed);
     last_playback_us_.store(0, std::memory_order_relaxed);
     mic_level_.store(0, std::memory_order_relaxed);
     ref_level_.store(0, std::memory_order_relaxed);
 }
 
-void AudioService::NoteTtsSentenceStart() {
-    if (!hold_uplink_encode_.load(std::memory_order_relaxed) ||
-        !echo_ready_.load(std::memory_order_relaxed)) {
-        return;
-    }
-    echo_sentence_guard_frames_.store(kEchoSentenceGuardFrames, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "AEC sentence onset, ignore near-end %d ms",
-             kEchoSentenceGuardFrames * OPUS_FRAME_DURATION_MS);
-}
-
 void AudioService::NotePlaybackPcm(const int16_t* data, size_t samples) {
     // Keep the timestamp alive while muted so the 300ms stale window does not
     // treat a muted PA as "playback stopped" (quiet-path false barge-in).
     last_playback_us_.store(esp_timer_get_time(), std::memory_order_relaxed);
-    if (playback_muted_.load(std::memory_order_relaxed)) {
+    if (data == nullptr || samples == 0) {
         return;
     }
     const int level = PcmMeanAbs(data, samples);
     const int prev = playback_level_.load(std::memory_order_relaxed);
     playback_level_.store((prev * 3 + level) / 4, std::memory_order_relaxed);
-    if (hold_uplink_encode_.load(std::memory_order_relaxed)) {
-        echo_playback_frames_.fetch_add(1, std::memory_order_relaxed);
-    }
 }
 
 void AudioService::NoteCapturePcm(const int16_t* data, size_t samples, int channels) {
@@ -880,70 +918,56 @@ void AudioService::NoteCapturePcm(const int16_t* data, size_t samples, int chann
     const int prev_ref = ref_level_.load(std::memory_order_relaxed);
     mic_level_.store((prev_mic * 2 + mic) / 3, std::memory_order_relaxed);
     ref_level_.store((prev_ref * 2 + ref) / 3, std::memory_order_relaxed);
-    if (!hold_uplink_encode_.load(std::memory_order_relaxed)) {
-        return;
-    }
-    int mic_floor = echo_mic_floor_.load(std::memory_order_relaxed);
-    if (!echo_ready_.load(std::memory_order_relaxed)) {
-        if (mic > mic_floor) {
-            echo_mic_floor_.store(std::max(mic, kEchoMicFloorInit), std::memory_order_relaxed);
-        }
-        return;
-    }
-    if (mic > mic_floor + mic_floor) {
-        return;
-    }
-    if (mic >= mic_floor) {
-        mic_floor = (mic_floor * 7 + mic) / 8;
-    } else {
-        mic_floor = (mic_floor * 3 + mic) / 4;
-    }
-    echo_mic_floor_.store(std::max(mic_floor, 80), std::memory_order_relaxed);
 }
 
 void AudioService::AdaptEchoFloor(int playback, int residual) {
     if (playback < kQuietPlayback) {
         return;
     }
-    if (!echo_ready_.load(std::memory_order_relaxed)) {
-        int floor = echo_floor_.load(std::memory_order_relaxed);
+    int floor = echo_floor_.load(std::memory_order_relaxed);
+    int learn = echo_learn_frames_.load(std::memory_order_relaxed);
+    if (learn > 0) {
+        // Pre-TTS "speaking" state has leftover pb~190. Do not finish learning
+        // until the speaker is actually playing.
+        if (playback < 250) {
+            return;
+        }
+        echo_learn_frames_.store(learn - 1, std::memory_order_relaxed);
         if (residual > floor) {
             floor = residual;
         }
-        echo_floor_.store(std::max(floor, 80), std::memory_order_relaxed);
-        const bool low_echo =
-            (int64_t)residual * 100 <= (int64_t)playback * kTtsLeakPctOfPlayback;
-        int streak = echo_converged_streak_.load(std::memory_order_relaxed);
-        if (low_echo) {
-            streak++;
-        } else {
-            streak = 0;
-        }
-        echo_converged_streak_.store(streak, std::memory_order_relaxed);
-        const int n = echo_playback_frames_.load(std::memory_order_relaxed);
-        if (streak >= kEchoConvergedFrames && n >= kEchoLearnMinFrames) {
-            const int leak = std::max(residual, playback * kTtsLeakPctOfPlayback / 100);
-            echo_floor_.store(std::max(leak, 80), std::memory_order_relaxed);
-            echo_ready_.store(true, std::memory_order_relaxed);
-            ESP_LOGI(TAG, "AEC echo settled n=%d res=%d pb=%d floor=%d", n, residual, playback,
-                     leak);
+        echo_floor_.store(std::max(floor, kEchoFloorInit), std::memory_order_relaxed);
+        if (learn == 1) {
+            ESP_LOGI(TAG, "AEC echo floor learned floor=%d pb=%d res=%d mic=%d ref=%d",
+                     echo_floor_.load(std::memory_order_relaxed), playback, residual,
+                     mic_level_.load(std::memory_order_relaxed),
+                     ref_level_.load(std::memory_order_relaxed));
         }
         return;
     }
-    // TTS PCM peaks 20%+ every syllable (log: 578→6086). Do not treat that
-    // as a new sentence. Official duplex uses vad_mute_playback so VAD does
-    // not see the speaker; we only ignore near-end for one MQTT sentence
-    // onset (~300 ms AEC transient), then the 32% leak floor applies.
-    int floor = echo_floor_.load(std::memory_order_relaxed);
-    const int leak = playback * kTtsLeakPctOfPlayback / 100;
-    int guard = echo_sentence_guard_frames_.load(std::memory_order_relaxed);
-    if (guard > 0) {
-        echo_sentence_guard_frames_.store(guard - 1, std::memory_order_relaxed);
+    if (speaking_capture_.load(std::memory_order_relaxed)) {
+        // TTS residual is the echo floor. Skipping "2x spikes" left floor=250
+        // while res=1200, so VAD aborted on the speaker ("超级人工智能").
+        if (residual > floor) {
+            floor = (floor + residual) / 2;
+        } else {
+            floor = (floor * 7 + residual) / 8;
+        }
+        echo_floor_.store(std::max(floor, kEchoFloorInit), std::memory_order_relaxed);
+        return;
     }
-    if (floor < leak) {
-        floor = leak;
+    if (residual > floor + floor) {
+        return;
     }
-    echo_floor_.store(std::max(floor, 80), std::memory_order_relaxed);
+    if (residual >= floor) {
+        floor = (floor * 7 + residual) / 8;
+    } else {
+        floor = (floor * 3 + residual) / 4;
+    }
+    if (floor < 40) {
+        floor = 40;
+    }
+    echo_floor_.store(floor, std::memory_order_relaxed);
 }
 
 void AudioService::NoteResidualPcm(const int16_t* data, size_t samples) {
@@ -955,53 +979,32 @@ void AudioService::NoteResidualPcm(const int16_t* data, size_t samples) {
 }
 
 bool AudioService::EchoProfileReady() const {
-    return echo_ready_.load(std::memory_order_relaxed);
-}
-
-bool AudioService::IsNearEndSpeechWithMargin(int margin) const {
-    const int residual = residual_level_.load(std::memory_order_relaxed);
-    const int playback = EffectivePlaybackLevel();
-    const bool holding = hold_uplink_encode_.load(std::memory_order_relaxed);
-    // During TTS, never use the quiet-pause gate: sentence gaps used to make
-    // echo look like near-end ("你好，上校" -> "你好，小笑").
-    if (playback < kQuietPlayback && !holding) {
-        return residual >= kPauseNearEndAbs;
-    }
-    if (playback < kQuietPlayback) {
-        return false;
-    }
-    const int floor = echo_floor_.load(std::memory_order_relaxed);
-    if (holding) {
-        // Uncancelled echo tracks playback (log: res=881/pb=2395, res=3860/pb=3691).
-        // Wait until AEC has settled; then the user is a jump above leftover leak.
-        // Do not reject res>=50% of playback: AGGR NLP + real barge-in sits
-        // around 40–60% (log: res=1140/pb=2682) and the 50% cap went deaf.
-        if (!echo_ready_.load(std::memory_order_relaxed)) {
-            return false;
-        }
-        if (echo_sentence_guard_frames_.load(std::memory_order_relaxed) > 0) {
-            return false;
-        }
-        const int leak = playback * kTtsLeakPctOfPlayback / 100;
-        if (residual <= leak || residual <= floor) {
-            return false;
-        }
-        const int need = std::max(floor, leak) + margin;
-        return residual >= need;
-    }
-    const int need = floor + std::max(floor / 3, 80);
-    const bool residual_hit =
-        residual >= kMinNearEndAbs && residual >= need &&
-        (int64_t)residual * 100 >= (int64_t)playback * kMinResidualPctOfPlayback;
-    return residual_hit;
+    return echo_learn_frames_.load(std::memory_order_relaxed) <= 0;
 }
 
 bool AudioService::IsConfirmedNearEndSpeech() const {
-    return IsNearEndSpeechWithMargin(kNearEndEnterMargin);
-}
-
-bool AudioService::IsSustainedNearEndSpeech() const {
-    return IsNearEndSpeechWithMargin(kNearEndConfirmMargin);
+    const int residual = residual_level_.load(std::memory_order_relaxed);
+    if (residual < kMinNearEndAbs) {
+        return false;
+    }
+    const int playback = EffectivePlaybackLevel();
+    const bool tts_hold = speaking_capture_.load(std::memory_order_relaxed);
+    if (tts_hold && !EchoProfileReady()) {
+        return false;
+    }
+    if (playback < kQuietPlayback) {
+        // During TTS a low playback reading is a measurement gap, not a pause.
+        if (tts_hold) {
+            return false;
+        }
+        return residual >= kPauseNearEndAbs;
+    }
+    const int floor = echo_floor_.load(std::memory_order_relaxed);
+    const int need = floor + std::max(floor / 3, 80);
+    if (residual < need) {
+        return false;
+    }
+    return (int64_t)residual * 100 >= (int64_t)playback * kMinResidualPctOfPlayback;
 }
 
 bool AudioService::ShouldEarlyMuteForBargeIn() const {
@@ -1025,7 +1028,15 @@ bool AudioService::IsLikelyNearEndSpeech() const {
         return false;
     }
     const int playback = EffectivePlaybackLevel();
+    if (speaking_capture_.load(std::memory_order_relaxed) && !EchoProfileReady()) {
+        near_end_latched_.store(false, std::memory_order_relaxed);
+        return false;
+    }
     if (playback < kQuietPlayback) {
+        if (speaking_capture_.load(std::memory_order_relaxed)) {
+            near_end_latched_.store(false, std::memory_order_relaxed);
+            return false;
+        }
         const bool hit = residual >= kPauseNearEndAbs;
         near_end_latched_.store(hit, std::memory_order_relaxed);
         return hit;
@@ -1040,225 +1051,6 @@ bool AudioService::IsLikelyNearEndSpeech() const {
     }
     near_end_latched_.store(hit, std::memory_order_relaxed);
     return hit;
-}
-
-void AudioService::SetHoldUplinkEncode(bool hold) {
-    hold_uplink_encode_.store(hold, std::memory_order_relaxed);
-    if (hold) {
-        if (audio_engine_) {
-            audio_engine_->ResetVadSpeechState();
-        }
-        voice_detected_ = false;
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        barge_capture_active_ = false;
-        barge_capture_.clear();
-    } else {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        barge_capture_active_ = false;
-    }
-}
-
-void AudioService::ClearPcmPreroll() {
-    std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-    pcm_preroll_.clear();
-    barge_capture_.clear();
-    barge_capture_active_ = false;
-}
-
-void AudioService::StartBargeCaptureFromPrerollLocked() {
-    if (barge_capture_active_) {
-        return;
-    }
-    if (barge_capture_.empty()) {
-        barge_capture_ = pcm_preroll_;
-    }
-    barge_capture_active_ = true;
-}
-
-void AudioService::PushHeldPcmFrame(std::vector<int16_t>&& data) {
-    // VAD alone follows TTS leak. Only start capture when residual is above the
-    // echo floor (same gate as confirm), so preroll is the user's utterance.
-    const bool near_end = EchoProfileReady() && IsConfirmedNearEndSpeech();
-    bool fire_vad = false;
-    {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        if (near_end) {
-            const bool already = barge_capture_active_;
-            StartBargeCaptureFromPrerollLocked();
-            fire_vad = !already;
-        }
-        if (barge_capture_active_ && barge_capture_.size() < kBargeCaptureMaxFrames) {
-            barge_capture_.push_back(data);
-        }
-        pcm_preroll_.push_back(std::move(data));
-        while (pcm_preroll_.size() > kPcmPrerollFrames) {
-            pcm_preroll_.pop_front();
-        }
-    }
-    if (fire_vad) {
-        voice_detected_ = true;
-        ESP_LOGI(TAG, "near-end barge-in pb=%d res=%d floor=%d mic=%d", PlaybackLevel(),
-                 ResidualLevel(), echo_floor_.load(std::memory_order_relaxed),
-                 MicLevel());
-        if (callbacks_.on_vad_change) {
-            callbacks_.on_vad_change(true);
-        }
-    }
-}
-
-bool AudioService::HasBargeInCapture() const {
-    std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-    return barge_capture_active_ && !barge_capture_.empty();
-}
-
-void AudioService::ReleaseBargeInCapture() {
-    std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-    barge_capture_active_ = false;
-}
-
-void AudioService::FlushBargeInPcmToEncodeQueue() {
-    std::deque<std::vector<int16_t>> frames;
-    {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        if (!barge_capture_.empty()) {
-            frames.swap(barge_capture_);
-        } else {
-            frames.swap(pcm_preroll_);
-        }
-        barge_capture_active_ = false;
-        pcm_preroll_.clear();
-    }
-    while (frames.size() > 1 &&
-           PcmMeanAbs(frames.front().data(), frames.front().size()) < kMinNearEndAbs) {
-        frames.pop_front();
-    }
-    for (auto& frame : frames) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
-    }
-    std::deque<std::vector<int16_t>> tail;
-    {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        tail.swap(pcm_preroll_);
-        barge_capture_.clear();
-        barge_capture_active_ = false;
-    }
-    for (auto& frame : tail) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
-    }
-}
-
-void AudioService::GateUplinkForMs(int ms) {
-    if (ms <= 0) {
-        uplink_gate_until_us_.store(0, std::memory_order_relaxed);
-        echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
-        echo_quiet_frames_.store(0, std::memory_order_relaxed);
-        return;
-    }
-    echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
-    uplink_gate_until_us_.store(esp_timer_get_time() + static_cast<int64_t>(ms) * 1000,
-                                std::memory_order_relaxed);
-    voice_detected_ = false;
-    if (audio_engine_) {
-        audio_engine_->ResetVadSpeechState();
-    }
-}
-
-void AudioService::GateUplinkUntilEchoQuiet() {
-    uplink_gate_until_us_.store(0, std::memory_order_relaxed);
-    echo_tail_gate_.store(EchoTailGate::WaitQuiet, std::memory_order_relaxed);
-    echo_quiet_frames_.store(0, std::memory_order_relaxed);
-    echo_tail_deadline_us_.store(esp_timer_get_time() + kEchoTailMaxUs, std::memory_order_relaxed);
-    echo_tail_start_residual_.store(residual_level_.load(std::memory_order_relaxed),
-                                   std::memory_order_relaxed);
-    voice_detected_ = false;
-    if (audio_engine_) {
-        audio_engine_->ResetVadSpeechState();
-    }
-}
-
-void AudioService::EncodePrerollDroppingQuiet() {
-    std::deque<std::vector<int16_t>> frames;
-    {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        frames.swap(pcm_preroll_);
-    }
-    // Official VAD cache exists because the first loud/VAD frame is already
-    // late. Trimming at kNewSpeechAbs=400 cut "你都" off "你会些什么？".
-    while (!frames.empty() &&
-           PcmMeanAbs(frames.front().data(), frames.front().size()) < kEchoQuietAbs) {
-        frames.pop_front();
-    }
-    for (auto& frame : frames) {
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(frame));
-    }
-}
-
-bool AudioService::ConsumeEchoTailGate(std::vector<int16_t>& data) {
-    auto gate = echo_tail_gate_.load(std::memory_order_relaxed);
-    if (gate == EchoTailGate::Off) {
-        const int64_t until = uplink_gate_until_us_.load(std::memory_order_relaxed);
-        return until > 0 && esp_timer_get_time() < until;
-    }
-
-    const int residual = residual_level_.load(std::memory_order_relaxed);
-    const int64_t now = esp_timer_get_time();
-    const int64_t deadline = echo_tail_deadline_us_.load(std::memory_order_relaxed);
-
-    auto keep_preroll = [this, &data]() {
-        std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-        pcm_preroll_.push_back(data);
-        while (pcm_preroll_.size() > kPcmPrerollFrames) {
-            pcm_preroll_.pop_front();
-        }
-    };
-
-    if (gate == EchoTailGate::WaitQuiet) {
-        if (residual <= kEchoQuietAbs) {
-            const int n = echo_quiet_frames_.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n >= kEchoQuietFrames) {
-                echo_tail_gate_.store(EchoTailGate::WaitSpeech, std::memory_order_relaxed);
-                echo_quiet_frames_.store(0, std::memory_order_relaxed);
-                // Quiet frames are the last TTS syllable decaying in the room.
-                // Flushing them as preroll made "查询天气…" come back as "查询。"
-                std::lock_guard<std::mutex> lock(pcm_preroll_mutex_);
-                pcm_preroll_.clear();
-                ESP_LOGI(TAG, "echo tail quiet, wait for speech");
-            }
-        } else {
-            echo_quiet_frames_.store(0, std::memory_order_relaxed);
-            const int start = echo_tail_start_residual_.load(std::memory_order_relaxed);
-            // Deadline without a dip: only open if residual rose (user talking
-            // through). Flat echo must not become "上你都会些什么".
-            if (now >= deadline && residual >= start + 150 && residual >= kNewSpeechAbs) {
-                echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
-                keep_preroll();
-                EncodePrerollDroppingQuiet();
-                ESP_LOGI(TAG, "echo tail deadline open res=%d start=%d", residual, start);
-                return true;
-            }
-        }
-        keep_preroll();
-        return true;
-    }
-
-    // WaitSpeech: a new residual rise after silence. Do not use VAD here —
-    // vad_min_noise_ms=1000 keeps SPEECH on the echo tail. Keep the rolling
-    // preroll across dips so the first syllable is still there when we open.
-    if (residual >= kNewSpeechAbs) {
-        const int n = echo_quiet_frames_.fetch_add(1, std::memory_order_relaxed) + 1;
-        keep_preroll();
-        if (n >= kNewSpeechFrames) {
-            echo_tail_gate_.store(EchoTailGate::Off, std::memory_order_relaxed);
-            echo_quiet_frames_.store(0, std::memory_order_relaxed);
-            EncodePrerollDroppingQuiet();
-            ESP_LOGI(TAG, "echo tail speech res=%d", residual);
-            return true;
-        }
-        return true;
-    }
-    echo_quiet_frames_.store(0, std::memory_order_relaxed);
-    keep_preroll();
-    return true;
 }
 
 void AudioService::EnableDeviceAec(bool enable) {
