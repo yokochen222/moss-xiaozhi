@@ -2,22 +2,23 @@
 
 给后续 Agent / 开发者。改固件或桌面前先读完。
 
-本仓库出三款板：
+本仓库出四款板：
 
 | `board`（`/health` 字段） | 目录 | 桌面类型名 |
 |---|---|---|
 | `moss-onvif` | `main/boards/moss/moss-onvif` | 外接视觉 |
 | `moss-ov2640` | `main/boards/moss/moss-ov2640` | 板载视觉 |
 | `moss-pcb-v1` | `main/boards/moss/moss-pcb-v1` | PCB v1 |
+| `moss-camera-td` | `main/boards/moss/moss-camera-td` | Camera TD |
 
 **onvif 与 ov2640 产品约定：除云台和板载摄像头（含人脸追踪）外，这两块板对用户、对桌面、对 HTTP 控制面必须一致。**  
 不要因为「这块是 onvif」就关掉灯、电机、红外、唤醒、AEC、亮度、按住说话。那些不是这两板的差异。
 
-**pcb-v1 是硬件缺件板**：SSD1306 OLED，无眼部电机、无面板灯、无底灯；有实体音量键。桌面用 caps **隐藏**缺件控件，不做成灰按钮。其它控制面（发现、绑定、`/health`、配置、对话、红外、云享记）与现板同一套 API。
+**pcb-v1 / camera-td 是硬件缺件板**：SSD1306 OLED，无眼部电机、无面板灯、无底灯；有实体音量键。camera-td 对齐旧版 lichuang-dev（屏 SDA=7 SCL=6，16MB 分区）。桌面用 caps **隐藏**缺件控件，不做成灰按钮。其它控制面（发现、绑定、`/health`、配置、对话、红外、云享记）与现板同一套 API。外接 ONVIF 走桌面，不注册板载 `/camera/*`。
 
-桌面能力开关只看 `moss-desktop/server/board-presets.mjs` 的 `capsForBoard`。未知 `board` 按 `moss-onvif` 处理（三项灯/电机都显示）。必须登记 `moss-pcb-v1` 才会藏面板灯/底灯/电机。
+桌面能力开关只看 `camera/yo-moss-ai/server/board-presets.mjs` 的 `capsForBoard`。未知 `board` 按 `moss-onvif` 处理（三项灯/电机都显示）。必须登记 `moss-pcb-v1` / `moss-camera-td` 才会藏面板灯/底灯/电机。
 
-禁止修改 `moss-onvif/`、`moss-ov2640/` 目录内文件来迁就 pcb-v1。共用代码只加 `MOSS_PCB_V1` / `moss-pcb-v1` 分支。
+禁止修改 `moss-onvif/`、`moss-ov2640/` 目录内文件来迁就缺件板。共用代码用 `CONFIG_BOARD_MOSS_OLED`。
 
 ---
 
@@ -49,11 +50,23 @@ pcb-v1 相对这两板的硬件差（GPIO 以该板 `config.h` 为准，禁止�
 | 灯 74HC595 | SER=3 RCK=4 SCK=5，只用 Q0–Q4；眼灯=GPIO15 |
 | 红外 UART | TX=17 RX=18 |
 | 眼部电机 / 面板灯 / 底灯 | **无** |
-| 分区表 | `partitions/moss-desktop-16m.csv`（与 onvif 相同，`type` 不同，**禁止跨板 OTA**） |
+| 分区表 | `partitions/moss-desktop-8m.csv`（`type` 不同，**禁止跨板 OTA**） |
 
-**禁止**三块板互相 OTA。分区表不同或 `type` 不同都不行，首次烧录用 `erase-flash`。
+**moss-camera-td** 相对现板：
 
-onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`、`/ir/*`），只是底层 GPIO vs PCA9685。改 `/hw` JSON 或动作名必须这两板一起改。pcb-v1 的 `/hw` 对 `panel`/`bottom`/`motor` 返回失败，`all` 只动眼灯+流水灯。
+| 项 | moss-camera-td |
+|---|---|
+| 屏 | SSD1306 I2C 128×64（SDA=7 SCL=6，旧 lichuang-dev 脚），无 splash / emote |
+| 功放 NS4150B EN | GPIO48 |
+| 音量键 | 上=GPIO40 下=GPIO39 |
+| 灯 74HC595 | SER=3 RCK=4 SCK=5，只用 Q0–Q4；眼灯=GPIO15 |
+| 红外 UART | TX=17 RX=18 |
+| 眼部电机 / 面板灯 / 底灯 / 板载相机 / 云台 | **无** |
+| 分区表 | `partitions/moss-desktop-16m.csv`（与 onvif 相同文件，`type` 不同，**禁止跨板 OTA**） |
+
+**禁止**各板互相 OTA。分区表不同或 `type` 不同都不行，首次烧录用 `erase-flash`。
+
+onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`、`/ir/*`），只是底层 GPIO vs PCA9685。改 `/hw` JSON 或动作名必须这两板一起改。pcb-v1 / camera-td 的 `/hw` 对 `panel`/`bottom`/`motor` 返回失败，`all` 只动眼灯+流水灯。
 
 ---
 
@@ -64,7 +77,7 @@ onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`
 ### 2.1 局域网控制面
 
 共用：`GET /health`、`GET/PUT /config/device`、`GET/PUT /config/mqtt`、全部 `/ir/*`、`GET/POST /hw`、`POST /chat/wake`、`POST /chat/say`、`GET /chat/sync`。  
-实现在 `main/api/`、`main/config/`，由 `CONFIG_BOARD_FAMILY_MOSS` 编进三板。  
+实现在 `main/api/`、`main/config/`，由 `CONFIG_BOARD_FAMILY_MOSS` 编进各板。  
 协议正文：[moss-desktop/docs/protocol/device-v1.md](../../moss-desktop/docs/protocol/device-v1.md)。
 
 ### 2.2 唤醒词与麦克风（手感必须一致）
@@ -100,8 +113,8 @@ onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`
 | 采集 | `BoxAudioCodec` `mask(0)\|mask(1)`，只给 MIC1 设 `AUDIO_CODEC_INPUT_GAIN` |
 | 全双工 | AEC 开 → `kListeningModeRealtime`；TTS 期间 **保持** voice processing，把 AEC 后的麦送上云端 |
 | 半双工 | AEC 关 → TTS 期间关麦 |
-| 打断 | 云端听上行后 abort。`CONFIG_ENABLE_VAD_INTERRUPT=n` |
-| 上行 | `HandleVoiceResult` 只送 `result->data`，**不要**再拼 `vad_cache` |
+| 打断 | 云端听上行后 abort。`CONFIG_ENABLE_VAD_INTERRUPT=n`。对齐旧 lichuang-dev：进 speaking **不清**上行队列；TTS 停立刻回 listening；realtime 已在跑则 **不再** `listen/start` |
+| 上行 | `HandleVoiceResult` 只送 `result->data`，**不要**再拼 `vad_cache`。不要等喇叭排空再 listen，也不要在这段时间丢掉上行 |
 
 禁止（都会把已验证手感打回去）：
 
@@ -109,6 +122,7 @@ onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`
 - 打开 `CONFIG_ENABLE_VAD_INTERRUPT`，或在 speaking 里用 AFE VAD 掐 TTS。`VAD_MODE_0` 会把喇叭残余当成 SPEECH（日志里 `res=50~100` 仍会 `VAD barge-in confirmed`）。
 - 把 `vad_cache` 拼进 Opus 上行 → ASR 首字重复（「给给」「你你」）。
 - 能量门、echo floor、残差比去「确认是不是人在说话」。AEC 残差低仍会误判。
+- 进 speaking 清空 send queue、或 `pending_listening_start_` 等播放排空再 `listen/start`、或这段时间丢掉上行。旧版没有这些，打断会变钝。
 - 改成 `AFE_TYPE_FD` / `AEC_MODE_FD_*` / `vad_min_speech_ms` / `vad_mute_playback` 来「修」打断。
 
 真机日志对照：TTS 时 `ref` 应跟着播放走（不是 5）；`res` 远小于 `pb` 表示 AEC 在干活。此时若再自打断，查的是本地 VAD，不是增益。
@@ -127,14 +141,14 @@ ov2640 的 PA 和 I2S 是分开的：idle 听唤醒时 TX 可开、功放关掉�
 ### 2.3 显示
 
 onvif / ov2640 都是 0.96" ST7735 160×80 + 嵌入 splash，**不用 LVGL 主题**。硬件页不显示「界面主题」。  
-pcb-v1 是 SSD1306 128×64 + `OledDisplay`（14 号字体），无 splash / emote；`config.json` 不要开 `USE_EMOTE_MESSAGE_STYLE`。
+pcb-v1 / camera-td 是 SSD1306 128×64 + `OledDisplay`（14 号字体），无 splash / emote；`config.json` 不要开 `USE_EMOTE_MESSAGE_STYLE`。
 
 ### 2.4 桌面 caps
 
 ```
 moss-onvif : ir / lamps / panel / bottom / motor = true；onboard_camera / gimbal / face_track = false
 moss-ov2640: 以上全 true（onboard_preview 目前仍为 false）
-moss-pcb-v1: ir / lamps = true；panel / bottom / motor / onboard_camera / gimbal / face_track = false
+moss-pcb-v1 / moss-camera-td: ir / lamps = true；panel / bottom / motor / onboard_camera / gimbal / face_track = false
 ```
 
 隐藏缺件用「显式 `false` 才藏」：缺字段或 `true` 都显示，避免旧 caps 把 onvif / ov2640 界面改掉。
@@ -172,4 +186,5 @@ onvif 功放在 GPIO48，出声走 `PreparePlayback()` 拉高，不要只抄 ov2
 python3 scripts/build.py moss/moss-onvif --name moss-onvif
 python3 scripts/build.py moss/moss-ov2640 --name moss-ov2640
 python3 scripts/build.py moss/moss-pcb-v1 --name moss-pcb-v1
+python3 scripts/build.py moss/moss-camera-td --name moss-camera-td
 ```

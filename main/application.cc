@@ -321,15 +321,10 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            // xiaozhi: always drain the encode queue. Realtime duplex relies on
-            // AEC-cleaned uplink during TTS (cloud barge-in). Dropping here
-            // clips the onset and duplicates after a later flush.
-            if (GetDeviceState() == kDeviceStateListening && pending_listening_start_) {
-                while (audio_service_.PopPacketFromSendQueue())
-                    ;
-            } else {
-                SendUplinkFromQueue();
-            }
+            // lichuang-dev realtime: always drain the encode queue. AEC-cleaned
+            // uplink stays live during TTS so the cloud can barge-in. Holding
+            // listen/start and dropping packets here clipped the onset.
+            SendUplinkFromQueue();
         }
 
         if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
@@ -1189,22 +1184,13 @@ void Application::HandleStateChangedEvent() {
                 audio_service_.FlushSpeakingCaptureToSendQueue();
             }
 
-            // Never listen/start while TTS is still in the speaker: realtime
-            // uplink of that leak is the self-reply loop ("你好，上校").
-            if (resume_listen_after_tts_) {
-                resume_listen_after_tts_ = false;
-                if (!audio_service_.IsPlaybackIdle() && pending_text_to_send_.empty()) {
-                    pending_listening_start_ = true;
-                } else {
-                    StartListeningAudio();
-                }
-            } else if (play_popup_on_listening_ || !audio_service_.IsAudioProcessorRunning() ||
-                keep_preroll) {
-                if (!audio_service_.IsPlaybackIdle() && pending_text_to_send_.empty()) {
-                    pending_listening_start_ = true;
-                } else {
-                    StartListeningAudio();
-                }
+            // lichuang-dev: listen/start immediately. Realtime already has voice
+            // processing running through TTS — do not wait for the speaker to
+            // drain, and do not listen/start again (that resets cloud ASR).
+            resume_listen_after_tts_ = false;
+            if (!pending_text_to_send_.empty() || play_popup_on_listening_ ||
+                !audio_service_.IsAudioProcessorRunning() || keep_preroll) {
+                StartListeningAudio();
             } else {
                 ConfigureWakeWordForListening();
             }
@@ -1215,8 +1201,8 @@ void Application::HandleStateChangedEvent() {
         }
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
-            while (audio_service_.PopPacketFromSendQueue())
-                ;
+            // Keep already-encoded uplink (barge-in onset). Old lichuang-dev
+            // never flushed the send queue on speaking entry.
             audio_service_.BeginSpeakingCapture();
 
             if (listening_mode_ != kListeningModeRealtime) {
@@ -1319,8 +1305,8 @@ void Application::SendUplinkFromQueue() {
 }
 
 void Application::StartListeningAudio() {
-    // Runs in the main loop, either directly from HandleStateChangedEvent or
-    // deferred via MAIN_EVENT_PLAYBACK_DRAINED once the playback queue drains.
+    // Runs in the main loop from HandleStateChangedEvent. Realtime barge-in
+    // must not wait for leftover TTS to drain (old lichuang-dev did not).
     if (GetDeviceState() != kDeviceStateListening) {
         return;
     }

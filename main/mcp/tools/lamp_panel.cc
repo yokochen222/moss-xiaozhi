@@ -97,7 +97,7 @@ void LampPanelTool::Register() {
 
 }  // namespace mcp_tools
 
-#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1
+#ifndef CONFIG_BOARD_MOSS_OLED
 static auto& g_lamp_panel_tool_instance = mcp_tools::LampPanelTool::GetInstance();
 DECLARE_MCP_TOOL_INSTANCE(g_lamp_panel_tool_instance);
 #endif

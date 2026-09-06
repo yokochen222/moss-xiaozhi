@@ -49,14 +49,14 @@ HwApplyResult MossHwApply(cJSON* payload) {
     };
 
     HwApplyResult result;
-#if CONFIG_BOARD_TYPE_MOSS_PCB_V1
+#if CONFIG_BOARD_MOSS_OLED
     if (device == "eye") {
         result.ok = action == "off" ? eye_off() : eye_on();
     } else if (device == "bar") {
         auto& bar = LampBarDevice::GetInstance();
         result.ok = action == "off" ? bar.StopFlow() : bar.StartFlow();
     } else if (device == "panel" || device == "bottom" || device == "motor") {
-        result.message = "unsupported on moss-pcb-v1";
+        result.message = "unsupported on this board";
     } else if (device == "all") {
         auto& bar = LampBarDevice::GetInstance();
         if (action == "off") {

@@ -91,7 +91,7 @@ void EyeMotorTool::Register() {
 
 }  // namespace mcp_tools
 
-#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1
+#ifndef CONFIG_BOARD_MOSS_OLED
 static auto& g_eye_motor_tool_instance = mcp_tools::EyeMotorTool::GetInstance();
 DECLARE_MCP_TOOL_INSTANCE(g_eye_motor_tool_instance);
 #endif

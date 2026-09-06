@@ -53,6 +53,8 @@ so playback reference remains available for wake-up during device playback. It
 also stays active during voice processing when device AEC is requested.
 
 Realtime barge-in is cloud-side: keep sending AEC-cleaned uplink during TTS.
+Do not flush the send queue on speaking entry, and do not defer `listen/start`
+until leftover TTS drains (that is the old lichuang-dev path).
 Do not abort TTS from local AFE VAD (`CONFIG_ENABLE_VAD_INTERRUPT` stays off).
 Do not prepend `vad_cache` onto the Opus uplink (duplicate first syllables).
 Do not copy DAC PCM onto channel R; R is the ES7210 MIC3 analog loopback.

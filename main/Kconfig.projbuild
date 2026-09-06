@@ -122,8 +122,11 @@ choice BOARD_TYPE
     default BOARD_TYPE_MOSS_ONVIF
     help
         Select the physical board hardware implementation.
-        This fork ships MOSS ONVIF, MOSS OV2640, and MOSS PCB v1 boards.
+        This fork ships MOSS ONVIF, MOSS OV2640, MOSS PCB v1, and MOSS Camera TD boards.
 
+    config BOARD_TYPE_MOSS_CAMERA_TD
+        bool "MOSS Camera TD (SSD1306，无面板灯/底灯/眼电机)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_MOSS_ONVIF
         bool "MOSS ONVIF (外接 ONVIF 摄像机)"
         depends on IDF_TARGET_ESP32S3
@@ -137,7 +140,13 @@ endchoice
 
 config BOARD_FAMILY_MOSS
     bool
-    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640 || BOARD_TYPE_MOSS_PCB_V1
+    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640 || BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD
+
+config BOARD_MOSS_OLED
+    bool
+    default y if BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD
+    help
+        SSD1306 boards without panel LEDs, bottom LED, or eye motor.
 
 choice DISPLAY_STYLE
     prompt "Select display style"
@@ -153,7 +162,7 @@ choice DISPLAY_STYLE
 
     config USE_EMOTE_MESSAGE_STYLE
         bool "Emote animation style"
-        depends on BOARD_FAMILY_MOSS && !BOARD_TYPE_MOSS_PCB_V1
+        depends on BOARD_FAMILY_MOSS && !BOARD_MOSS_OLED
 endchoice
 
 config USE_MULTILINE_CHAT_MESSAGE

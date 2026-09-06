@@ -2,7 +2,7 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_BOARD_TYPE_MOSS_PCB_V1
+#if CONFIG_BOARD_MOSS_OLED
 
 #include <cstdint>
 
