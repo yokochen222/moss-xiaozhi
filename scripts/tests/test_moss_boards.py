@@ -12,7 +12,7 @@ class MossBoardIdentityTests(unittest.TestCase):
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_config_type_matches_directory_and_build_name(self):
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             config = self._config(f"moss/{leaf}")
             self.assertEqual(config["type"], leaf)
             names = [item["name"] for item in config["builds"]]
@@ -24,20 +24,20 @@ class MossBoardIdentityTests(unittest.TestCase):
             config = json.loads(path.read_text(encoding="utf-8"))
             types.append(config["type"])
         self.assertEqual(len(types), len(set(types)))
-        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640"})
+        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640", "moss-pcb-v1"})
 
     def test_both_boards_use_usb_serial_jtag_console(self):
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y", append)
 
     def test_both_boards_enable_custom_wake_word(self):
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", append)
 
     def test_both_boards_enable_device_aec(self):
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
 
@@ -51,6 +51,8 @@ class MossBoardIdentityTests(unittest.TestCase):
         ov_cfg = "\n".join(self._config("moss/moss-ov2640")["builds"][0]["sdkconfig_append"])
         self.assertIn("partitions/moss-desktop-16m.csv", onvif_cfg)
         self.assertIn("partitions/v2/16m_moss_desktop.csv", ov_cfg)
+        pcb_cfg = "\n".join(self._config("moss/moss-pcb-v1")["builds"][0]["sdkconfig_append"])
+        self.assertIn("partitions/moss-desktop-16m.csv", pcb_cfg)
 
     def test_wake_and_mic_defaults_are_shared(self):
         shared = (ROOT / "main/boards/moss/moss_shared_audio.h").read_text(encoding="utf-8")
@@ -59,7 +61,7 @@ class MossBoardIdentityTests(unittest.TestCase):
         self.assertIn("MIC2 is unused", shared)
         self.assertNotIn("#define AUDIO_CODEC_REFERENCE_GAIN", shared)
         self.assertNotIn("#define AUDIO_CODEC_REFERENCE_CHANNEL", shared)
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             header = (ROOT / "main/boards" / f"moss/{leaf}" / "config.h").read_text(encoding="utf-8")
             self.assertIn('#include "moss_shared_audio.h"', header)
             self.assertNotIn("#define AUDIO_CODEC_INPUT_GAIN", header)
@@ -73,7 +75,8 @@ class MossBoardIdentityTests(unittest.TestCase):
     def test_both_boards_pass_shared_codec_gains_not_zero_reference(self):
         onvif = (ROOT / "main/boards/moss/moss-onvif/moss_onvif_board.cc").read_text(encoding="utf-8")
         ov2640 = (ROOT / "main/boards/moss/moss-ov2640/moss_ov2640_board.cc").read_text(encoding="utf-8")
-        for src in (onvif, ov2640):
+        pcb = (ROOT / "main/boards/moss/moss-pcb-v1/moss_pcb_v1_board.cc").read_text(encoding="utf-8")
+        for src in (onvif, ov2640, pcb):
             self.assertIn("AUDIO_CODEC_INPUT_GAIN", src)
             self.assertNotIn("AUDIO_CODEC_REFERENCE_CHANNEL", src)
             self.assertNotIn("AUDIO_CODEC_REFERENCE_GAIN", src)
@@ -239,6 +242,21 @@ class MossCmakeSourceIsolationTests(unittest.TestCase):
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/mcp/*.cc", self.cmake)
         self.assertIn("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/drivers/*.cc", self.cmake)
         self.assertIn('if(IS_DIRECTORY "${_board_inc_dir}")', self.cmake)
+
+    def test_pcb_v1_compiles_eye_and_bar_not_panel_or_motor(self):
+        family_start = self.cmake.find("if(CONFIG_BOARD_FAMILY_MOSS)")
+        family = self.cmake[family_start:]
+        pcb_start = family.find("if(CONFIG_BOARD_TYPE_MOSS_PCB_V1)")
+        self.assertGreaterEqual(pcb_start, 0)
+        pcb = family[pcb_start : family.find("endif()", pcb_start)]
+        self.assertIn("device/lamp_bar.cc", pcb)
+        self.assertIn("device/lamp_eye.cc", pcb)
+        self.assertNotIn("device/lamp_panel.cc", pcb)
+        self.assertNotIn("device/eye_motor.cc", pcb)
+        self.assertNotIn("camera_handlers.cc", pcb)
+        self.assertNotIn("stepper_gimbal.cc", pcb)
+        self.assertIn("AND NOT CONFIG_BOARD_TYPE_MOSS_PCB_V1", self.cmake)
+        self.assertIn("font_noto_sans_basic_14_1", self.cmake)
 
 
 class MossBoardMcpLayoutTests(unittest.TestCase):
@@ -642,7 +660,7 @@ class MossBargeInTests(unittest.TestCase):
             "AEC_NLP_LEVEL_VERYAGGR",
             "vad_delay_ms",
         )
-        for leaf in ("moss-onvif", "moss-ov2640"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1"):
             board_dir = ROOT / "main/boards/moss" / leaf
             for path in board_dir.rglob("*.cc"):
                 text = path.read_text(encoding="utf-8")
@@ -773,4 +791,49 @@ class MossLcdDmaTests(unittest.TestCase):
             self.assertGreater(start, 0)
             body = src[start : src.find("posix_memalign", start)]
             self.assertLess(body.find("MALLOC_CAP_SPIRAM"), body.find("MALLOC_CAP_INTERNAL"))
+
+
+class MossPcbV1BoardTests(unittest.TestCase):
+    def test_oled_not_st7735_and_no_emote_style(self):
+        header = (ROOT / "main/boards/moss/moss-pcb-v1/config.h").read_text(encoding="utf-8")
+        self.assertIn("#define DISPLAY_WIDTH 128", header)
+        self.assertIn("#define DISPLAY_HEIGHT 64", header)
+        self.assertIn("GPIO_NUM_48", header)
+        self.assertNotIn("DISPLAY_LCD_BOUNCE_ROWS", header)
+        board = (ROOT / "main/boards/moss/moss-pcb-v1/moss_pcb_v1_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("OledDisplay", board)
+        self.assertIn("esp_lcd_new_panel_ssd1306", board)
+        self.assertIn("GetBacklight() override { return nullptr; }", board)
+        self.assertNotIn("splash_player", board)
+        append = "\n".join(
+            json.loads(
+                (ROOT / "main/boards/moss/moss-pcb-v1/config.json").read_text(encoding="utf-8")
+            )["builds"][0]["sdkconfig_append"]
+        )
+        self.assertNotIn("USE_EMOTE_MESSAGE_STYLE", append)
+        self.assertFalse((ROOT / "main/boards/moss/moss-pcb-v1/splash_player.cc").exists())
+
+    def test_hw_rejects_panel_bottom_motor_and_all_only_eye_bar(self):
+        src = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
+        start = src.find("#if CONFIG_BOARD_TYPE_MOSS_PCB_V1")
+        self.assertGreater(start, 0)
+        body = src[start : src.find("#else", start)]
+        self.assertIn('device == "panel"', body)
+        self.assertIn('device == "bottom"', body)
+        self.assertIn('device == "motor"', body)
+        self.assertIn("unsupported on moss-pcb-v1", body)
+        self.assertIn("eye_on()", body)
+        self.assertIn("StartFlow()", body)
+        self.assertNotIn("LampPanelDevice", body)
+        self.assertNotIn("EyeMotorDevice", body)
+
+    def test_mcp_panel_and_motor_not_registered(self):
+        panel = (ROOT / "main/mcp/tools/lamp_panel.cc").read_text(encoding="utf-8")
+        motor = (ROOT / "main/mcp/tools/eye_motor.cc").read_text(encoding="utf-8")
+        self.assertIn("#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1", panel)
+        self.assertIn("#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1", motor)
+        self.assertIn("DECLARE_MCP_TOOL_INSTANCE", panel)
+        self.assertIn("DECLARE_MCP_TOOL_INSTANCE", motor)
 

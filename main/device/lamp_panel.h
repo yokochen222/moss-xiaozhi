@@ -2,7 +2,37 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_BOARD_TYPE_MOSS_OV2640
+#if CONFIG_BOARD_TYPE_MOSS_PCB_V1
+
+#include <cstdint>
+
+class LampPanelDevice {
+public:
+    LampPanelDevice(const LampPanelDevice&) = delete;
+    LampPanelDevice& operator=(const LampPanelDevice&) = delete;
+
+    bool TurnOffAll() { return true; }
+    bool TurnOnPanelLeds() { return false; }
+    bool TurnOffPanelLeds() { return true; }
+    bool TurnOnBottomLed() { return false; }
+    bool TurnOffBottomLed() { return true; }
+    bool TurnOnAll() { return false; }
+
+    bool IsPanelLed1On() const { return false; }
+    bool IsPanelLed2On() const { return false; }
+    bool IsBottomLedOn() const { return false; }
+    bool IsAnyLedOn() const { return false; }
+
+    static LampPanelDevice& GetInstance() {
+        static LampPanelDevice instance;
+        return instance;
+    }
+
+private:
+    LampPanelDevice() = default;
+};
+
+#elif CONFIG_BOARD_TYPE_MOSS_OV2640
 
 #include <cstdint>
 

@@ -34,15 +34,16 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)))
             self.assertEqual(
                 {variant["board"] for variant in variants},
-                {"moss/moss-onvif", "moss/moss-ov2640"},
+                {"moss/moss-onvif", "moss/moss-ov2640", "moss/moss-pcb-v1"},
             )
 
         idf6_names = {variant["full_name"] for variant in idf6}
-        self.assertEqual(idf6_names, {"moss-onvif", "moss-ov2640"})
+        self.assertEqual(idf6_names, {"moss-onvif", "moss-ov2640", "moss-pcb-v1"})
         by_type = {variant["type"]: variant for variant in idf6}
         self.assertEqual(by_type["moss-onvif"]["target"], "esp32s3")
         self.assertEqual(by_type["moss-onvif"]["config"], "CONFIG_BOARD_TYPE_MOSS_ONVIF")
         self.assertEqual(by_type["moss-ov2640"]["config"], "CONFIG_BOARD_TYPE_MOSS_OV2640")
+        self.assertEqual(by_type["moss-pcb-v1"]["config"], "CONFIG_BOARD_TYPE_MOSS_PCB_V1")
         self.assertEqual(
             by_type["moss-onvif"]["display_name"],
             "MOSS ONVIF (外接 ONVIF 摄像机)",
@@ -50,6 +51,10 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(
             by_type["moss-ov2640"]["display_name"],
             "MOSS OV2640 (板载摄像头)",
+        )
+        self.assertEqual(
+            by_type["moss-pcb-v1"]["display_name"],
+            "MOSS PCB v1 (SSD1306)",
         )
 
         for config_path in (ROOT / "main/boards").rglob("config.json"):
@@ -275,6 +280,7 @@ class BoardSelectionTests(unittest.TestCase):
     def test_moss_onvif_and_ov2640_boards_exist(self):
         self.assertTrue(build._board_type_exists("moss/moss-onvif"))
         self.assertTrue(build._board_type_exists("moss/moss-ov2640"))
+        self.assertTrue(build._board_type_exists("moss/moss-pcb-v1"))
         self.assertEqual(
             build._resolve_board_config("moss/moss-onvif", "esp32s3", []),
             "CONFIG_BOARD_TYPE_MOSS_ONVIF",
@@ -284,12 +290,20 @@ class BoardSelectionTests(unittest.TestCase):
             "CONFIG_BOARD_TYPE_MOSS_OV2640",
         )
         self.assertEqual(
+            build._resolve_board_config("moss/moss-pcb-v1", "esp32s3", []),
+            "CONFIG_BOARD_TYPE_MOSS_PCB_V1",
+        )
+        self.assertEqual(
             build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_ONVIF"),
             "MOSS ONVIF (外接 ONVIF 摄像机)",
         )
         self.assertEqual(
             build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_OV2640"),
             "MOSS OV2640 (板载摄像头)",
+        )
+        self.assertEqual(
+            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_PCB_V1"),
+            "MOSS PCB v1 (SSD1306)",
         )
 
 
@@ -501,10 +515,11 @@ class BoardMenuTests(unittest.TestCase):
         choice = kconfig.split("choice BOARD_TYPE\n", 1)[1].split(
             "endchoice\n", 1
         )[0]
-        # This fork ships moss-onvif and moss-ov2640 on ESP32-S3.
+        # This fork ships moss-onvif, moss-ov2640, and moss-pcb-v1 on ESP32-S3.
         self.assertIn("default BOARD_TYPE_MOSS_ONVIF", choice)
         self.assertIn("config BOARD_TYPE_MOSS_ONVIF", choice)
         self.assertIn("config BOARD_TYPE_MOSS_OV2640", choice)
+        self.assertIn("config BOARD_TYPE_MOSS_PCB_V1", choice)
         self.assertNotIn("config BOARD_TYPE_MOSS_DESKTOP", choice)
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
         self.assertIn("config BOARD_FAMILY_MOSS", kconfig)

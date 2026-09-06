@@ -1,7 +1,8 @@
-#include "mcp_tools.h"
-#include "board.h"
 #include "device/lamp_panel.h"
 #include <esp_log.h>
+#include "board.h"
+#include "mcp_tools.h"
+#include "sdkconfig.h"
 
 #define TAG "LampPanelTool"
 
@@ -16,9 +17,9 @@ public:
         static LampPanelTool instance;
         return instance;
     }
-    LampPanelTool() : McpTool("self.lamp_panel.control", "控制MOSS的面板灯与底灯"),
-                      lamp_panel_device_(LampPanelDevice::GetInstance()) {
-    }
+    LampPanelTool()
+        : McpTool("self.lamp_panel.control", "控制MOSS的面板灯与底灯"),
+          lamp_panel_device_(LampPanelDevice::GetInstance()) {}
     void Register() override;
 };
 
@@ -42,9 +43,7 @@ void LampPanelTool::Register() {
         "      与流水灯 (Q0-Q4) 在硬件层面完全独立、互不影响：\n"
         "      无论流水灯是否在运行，本工具对面板/底灯的开关都会原样生效；\n"
         "      反之，本工具也不会打断流水灯正在进行的动画。\n",
-        PropertyList({
-            Property("action", kPropertyTypeString)
-        }),
+        PropertyList({Property("action", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             auto action = properties["action"].value<std::string>();
 
@@ -80,9 +79,12 @@ void LampPanelTool::Register() {
                 return "熄灭全部面板灯/底灯失败";
             } else if (action == "get_status") {
                 std::string status = "MOSS 面板灯/底灯状态:\n";
-                status += "  面板灯1: " + std::string(lamp_panel_device_.IsPanelLed1On() ? "开启" : "关闭") + "\n";
-                status += "  面板灯2: " + std::string(lamp_panel_device_.IsPanelLed2On() ? "开启" : "关闭") + "\n";
-                status += "  底灯:    " + std::string(lamp_panel_device_.IsBottomLedOn() ? "开启" : "关闭") + "\n";
+                status += "  面板灯1: " +
+                          std::string(lamp_panel_device_.IsPanelLed1On() ? "开启" : "关闭") + "\n";
+                status += "  面板灯2: " +
+                          std::string(lamp_panel_device_.IsPanelLed2On() ? "开启" : "关闭") + "\n";
+                status += "  底灯:    " +
+                          std::string(lamp_panel_device_.IsBottomLedOn() ? "开启" : "关闭") + "\n";
                 status += "硬件: 板级面板灯/底灯驱动";
                 return status;
             } else {
@@ -90,11 +92,12 @@ void LampPanelTool::Register() {
                        "\n支持的动作: turn_on_panel, turn_on_bottom, turn_on_all,"
                        "\n              turn_off_panel, turn_off_bottom, turn_off_all, get_status";
             }
-        }
-    );
+        });
 }
 
-} // namespace mcp_tools
+}  // namespace mcp_tools
 
+#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1
 static auto& g_lamp_panel_tool_instance = mcp_tools::LampPanelTool::GetInstance();
 DECLARE_MCP_TOOL_INSTANCE(g_lamp_panel_tool_instance);
+#endif

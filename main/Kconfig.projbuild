@@ -122,7 +122,7 @@ choice BOARD_TYPE
     default BOARD_TYPE_MOSS_ONVIF
     help
         Select the physical board hardware implementation.
-        This fork ships MOSS ONVIF and MOSS OV2640 boards.
+        This fork ships MOSS ONVIF, MOSS OV2640, and MOSS PCB v1 boards.
 
     config BOARD_TYPE_MOSS_ONVIF
         bool "MOSS ONVIF (外接 ONVIF 摄像机)"
@@ -130,11 +130,14 @@ choice BOARD_TYPE
     config BOARD_TYPE_MOSS_OV2640
         bool "MOSS OV2640 (板载摄像头)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_MOSS_PCB_V1
+        bool "MOSS PCB v1 (SSD1306)"
+        depends on IDF_TARGET_ESP32S3
 endchoice
 
 config BOARD_FAMILY_MOSS
     bool
-    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640
+    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640 || BOARD_TYPE_MOSS_PCB_V1
 
 choice DISPLAY_STYLE
     prompt "Select display style"
@@ -150,7 +153,7 @@ choice DISPLAY_STYLE
 
     config USE_EMOTE_MESSAGE_STYLE
         bool "Emote animation style"
-        depends on BOARD_FAMILY_MOSS
+        depends on BOARD_FAMILY_MOSS && !BOARD_TYPE_MOSS_PCB_V1
 endchoice
 
 config USE_MULTILINE_CHAT_MESSAGE

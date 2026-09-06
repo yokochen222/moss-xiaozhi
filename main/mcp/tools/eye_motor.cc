@@ -1,6 +1,7 @@
 #include "device/eye_motor.h"
 #include <esp_log.h>
 #include "mcp_tools.h"
+#include "sdkconfig.h"
 
 #define TAG "EyeMotorTool"
 
@@ -90,5 +91,7 @@ void EyeMotorTool::Register() {
 
 }  // namespace mcp_tools
 
+#ifndef CONFIG_BOARD_TYPE_MOSS_PCB_V1
 static auto& g_eye_motor_tool_instance = mcp_tools::EyeMotorTool::GetInstance();
 DECLARE_MCP_TOOL_INSTANCE(g_eye_motor_tool_instance);
+#endif

@@ -2,7 +2,45 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_BOARD_TYPE_MOSS_OV2640
+#if CONFIG_BOARD_TYPE_MOSS_PCB_V1
+
+#include <cstdint>
+
+enum EyeMotorState { EYE_MOTOR_STATE_STOPPED, EYE_MOTOR_STATE_FORWARD, EYE_MOTOR_STATE_BACKWARD };
+
+class EyeMotorDevice {
+public:
+    static constexpr uint8_t DEFAULT_SPEED_PERCENT = 40;
+
+    EyeMotorDevice(const EyeMotorDevice&) = delete;
+    EyeMotorDevice& operator=(const EyeMotorDevice&) = delete;
+
+    bool StartForward() { return false; }
+    bool StartBackward() { return false; }
+    bool StartOscillate() { return false; }
+    bool Stop() { return true; }
+
+    bool StartForward(uint8_t) { return false; }
+    bool StartBackward(uint8_t) { return false; }
+    bool StartOscillate(uint8_t) { return false; }
+    bool SetSpeed(uint8_t) { return false; }
+
+    EyeMotorState GetState() const { return EYE_MOTOR_STATE_STOPPED; }
+    bool IsRunning() const { return false; }
+    bool IsOscillating() const { return false; }
+    uint32_t GetCurrentDuty() const { return 0; }
+    uint8_t GetCurrentSpeedPercent() const { return 0; }
+
+    static EyeMotorDevice& GetInstance() {
+        static EyeMotorDevice instance;
+        return instance;
+    }
+
+private:
+    EyeMotorDevice() = default;
+};
+
+#elif CONFIG_BOARD_TYPE_MOSS_OV2640
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>

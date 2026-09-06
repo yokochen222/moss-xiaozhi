@@ -93,8 +93,10 @@ if(CONFIG_BOARD_TYPE_MOSS_ONVIF)
     set(BOARD_DIR "moss/moss-onvif")
 elseif(CONFIG_BOARD_TYPE_MOSS_OV2640)
     set(BOARD_DIR "moss/moss-ov2640")
+elseif(CONFIG_BOARD_TYPE_MOSS_PCB_V1)
+    set(BOARD_DIR "moss/moss-pcb-v1")
 endif()
-if(CONFIG_BOARD_FAMILY_MOSS)
+if(CONFIG_BOARD_FAMILY_MOSS AND NOT CONFIG_BOARD_TYPE_MOSS_PCB_V1)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_128)
@@ -341,6 +343,12 @@ if(CONFIG_BOARD_FAMILY_MOSS)
             "device/eye_motor.cc"
         )
     endif()
+    if(CONFIG_BOARD_TYPE_MOSS_PCB_V1)
+        list(APPEND SOURCES
+            "device/lamp_bar.cc"
+            "device/lamp_eye.cc"
+        )
+    endif()
     if(CONFIG_BOARD_TYPE_MOSS_OV2640)
         list(APPEND SOURCES
             "device/ov2640/lamp_bar.cc"
@@ -362,7 +370,9 @@ if(CONFIG_BOARD_FAMILY_MOSS)
         ${CMAKE_CURRENT_SOURCE_DIR}/mcp
     )
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_http_server spiffs mdns espressif2022__esp_emote_gfx)
-    file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
+    if(NOT CONFIG_BOARD_TYPE_MOSS_PCB_V1)
+        file(GLOB MOSS_EMOTE_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/moss/emote-assets.bin)
+    endif()
 endif()
 
 idf_component_register(SRCS ${SOURCES}
@@ -400,6 +410,13 @@ if(CONFIG_BOARD_FAMILY_MOSS AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(CONFIG_BOARD_TYPE_MOSS_ONVIF AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
         message(FATAL_ERROR
             "moss-onvif requires partitions/moss-desktop-16m.csv "
+            "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
+            "Update sdkconfig and flash partition-table + app together, not OTA."
+        )
+    endif()
+    if(CONFIG_BOARD_TYPE_MOSS_PCB_V1 AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-8m.csv")
+        message(FATAL_ERROR
+            "moss-pcb-v1 requires partitions/moss-desktop-8m.csv "
             "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
             "Update sdkconfig and flash partition-table + app together, not OTA."
         )

@@ -5,6 +5,7 @@
 #include "device/lamp_bar.h"
 #include "device/lamp_eye.h"
 #include "device/lamp_panel.h"
+#include "sdkconfig.h"
 
 namespace {
 
@@ -48,6 +49,31 @@ HwApplyResult MossHwApply(cJSON* payload) {
     };
 
     HwApplyResult result;
+#if CONFIG_BOARD_TYPE_MOSS_PCB_V1
+    if (device == "eye") {
+        result.ok = action == "off" ? eye_off() : eye_on();
+    } else if (device == "bar") {
+        auto& bar = LampBarDevice::GetInstance();
+        result.ok = action == "off" ? bar.StopFlow() : bar.StartFlow();
+    } else if (device == "panel" || device == "bottom" || device == "motor") {
+        result.message = "unsupported on moss-pcb-v1";
+    } else if (device == "all") {
+        auto& bar = LampBarDevice::GetInstance();
+        if (action == "off") {
+            eye_off();
+            bar.StopFlow();
+            result.ok = true;
+        } else {
+            const bool eye_ok = eye_on();
+            const bool bar_ok = bar.StartFlow();
+            result.ok = eye_ok && bar_ok;
+            if (!result.ok)
+                result.message = "partial failure";
+        }
+    } else {
+        result.message = "unknown device";
+    }
+#else
     if (device == "eye") {
         result.ok = action == "off" ? eye_off() : eye_on();
     } else if (device == "bar") {
@@ -90,6 +116,7 @@ HwApplyResult MossHwApply(cJSON* payload) {
     } else {
         result.message = "unknown device";
     }
+#endif
     return result;
 }
 

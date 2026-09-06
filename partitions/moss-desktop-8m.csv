@@ -1,0 +1,10 @@
+# moss-pcb-v1 8MB table: IR SPIFFS + one OTA slot + assets.
+# Dual OTA + MultiNet assets cannot all fit in 8MB (app ~2.8MB, assets ~2.8MB).
+# App partitions must be 64KB-aligned. Flash this table once (not OTA-safe vs 16MB boards).
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,    0x4000,
+otadata,  data, ota,     0xd000,    0x2000,
+phy_init, data, phy,     0xf000,    0x1000,
+storage,  data, spiffs,  0x10000,   0x40000,
+ota_0,    app,  ota_0,   0x50000,   0x300000,
+assets,   data, spiffs,  0x350000,  0x4B0000,
