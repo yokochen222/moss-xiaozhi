@@ -3,6 +3,8 @@
 #include "button.h"
 #include "codecs/box_audio_codec.h"
 #include "config.h"
+#include "device/lamp_bar.h"
+#include "device/lamp_eye.h"
 #include "display/display.h"
 #include "display/oled_display.h"
 #include "mcp_server.h"
@@ -226,6 +228,12 @@ public:
         InitializeButtons();
         InitializeTools();
         InitializePowerSaveTimer();
+#if MOSS_MCP_PERIPHERALS_ENABLE
+        // 眼灯 IO21、流水灯 74HC595：板级起来后再配 GPIO，避免 IDF 未就绪。
+        // 这里放到板级初始化之后，避免 IDF 还没起来就配 LEDC。
+        LampBarDevice::GetInstance().Initialize();
+        LampEyeDevice::GetInstance().Initialize();
+#endif
     }
 
     AudioCodec* GetAudioCodec() override {

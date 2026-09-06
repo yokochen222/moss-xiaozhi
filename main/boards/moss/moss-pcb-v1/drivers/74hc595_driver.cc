@@ -1,6 +1,7 @@
 #include "74hc595_driver.h"
 #include <driver/gpio.h>
 #include <esp_log.h>
+#include <esp_rom_sys.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -45,12 +46,16 @@ void ShiftRegister74HC595::Initialize() {
 
 void ShiftRegister74HC595::PulseClock() {
     gpio_set_level(sck_pin_, 0);
+    esp_rom_delay_us(1);
     gpio_set_level(sck_pin_, 1);
+    esp_rom_delay_us(1);
 }
 
 void ShiftRegister74HC595::PulseLatch() {
     gpio_set_level(rck_pin_, 0);
+    esp_rom_delay_us(1);
     gpio_set_level(rck_pin_, 1);
+    esp_rom_delay_us(1);
 }
 
 void ShiftRegister74HC595::SetOutputs(uint8_t data) {
@@ -60,11 +65,9 @@ void ShiftRegister74HC595::SetOutputs(uint8_t data) {
 
     for (int i = 0; i < 8; i++) {
         gpio_set_level(ser_pin_, ((merged << i) & 0x80) ? 1 : 0);
-        gpio_set_level(sck_pin_, 0);
-        gpio_set_level(sck_pin_, 1);
+        PulseClock();
     }
-    gpio_set_level(rck_pin_, 0);
-    gpio_set_level(rck_pin_, 1);
+    PulseLatch();
     current_data_ = merged;
 }
 

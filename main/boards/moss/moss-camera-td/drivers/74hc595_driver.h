@@ -4,14 +4,13 @@
 #include <driver/gpio.h>
 #include <esp_log.h>
 
-// moss-camera-td：低 5 位流水灯。本板无面板灯/底灯，不调用 SetPanelBit，Q5-Q7 保持 0。
+// lichuang-dev 原实现：Q0-Q7 原样移位，不做面板灯合并。
 class ShiftRegister74HC595 {
 private:
     gpio_num_t ser_pin_;
     gpio_num_t rck_pin_;
     gpio_num_t sck_pin_;
     uint8_t current_data_;
-    static uint8_t panel_state_;
 
     void PulseClock();
     void PulseLatch();
@@ -23,9 +22,6 @@ public:
     void Initialize();
     void SetOutputs(uint8_t data);
     void SetOutput(uint8_t bit, bool level);
-    void SetPanelBit(uint8_t bit, bool level);
-    static uint8_t GetPanelState() { return panel_state_; }
-
     void ClearAll();
     uint8_t GetCurrentData() const { return current_data_; }
     void Reset();

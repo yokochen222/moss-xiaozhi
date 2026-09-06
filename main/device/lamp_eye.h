@@ -66,9 +66,16 @@ public:
 class LampEyeDevice {
 private:
     static constexpr gpio_num_t GPIO_NUM = MOSS_LAMP_EYE_PIN;
+#if CONFIG_BOARD_MOSS_OLED
+    // lichuang-dev: GPIO15 + LEDC timer0/channel0. onvif keeps timer3 because
+    // the LCD backlight already owns timer0/channel0.
+    static constexpr ledc_timer_t LEDC_TIMER = LEDC_TIMER_0;
+    static constexpr ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_0;
+#else
     static constexpr ledc_timer_t LEDC_TIMER = LEDC_TIMER_3;
-    static constexpr ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
     static constexpr ledc_channel_t LEDC_CHANNEL = LEDC_CHANNEL_3;
+#endif
+    static constexpr ledc_mode_t LEDC_MODE = LEDC_LOW_SPEED_MODE;
     static constexpr ledc_timer_bit_t LEDC_DUTY_RES = LEDC_TIMER_13_BIT;
     static constexpr uint32_t LEDC_FREQUENCY = 5000;
     static constexpr uint32_t STOP_NOTIFICATION = 0x01;
@@ -77,9 +84,11 @@ private:
     bool power_;
     bool breathing_;
     bool pause_;
+    bool ready_;
     TaskHandle_t breathing_task_handle_;
     SemaphoreHandle_t pwm_mutex_;
 
+    bool EnsureReady();
     void InitializeGpio();
     void SetDuty(int duty);
     void WaitBreathingTaskExit(int max_ms = 2000);
@@ -92,6 +101,7 @@ public:
     LampEyeDevice(const LampEyeDevice&) = delete;
     LampEyeDevice& operator=(const LampEyeDevice&) = delete;
 
+    void Initialize();
     bool TurnOn();
     bool TurnOff();
     bool StartBreathing();

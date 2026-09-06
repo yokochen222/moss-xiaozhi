@@ -4,8 +4,19 @@
 
 #define TAG "LampBarDevice"
 
-LampBarDevice::LampBarDevice() : power_(false), flowing_(false), flow_task_(nullptr), shift_register_(nullptr) {
+LampBarDevice::LampBarDevice()
+    : power_(false), flowing_(false), flow_task_(nullptr), shift_register_(nullptr) {}
+
+bool LampBarDevice::EnsureReady() {
+    if (shift_register_) {
+        return true;
+    }
     InitializeShiftRegister();
+    return shift_register_ != nullptr;
+}
+
+void LampBarDevice::Initialize() {
+    EnsureReady();
 }
 
 LampBarDevice::~LampBarDevice() {
@@ -40,7 +51,7 @@ void LampBarDevice::WaitFlowTaskExit(int max_ms) {
 }
 
 bool LampBarDevice::StartFlow() {
-    if (!shift_register_) {
+    if (!EnsureReady()) {
         ESP_LOGE(TAG, "Shift register not initialized");
         return false;
     }
@@ -70,7 +81,7 @@ bool LampBarDevice::StartFlow() {
 }
 
 bool LampBarDevice::StopFlow() {
-    if (!shift_register_) {
+    if (!EnsureReady()) {
         ESP_LOGE(TAG, "Shift register not initialized");
         return false;
     }

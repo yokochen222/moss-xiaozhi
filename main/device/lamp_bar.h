@@ -69,6 +69,7 @@ private:
     TaskHandle_t flow_task_;
     ShiftRegister74HC595* shift_register_;
 
+    bool EnsureReady();
     void InitializeShiftRegister();
     void WaitFlowTaskExit(int max_ms = 2000);
     static void FlowTask(void* arg);
@@ -80,6 +81,7 @@ public:
     LampBarDevice(const LampBarDevice&) = delete;
     LampBarDevice& operator=(const LampBarDevice&) = delete;
 
+    void Initialize();
     bool StartFlow();
     bool StopFlow();
     bool IsFlowing() const { return flowing_; }

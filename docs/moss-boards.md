@@ -59,7 +59,7 @@ pcb-v1 相对这两板的硬件差（GPIO 以该板 `config.h` 为准，禁止�
 | 屏 | SSD1306 I2C 128×64（SDA=7 SCL=6，旧 lichuang-dev 脚），无 splash / emote |
 | 功放 NS4150B EN | GPIO48 |
 | 音量键 | 上=GPIO40 下=GPIO39 |
-| 灯 74HC595 | SER=3 RCK=4 SCK=5，只用 Q0–Q4；眼灯=GPIO15 |
+| 灯 74HC595 | SER=3 RCK=4 SCK=5，只用 Q0–Q4；眼灯=GPIO21 |
 | 红外 UART | TX=17 RX=18 |
 | 眼部电机 / 面板灯 / 底灯 / 板载相机 / 云台 | **无** |
 | 分区表 | `partitions/moss-desktop-16m.csv`（与 onvif 相同文件，`type` 不同，**禁止跨板 OTA**） |
@@ -151,7 +151,7 @@ moss-ov2640: 以上全 true（onboard_preview 目前仍为 false）
 moss-pcb-v1 / moss-camera-td: ir / lamps = true；panel / bottom / motor / onboard_camera / gimbal / face_track = false
 ```
 
-隐藏缺件用「显式 `false` 才藏」：缺字段或 `true` 都显示，避免旧 caps 把 onvif / ov2640 界面改掉。
+桌面以 `board` 映射为准（`capsForBoard`），探活后按板型重写 caps。camera-td / pcb-v1 必须藏面板灯、底灯、眼部电机，只留眼灯与流水灯。不要沿用上一台 onvif 的 `panel/motor=true`。
 
 加能力：先改固件 `/health.board`，再改 `board-presets.mjs`，不要用 `product=moss-xiaozhi` 当板型。
 

@@ -1,12 +1,31 @@
 #include "lamp_eye.h"
+#include <driver/gpio.h>
 #include <esp_log.h>
 
 #define TAG "LampEyeDevice"
 
-LampEyeDevice::LampEyeDevice() : gpio_num_(GPIO_NUM), power_(false), breathing_(false), 
-                                 pause_(false), breathing_task_handle_(nullptr), pwm_mutex_(nullptr) {
+LampEyeDevice::LampEyeDevice()
+    : gpio_num_(GPIO_NUM),
+      power_(false),
+      breathing_(false),
+      pause_(false),
+      ready_(false),
+      breathing_task_handle_(nullptr),
+      pwm_mutex_(nullptr) {
     pwm_mutex_ = xSemaphoreCreateMutex();
+}
+
+bool LampEyeDevice::EnsureReady() {
+    if (ready_) {
+        return true;
+    }
     InitializeGpio();
+    ready_ = true;
+    return true;
+}
+
+void LampEyeDevice::Initialize() {
+    EnsureReady();
 }
 
 LampEyeDevice::~LampEyeDevice() {
@@ -44,6 +63,9 @@ LampEyeDevice::~LampEyeDevice() {
 }
 
 void LampEyeDevice::InitializeGpio() {
+    gpio_hold_dis(gpio_num_);
+    gpio_reset_pin(gpio_num_);
+
     ledc_timer_config_t ledc_timer = {
         .speed_mode = LEDC_MODE,
         .duty_resolution = LEDC_DUTY_RES,
@@ -63,6 +85,8 @@ void LampEyeDevice::InitializeGpio() {
         .hpoint = 0
     };
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+    ESP_LOGI(TAG, "eye LEDC gpio=%d timer=%d channel=%d", static_cast<int>(gpio_num_),
+             static_cast<int>(LEDC_TIMER), static_cast<int>(LEDC_CHANNEL));
 }
 
 void LampEyeDevice::SetDuty(int duty) {
@@ -86,6 +110,9 @@ void LampEyeDevice::SetDuty(int duty) {
 }
 
 bool LampEyeDevice::TurnOn() {
+    if (!EnsureReady()) {
+        return false;
+    }
     power_ = true;
     SetDuty((1 << LEDC_DUTY_RES) - 1);
     ESP_LOGI(TAG, "Eye light turned on");
@@ -93,6 +120,9 @@ bool LampEyeDevice::TurnOn() {
 }
 
 bool LampEyeDevice::TurnOff() {
+    if (!EnsureReady()) {
+        return false;
+    }
     power_ = false;
     SetDuty(0);
     ESP_LOGI(TAG, "Eye light turned off");
@@ -114,6 +144,9 @@ void LampEyeDevice::WaitBreathingTaskExit(int max_ms) {
 }
 
 bool LampEyeDevice::StartBreathing() {
+    if (!EnsureReady()) {
+        return false;
+    }
     if (breathing_ && breathing_task_handle_ != nullptr) {
         return true;
     }
@@ -127,6 +160,7 @@ bool LampEyeDevice::StartBreathing() {
 
     breathing_ = true;
     pause_ = false;
+    power_ = true;
     BaseType_t result = xTaskCreate(BreathingTask, "BreathingTask", 2560, this, 5, &breathing_task_handle_);
     if (result != pdPASS) {
         ESP_LOGE(TAG, "Failed to create breathing task");
@@ -163,14 +197,13 @@ bool LampEyeDevice::StopBreathing() {
     }
 
     ESP_LOGI(TAG, "Stopping breathing mode");
-    if (breathing_task_handle_ != nullptr) {
-        xTaskNotify(breathing_task_handle_, STOP_NOTIFICATION, eSetBits);
-    }
-
     breathing_ = false;
     pause_ = false;
     power_ = false;
-    WaitBreathingTaskExit(2000);
+    if (breathing_task_handle_ != nullptr) {
+        vTaskDelete(breathing_task_handle_);
+        breathing_task_handle_ = nullptr;
+    }
     SetDuty(0);
     ESP_LOGI(TAG, "Breathing mode stopped");
     return true;
@@ -180,26 +213,14 @@ void LampEyeDevice::BreathingTask(void* arg) {
     LampEyeDevice* instance = static_cast<LampEyeDevice*>(arg);
     int direction = 1;
     int duty = 0;
-    uint32_t notification_value = 0;
 
     ESP_LOGI(TAG, "Breathing task started");
-    
-    while (true) {
-        // 等待通知或超时
-        BaseType_t result = xTaskNotifyWait(0x00, ULONG_MAX, &notification_value, pdMS_TO_TICKS(50));
-        
-        // 检查停止通知
-        if (result == pdTRUE && (notification_value & STOP_NOTIFICATION)) {
-            ESP_LOGI(TAG, "Received stop notification, exiting breathing task");
-            break;
-        }
-        
-        // 检查暂停状态
+    while (instance->breathing_) {
         if (instance->pause_) {
+            vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
-        // 更新duty
         duty += direction * 100;
         if (duty >= ((1 << LEDC_DUTY_RES) - 1)) {
             duty = (1 << LEDC_DUTY_RES) - 1;
@@ -210,14 +231,12 @@ void LampEyeDevice::BreathingTask(void* arg) {
         }
 
         instance->SetDuty(duty);
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    // 确保灯光关闭
     instance->SetDuty(0);
-    ESP_LOGI(TAG, "Breathing task ended");
-    
-    // 清除任务句柄
     instance->breathing_task_handle_ = nullptr;
+    ESP_LOGI(TAG, "Breathing task ended");
     vTaskDelete(nullptr);
 }
 

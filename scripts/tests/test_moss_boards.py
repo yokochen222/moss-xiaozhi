@@ -324,6 +324,36 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         self.assertNotIn("0x1F", driver)
         self.assertIn("SetOutputs", driver)
 
+    def test_oled_595_uses_clock_settle_delay(self):
+        driver = (ROOT / "main/boards/moss/moss-pcb-v1/drivers/74hc595_driver.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("esp_rom_delay_us(1)", driver)
+        self.assertIn("PulseClock()", driver)
+        self.assertIn("PulseLatch()", driver)
+
+    def test_camera_td_595_matches_lichuang_dev(self):
+        driver = (ROOT / "main/boards/moss/moss-camera-td/drivers/74hc595_driver.cc").read_text(
+            encoding="utf-8"
+        )
+        header = (ROOT / "main/boards/moss/moss-camera-td/config.h").read_text(encoding="utf-8")
+        self.assertNotIn("panel_state_", driver)
+        self.assertNotIn("0x1F", driver)
+        self.assertIn("current_data_ = 0x00", driver)
+        self.assertIn("(data << i) & 0x80", driver)
+        self.assertIn("GPIO_NUM_3", header)
+        self.assertIn("GPIO_NUM_4", header)
+        self.assertIn("GPIO_NUM_5", header)
+        self.assertIn("MOSS_LAMP_EYE_PIN GPIO_NUM_21", header)
+        self.assertNotIn("MOSS_LAMP_EYE_PIN GPIO_NUM_15", header)
+        board = (ROOT / "main/boards/moss/moss-camera-td/moss_camera_td_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("LampBarDevice::GetInstance().Initialize()", board)
+        self.assertIn("LampEyeDevice::GetInstance().Initialize()", board)
+        eye = (ROOT / "main/device/lamp_eye.cc").read_text(encoding="utf-8")
+        self.assertIn("vTaskDelay(pdMS_TO_TICKS(20))", eye)
+
     def test_onvif_owns_lamp_merge_595(self):
         board = ROOT / "main/boards/moss/moss-onvif"
         self.assertFalse((board / "mcp").exists())
@@ -843,6 +873,10 @@ class MossPcbV1BoardTests(unittest.TestCase):
         motor = (ROOT / "main/device/eye_motor.h").read_text(encoding="utf-8")
         self.assertIn("CONFIG_BOARD_MOSS_OLED", panel)
         self.assertIn("CONFIG_BOARD_MOSS_OLED", motor)
+        eye = (ROOT / "main/device/lamp_eye.h").read_text(encoding="utf-8")
+        self.assertIn("LEDC_TIMER_0", eye)
+        self.assertIn("LEDC_CHANNEL_0", eye)
+        self.assertIn("CONFIG_BOARD_MOSS_OLED", eye)
 
     def test_hw_rejects_panel_bottom_motor_and_all_only_eye_bar(self):
         src = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
