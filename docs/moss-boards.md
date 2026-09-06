@@ -50,7 +50,7 @@ pcb-v1 相对这两板的硬件差（GPIO 以该板 `config.h` 为准，禁止�
 | 灯 74HC595 | SER=3 RCK=4 SCK=5，只用 Q0–Q4；眼灯=GPIO15 |
 | 红外 UART | TX=17 RX=18 |
 | 眼部电机 / 面板灯 / 底灯 | **无** |
-| 分区表 | `partitions/moss-desktop-8m.csv`（`type` 不同，**禁止跨板 OTA**） |
+| 分区表 | `partitions/moss-desktop-16m.csv`（与 onvif 相同文件，`type` 不同，**禁止跨板 OTA**） |
 
 **moss-camera-td** 相对现板：
 

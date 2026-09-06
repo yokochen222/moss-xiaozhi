@@ -52,7 +52,8 @@ class MossBoardIdentityTests(unittest.TestCase):
         self.assertIn("partitions/moss-desktop-16m.csv", onvif_cfg)
         self.assertIn("partitions/v2/16m_moss_desktop.csv", ov_cfg)
         pcb_cfg = "\n".join(self._config("moss/moss-pcb-v1")["builds"][0]["sdkconfig_append"])
-        self.assertIn("partitions/moss-desktop-8m.csv", pcb_cfg)
+        self.assertIn("partitions/moss-desktop-16m.csv", pcb_cfg)
+        self.assertNotIn("CONFIG_ESPTOOLPY_FLASHSIZE_8MB", pcb_cfg)
         td_cfg = "\n".join(self._config("moss/moss-camera-td")["builds"][0]["sdkconfig_append"])
         self.assertIn("partitions/moss-desktop-16m.csv", td_cfg)
 

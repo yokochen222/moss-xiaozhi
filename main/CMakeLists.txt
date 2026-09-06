@@ -416,9 +416,9 @@ if(CONFIG_BOARD_FAMILY_MOSS AND NOT CMAKE_BUILD_EARLY_EXPANSION)
             "Update sdkconfig and flash partition-table + app together, not OTA."
         )
     endif()
-    if(CONFIG_BOARD_TYPE_MOSS_PCB_V1 AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-8m.csv")
+    if(CONFIG_BOARD_TYPE_MOSS_PCB_V1 AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
         message(FATAL_ERROR
-            "moss-pcb-v1 requires partitions/moss-desktop-8m.csv "
+            "moss-pcb-v1 requires partitions/moss-desktop-16m.csv "
             "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
             "Update sdkconfig and flash partition-table + app together, not OTA."
         )
