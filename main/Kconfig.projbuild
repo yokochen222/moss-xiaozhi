@@ -122,7 +122,7 @@ choice BOARD_TYPE
     default BOARD_TYPE_MOSS_ONVIF
     help
         Select the physical board hardware implementation.
-        This fork ships MOSS ONVIF, MOSS OV2640, MOSS PCB v1, and MOSS Camera TD boards.
+        This fork ships MOSS ONVIF, MOSS OV2640, MOSS PCB v1, MOSS Camera TD, and MOSS PCB Board boards.
 
     config BOARD_TYPE_MOSS_CAMERA_TD
         bool "MOSS Camera TD (SSD1306，无面板灯/底灯/眼电机)"
@@ -133,6 +133,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_MOSS_OV2640
         bool "MOSS OV2640 (板载摄像头)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_MOSS_PCB_BOARD
+        bool "MOSS PCB Board (SSD1306，无面板灯/底灯/眼电机)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_MOSS_PCB_V1
         bool "MOSS PCB v1 (SSD1306)"
         depends on IDF_TARGET_ESP32S3
@@ -140,11 +143,11 @@ endchoice
 
 config BOARD_FAMILY_MOSS
     bool
-    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640 || BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD
+    default y if BOARD_TYPE_MOSS_ONVIF || BOARD_TYPE_MOSS_OV2640 || BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD || BOARD_TYPE_MOSS_PCB_BOARD
 
 config BOARD_MOSS_OLED
     bool
-    default y if BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD
+    default y if BOARD_TYPE_MOSS_PCB_V1 || BOARD_TYPE_MOSS_CAMERA_TD || BOARD_TYPE_MOSS_PCB_BOARD
     help
         SSD1306 boards without panel LEDs, bottom LED, or eye motor.
 

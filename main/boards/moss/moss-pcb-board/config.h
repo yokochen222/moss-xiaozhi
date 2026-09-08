@@ -17,7 +17,8 @@
 #define AUDIO_I2S_GPIO_DIN GPIO_NUM_12
 #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_45
 
-// NS4150B CTRL is IO48_SPK_EN (same as old lichuang-dev / onvif GPIO PA).
+// Source tree leftover used GPIO48 as BUILTIN_LED and PA=NC.
+// This PCB family uses GPIO48 as NS4150B CTRL (IO48_SPK_EN), same as pcb-v1.
 #define AUDIO_CODEC_PA_PIN GPIO_NUM_48
 #define AUDIO_CODEC_I2C_SDA_PIN GPIO_NUM_1
 #define AUDIO_CODEC_I2C_SCL_PIN GPIO_NUM_2
@@ -31,7 +32,7 @@
 
 /*
  * SSD1306 128x64 OLED on a dedicated I2C bus (port 0).
- * Pins match the old lichuang-dev MOSS board: SDA=7 SCL=6.
+ * Pins match the source moss-pcb-board / pcb-v1: SDA=6 SCL=7.
  * Codec remains on I2C port 1 (SDA=1 SCL=2).
  */
 #define DISPLAY_WIDTH 128
@@ -39,15 +40,15 @@
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y true
 #define DISPLAY_SWAP_XY false
-#define DISPLAY_SDA_PIN GPIO_NUM_7
-#define DISPLAY_SCL_PIN GPIO_NUM_6
+#define DISPLAY_SDA_PIN GPIO_NUM_6
+#define DISPLAY_SCL_PIN GPIO_NUM_7
 
 #define MOSS_MCP_PERIPHERALS_ENABLE 1
 
 #define MOSS_LAMP_74HC595_SER_PIN GPIO_NUM_3
 #define MOSS_LAMP_74HC595_RCK_PIN GPIO_NUM_4
 #define MOSS_LAMP_74HC595_SCK_PIN GPIO_NUM_5
-#define MOSS_LAMP_EYE_PIN GPIO_NUM_21
+#define MOSS_LAMP_EYE_PIN GPIO_NUM_15
 #define MOSS_IR_UART_TX_PIN GPIO_NUM_17
 #define MOSS_IR_UART_RX_PIN GPIO_NUM_18
 #define MOSS_IR_UART_PORT UART_NUM_2

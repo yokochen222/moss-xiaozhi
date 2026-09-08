@@ -2,7 +2,7 @@
 
 给后续 Agent / 开发者。改固件或桌面前先读完。
 
-本仓库出四款板：
+本仓库出五款板：
 
 | `board`（`/health` 字段） | 目录 | 桌面类型名 |
 |---|---|---|
@@ -10,13 +10,14 @@
 | `moss-ov2640` | `main/boards/moss/moss-ov2640` | 板载视觉 |
 | `moss-pcb-v1` | `main/boards/moss/moss-pcb-v1` | PCB v1 |
 | `moss-camera-td` | `main/boards/moss/moss-camera-td` | Camera TD |
+| `moss-pcb-board` | `main/boards/moss/moss-pcb-board` | PCB Board |
 
 **onvif 与 ov2640 产品约定：除云台和板载摄像头（含人脸追踪）外，这两块板对用户、对桌面、对 HTTP 控制面必须一致。**  
 不要因为「这块是 onvif」就关掉灯、电机、红外、唤醒、AEC、亮度、按住说话。那些不是这两板的差异。
 
-**pcb-v1 / camera-td 是硬件缺件板**：SSD1306 OLED，无眼部电机、无面板灯、无底灯；有实体音量键。camera-td 对齐旧版 lichuang-dev（屏 SDA=7 SCL=6，16MB 分区）。桌面用 caps **隐藏**缺件控件，不做成灰按钮。其它控制面（发现、绑定、`/health`、配置、对话、红外、云享记）与现板同一套 API。外接 ONVIF 走桌面，不注册板载 `/camera/*`。
+**pcb-v1 / camera-td / pcb-board 是硬件缺件板**：SSD1306 OLED，无眼部电机、无面板灯、无底灯；有实体音量键。camera-td 对齐旧版 lichuang-dev（屏 SDA=7 SCL=6，16MB 分区）。pcb-board 来自旧 8M 分区桌搭（屏 SDA=6 SCL=7，眼灯 GPIO15），现用 `moss-desktop-16m.csv`。桌面用 caps **隐藏**缺件控件，不做成灰按钮。其它控制面（发现、绑定、`/health`、配置、对话、红外、云享记）与现板同一套 API。外接 ONVIF 走桌面，不注册板载 `/camera/*`。
 
-桌面能力开关只看 `camera/yo-moss-ai/server/board-presets.mjs` 的 `capsForBoard`。未知 `board` 按 `moss-onvif` 处理（三项灯/电机都显示）。必须登记 `moss-pcb-v1` / `moss-camera-td` 才会藏面板灯/底灯/电机。
+桌面能力开关只看 `camera/yo-moss-ai/server/board-presets.mjs` 的 `capsForBoard`。未知 `board` 按 `moss-onvif` 处理（三项灯/电机都显示）。必须登记 `moss-pcb-v1` / `moss-camera-td` / `moss-pcb-board` 才会藏面板灯/底灯/电机。
 
 禁止修改 `moss-onvif/`、`moss-ov2640/` 目录内文件来迁就缺件板。共用代码用 `CONFIG_BOARD_MOSS_OLED`。
 
@@ -64,9 +65,21 @@ pcb-v1 相对这两板的硬件差（GPIO 以该板 `config.h` 为准，禁止�
 | 眼部电机 / 面板灯 / 底灯 / 板载相机 / 云台 | **无** |
 | 分区表 | `partitions/moss-desktop-16m.csv`（与 onvif 相同文件，`type` 不同，**禁止跨板 OTA**） |
 
+**moss-pcb-board** 来自旧 8M 分区桌搭源码（`moss-xiaozhi-moss-pcb-board`），只迁板级引脚与 OLED 实现，不迁旧 `application` / 音频 / 协议：
+
+| 项 | moss-pcb-board |
+|---|---|
+| 屏 | SSD1306 I2C 128×64（SDA=6 SCL=7，与 pcb-v1 相同），无 splash / emote |
+| 功放 NS4150B EN | GPIO48（源码里 GPIO48 曾标成 BUILTIN_LED、PA=NC；现板与 pcb-v1 一样走 PA） |
+| 音量键 | 上=GPIO40 下=GPIO39 |
+| 灯 74HC595 | SER=3 RCK=4 SCK=5，8 位原样移位（与 camera-td 相同，不做面板合并）；眼灯=GPIO15 |
+| 红外 UART | TX=17 RX=18 |
+| 眼部电机 / 面板灯 / 底灯 / 板载相机 / 云台 | **无** |
+| 分区表 | `partitions/moss-desktop-16m.csv`（原 8M 已废弃，`type` 不同，**禁止跨板 OTA**，首次 `erase-flash`） |
+
 **禁止**各板互相 OTA。分区表不同或 `type` 不同都不行，首次烧录用 `erase-flash`。
 
-onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`、`/ir/*`），只是底层 GPIO vs PCA9685。改 `/hw` JSON 或动作名必须这两板一起改。pcb-v1 / camera-td 的 `/hw` 对 `panel`/`bottom`/`motor` 返回失败，`all` 只动眼灯+流水灯。
+onvif 与 ov2640 的灯、电机、红外 **HTTP 语义相同**（`GET/POST /hw`、`/ir/*`），只是底层 GPIO vs PCA9685。改 `/hw` JSON 或动作名必须这两板一起改。pcb-v1 / camera-td / pcb-board 的 `/hw` 对 `panel`/`bottom`/`motor` 返回失败，`all` 只动眼灯+流水灯。
 
 ---
 
@@ -141,17 +154,17 @@ ov2640 的 PA 和 I2S 是分开的：idle 听唤醒时 TX 可开、功放关掉�
 ### 2.3 显示
 
 onvif / ov2640 都是 0.96" ST7735 160×80 + 嵌入 splash，**不用 LVGL 主题**。硬件页不显示「界面主题」。  
-pcb-v1 / camera-td 是 SSD1306 128×64 + `OledDisplay`（14 号字体），无 splash / emote；`config.json` 不要开 `USE_EMOTE_MESSAGE_STYLE`。
+pcb-v1 / camera-td / pcb-board 是 SSD1306 128×64 + `OledDisplay`（14 号字体），无 splash / emote；`config.json` 不要开 `USE_EMOTE_MESSAGE_STYLE`。
 
 ### 2.4 桌面 caps
 
 ```
 moss-onvif : ir / lamps / panel / bottom / motor = true；onboard_camera / gimbal / face_track = false
 moss-ov2640: 以上全 true（onboard_preview 目前仍为 false）
-moss-pcb-v1 / moss-camera-td: ir / lamps = true；panel / bottom / motor / onboard_camera / gimbal / face_track = false
+moss-pcb-v1 / moss-camera-td / moss-pcb-board: ir / lamps = true；panel / bottom / motor / onboard_camera / gimbal / face_track = false
 ```
 
-桌面以 `board` 映射为准（`capsForBoard`），探活后按板型重写 caps。camera-td / pcb-v1 必须藏面板灯、底灯、眼部电机，只留眼灯与流水灯。不要沿用上一台 onvif 的 `panel/motor=true`。
+桌面以 `board` 映射为准（`capsForBoard`），探活后按板型重写 caps。camera-td / pcb-v1 / pcb-board 必须藏面板灯、底灯、眼部电机，只留眼灯与流水灯。不要沿用上一台 onvif 的 `panel/motor=true`。
 
 加能力：先改固件 `/health.board`，再改 `board-presets.mjs`，不要用 `product=moss-xiaozhi` 当板型。
 
@@ -178,7 +191,7 @@ onvif 功放在 GPIO48，出声走 `PreparePlayback()` 拉高，不要只抄 ov2
 3. 引脚、PCA9685、相机、分区 → 只改对应板的 `config.h` / `config.json` / 板源文件。
 4. 新 HTTP 路径：能进 family 就进；相机相关必须包在 `CONFIG_BOARD_TYPE_MOSS_OV2640`。
 5. 测例：`python3 -m unittest scripts.tests.test_moss_boards -v`（含「增益/唤醒默认值相同」；两板 LCD/电机对齐测例不要塞 pcb-v1）；桌面 `pnpm test`。
-6. 真机：onvif 与 ov2640 都要听一遍同一唤醒词。禁止只调其中一块的 MIC 增益。pcb-v1 另验 OLED 出字、GPIO48 喇叭、音量键、BOOT、发现 `board=moss-pcb-v1`、硬件页只有眼灯和流水灯。
+6. 真机：onvif 与 ov2640 都要听一遍同一唤醒词。禁止只调其中一块的 MIC 增益。pcb-v1 / pcb-board 另验 OLED 出字、GPIO48 喇叭、音量键、BOOT、发现对应 `board`、硬件页只有眼灯和流水灯。camera-td 另验屏脚 SDA=7 SCL=6、眼灯 GPIO21。
 
 构建：
 
@@ -187,4 +200,5 @@ python3 scripts/build.py moss/moss-onvif --name moss-onvif
 python3 scripts/build.py moss/moss-ov2640 --name moss-ov2640
 python3 scripts/build.py moss/moss-pcb-v1 --name moss-pcb-v1
 python3 scripts/build.py moss/moss-camera-td --name moss-camera-td
+python3 scripts/build.py moss/moss-pcb-board --name moss-pcb-board
 ```

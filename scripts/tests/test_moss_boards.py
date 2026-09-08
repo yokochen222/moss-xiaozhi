@@ -12,7 +12,7 @@ class MossBoardIdentityTests(unittest.TestCase):
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_config_type_matches_directory_and_build_name(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             config = self._config(f"moss/{leaf}")
             self.assertEqual(config["type"], leaf)
             names = [item["name"] for item in config["builds"]]
@@ -24,20 +24,20 @@ class MossBoardIdentityTests(unittest.TestCase):
             config = json.loads(path.read_text(encoding="utf-8"))
             types.append(config["type"])
         self.assertEqual(len(types), len(set(types)))
-        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"})
+        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"})
 
     def test_both_boards_use_usb_serial_jtag_console(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y", append)
 
     def test_both_boards_enable_custom_wake_word(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", append)
 
     def test_both_boards_enable_device_aec(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
 
@@ -56,6 +56,9 @@ class MossBoardIdentityTests(unittest.TestCase):
         self.assertNotIn("CONFIG_ESPTOOLPY_FLASHSIZE_8MB", pcb_cfg)
         td_cfg = "\n".join(self._config("moss/moss-camera-td")["builds"][0]["sdkconfig_append"])
         self.assertIn("partitions/moss-desktop-16m.csv", td_cfg)
+        pcb_board_cfg = "\n".join(self._config("moss/moss-pcb-board")["builds"][0]["sdkconfig_append"])
+        self.assertIn("partitions/moss-desktop-16m.csv", pcb_board_cfg)
+        self.assertNotIn("CONFIG_ESPTOOLPY_FLASHSIZE_8MB", pcb_board_cfg)
 
     def test_wake_and_mic_defaults_are_shared(self):
         shared = (ROOT / "main/boards/moss/moss_shared_audio.h").read_text(encoding="utf-8")
@@ -64,7 +67,7 @@ class MossBoardIdentityTests(unittest.TestCase):
         self.assertIn("MIC2 is unused", shared)
         self.assertNotIn("#define AUDIO_CODEC_REFERENCE_GAIN", shared)
         self.assertNotIn("#define AUDIO_CODEC_REFERENCE_CHANNEL", shared)
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             header = (ROOT / "main/boards" / f"moss/{leaf}" / "config.h").read_text(encoding="utf-8")
             self.assertIn('#include "moss_shared_audio.h"', header)
             self.assertNotIn("#define AUDIO_CODEC_INPUT_GAIN", header)
@@ -82,7 +85,10 @@ class MossBoardIdentityTests(unittest.TestCase):
         td = (ROOT / "main/boards/moss/moss-camera-td/moss_camera_td_board.cc").read_text(
             encoding="utf-8"
         )
-        for src in (onvif, ov2640, pcb, td):
+        pcb_board = (ROOT / "main/boards/moss/moss-pcb-board/moss_pcb_board.cc").read_text(
+            encoding="utf-8"
+        )
+        for src in (onvif, ov2640, pcb, td, pcb_board):
             self.assertIn("AUDIO_CODEC_INPUT_GAIN", src)
             self.assertNotIn("AUDIO_CODEC_REFERENCE_CHANNEL", src)
             self.assertNotIn("AUDIO_CODEC_REFERENCE_GAIN", src)
@@ -354,6 +360,27 @@ class MossBoardMcpLayoutTests(unittest.TestCase):
         self.assertIn("LampEyeDevice::GetInstance().Initialize()", board)
         eye = (ROOT / "main/device/lamp_eye.cc").read_text(encoding="utf-8")
         self.assertIn("vTaskDelay(pdMS_TO_TICKS(20))", eye)
+
+    def test_pcb_board_595_matches_source_raw_shift(self):
+        driver = (ROOT / "main/boards/moss/moss-pcb-board/drivers/74hc595_driver.cc").read_text(
+            encoding="utf-8"
+        )
+        header = (ROOT / "main/boards/moss/moss-pcb-board/config.h").read_text(encoding="utf-8")
+        self.assertNotIn("panel_state_", driver)
+        self.assertNotIn("0x1F", driver)
+        self.assertIn("current_data_ = 0x00", driver)
+        self.assertIn("(data << i) & 0x80", driver)
+        self.assertIn("GPIO_NUM_3", header)
+        self.assertIn("GPIO_NUM_4", header)
+        self.assertIn("GPIO_NUM_5", header)
+        self.assertIn("MOSS_LAMP_EYE_PIN GPIO_NUM_15", header)
+        self.assertIn("DISPLAY_SDA_PIN GPIO_NUM_6", header)
+        self.assertIn("DISPLAY_SCL_PIN GPIO_NUM_7", header)
+        board = (ROOT / "main/boards/moss/moss-pcb-board/moss_pcb_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("LampBarDevice::GetInstance().Initialize()", board)
+        self.assertIn("LampEyeDevice::GetInstance().Initialize()", board)
 
     def test_onvif_owns_lamp_merge_595(self):
         board = ROOT / "main/boards/moss/moss-onvif"
@@ -699,7 +726,7 @@ class MossBargeInTests(unittest.TestCase):
             "AEC_NLP_LEVEL_VERYAGGR",
             "vad_delay_ms",
         )
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             board_dir = ROOT / "main/boards/moss" / leaf
             for path in board_dir.rglob("*.cc"):
                 text = path.read_text(encoding="utf-8")
@@ -870,6 +897,38 @@ class MossPcbV1BoardTests(unittest.TestCase):
         self.assertIn("esp_lcd_new_panel_ssd1306", board)
         self.assertNotIn("splash_player", board)
         self.assertFalse((ROOT / "main/boards/moss/moss-camera-td/splash_player.cc").exists())
+
+    def test_pcb_board_uses_source_oled_pins_16m_and_no_panel_motor(self):
+        header = (ROOT / "main/boards/moss/moss-pcb-board/config.h").read_text(encoding="utf-8")
+        self.assertIn("#define DISPLAY_WIDTH 128", header)
+        self.assertIn("#define DISPLAY_HEIGHT 64", header)
+        self.assertIn("DISPLAY_SDA_PIN GPIO_NUM_6", header)
+        self.assertIn("DISPLAY_SCL_PIN GPIO_NUM_7", header)
+        self.assertIn("AUDIO_CODEC_PA_PIN GPIO_NUM_48", header)
+        self.assertIn("MOSS_LAMP_EYE_PIN GPIO_NUM_15", header)
+        self.assertNotIn("DISPLAY_LCD_BOUNCE_ROWS", header)
+        board = (ROOT / "main/boards/moss/moss-pcb-board/moss_pcb_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("MossPcbBoard", board)
+        self.assertIn("OledDisplay", board)
+        self.assertIn("esp_lcd_new_panel_ssd1306", board)
+        self.assertNotIn("splash_player", board)
+        self.assertNotIn("WifiStation", board)
+        append = "\n".join(
+            json.loads(
+                (ROOT / "main/boards/moss/moss-pcb-board/config.json").read_text(encoding="utf-8")
+            )["builds"][0]["sdkconfig_append"]
+        )
+        self.assertIn("partitions/moss-desktop-16m.csv", append)
+        self.assertNotIn("USE_EMOTE_MESSAGE_STYLE", append)
+        self.assertFalse((ROOT / "main/boards/moss/moss-pcb-board/splash_player.cc").exists())
+        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn('set(BOARD_DIR "moss/moss-pcb-board")', cmake)
+        self.assertIn("moss-pcb-board requires partitions/moss-desktop-16m.csv", cmake)
+        kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
+        self.assertIn("BOARD_TYPE_MOSS_PCB_BOARD", kconfig)
+        self.assertIn("BOARD_TYPE_MOSS_PCB_BOARD", kconfig[kconfig.find("config BOARD_MOSS_OLED") :])
         panel = (ROOT / "main/device/lamp_panel.h").read_text(encoding="utf-8")
         motor = (ROOT / "main/device/eye_motor.h").read_text(encoding="utf-8")
         self.assertIn("CONFIG_BOARD_MOSS_OLED", panel)

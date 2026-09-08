@@ -46,9 +46,9 @@ Board selection is a coupled chain:
 
 When adding a board or variant, update every relevant link in that chain. Include a unique board identity, correct chip target, flash/partition settings, exactly one `DECLARE_BOARD`, and board documentation. Follow `docs/custom-board.md`.
 
-This fork ships four MOSS boards: `moss/moss-onvif`, `moss/moss-ov2640`, `moss/moss-pcb-v1`, and `moss/moss-camera-td`. Shared desktop-client code is gated by `CONFIG_BOARD_FAMILY_MOSS`. Camera/gimbal/face-track sources compile only for `CONFIG_BOARD_TYPE_MOSS_OV2640`. Do not OTA across board `type` or partition tables; first flash uses `erase-flash`. Desktop routing uses the firmware `board` field (`moss-onvif` / `moss-ov2640` / `moss-pcb-v1` / `moss-camera-td`), not `product=moss-xiaozhi`. pcb-v1 and camera-td have no eye motor, panel LEDs, or bottom LED — desktop hides those controls. Shared missing-peripheral stubs use `CONFIG_BOARD_MOSS_OLED`.
+This fork ships five MOSS boards: `moss/moss-onvif`, `moss/moss-ov2640`, `moss/moss-pcb-v1`, `moss/moss-camera-td`, and `moss/moss-pcb-board`. Shared desktop-client code is gated by `CONFIG_BOARD_FAMILY_MOSS`. Camera/gimbal/face-track sources compile only for `CONFIG_BOARD_TYPE_MOSS_OV2640`. Do not OTA across board `type` or partition tables; first flash uses `erase-flash`. Desktop routing uses the firmware `board` field (`moss-onvif` / `moss-ov2640` / `moss-pcb-v1` / `moss-camera-td` / `moss-pcb-board`), not `product=moss-xiaozhi`. pcb-v1, camera-td, and pcb-board have no eye motor, panel LEDs, or bottom LED — desktop hides those controls. Shared missing-peripheral stubs use `CONFIG_BOARD_MOSS_OLED`.
 
-**Board diff for agents (read before changing a board):** [`docs/moss-boards.md`](docs/moss-boards.md). Aside from gimbal and the onboard camera, onvif and ov2640 user-facing behavior and analog wake/mic defaults must stay identical. pcb-v1 and camera-td share wake/mic defaults but differ in display (SSD1306) and missing peripherals. Mic gain lives in `main/boards/moss/moss_shared_audio.h` — do not fork it in a board `config.h`. Do not edit files under `moss-onvif/` or `moss-ov2640/` to accommodate OLED boards.
+**Board diff for agents (read before changing a board):** [`docs/moss-boards.md`](docs/moss-boards.md). Aside from gimbal and the onboard camera, onvif and ov2640 user-facing behavior and analog wake/mic defaults must stay identical. pcb-v1, camera-td, and pcb-board share wake/mic defaults but differ in display (SSD1306) and missing peripherals. Mic gain lives in `main/boards/moss/moss_shared_audio.h` — do not fork it in a board `config.h`. Do not edit files under `moss-onvif/` or `moss-ov2640/` to accommodate OLED boards.
 
 **AEC / VAD (verified):** duplex matches official lichuang-dev. Do not re-enable local VAD barge-in, do not prepend `vad_cache`, do not overwrite the analog MIC3 loopback with DAC PCM, do not hold `listen/start` until playback drains. Details and the do-not list are in `docs/moss-boards.md` §2.2.
 
@@ -75,6 +75,8 @@ python3 -m unittest discover -s scripts/tests -v
 python3 scripts/build.py moss/moss-onvif --name moss-onvif
 python3 scripts/build.py moss/moss-ov2640 --name moss-ov2640
 python3 scripts/build.py moss/moss-pcb-v1 --name moss-pcb-v1
+python3 scripts/build.py moss/moss-camera-td --name moss-camera-td
+python3 scripts/build.py moss/moss-pcb-board --name moss-pcb-board
 
 # Format/check touched files
 clang-format -i <files>
