@@ -34,11 +34,11 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(len(names), len(set(names)))
             self.assertEqual(
                 {variant["board"] for variant in variants},
-                {"moss/moss-onvif", "moss/moss-ov2640", "moss/moss-pcb-v1", "moss/moss-camera-td", "moss/moss-pcb-board"},
+                {"moss/moss-onvif", "moss/moss-ov2640", "moss/moss-pcb-v1", "moss/moss-camera-td", "moss/moss-pcb-board", "moss/moss-bread-compact"},
             )
 
         idf6_names = {variant["full_name"] for variant in idf6}
-        self.assertEqual(idf6_names, {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"})
+        self.assertEqual(idf6_names, {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"})
         by_type = {variant["type"]: variant for variant in idf6}
         self.assertEqual(by_type["moss-onvif"]["target"], "esp32s3")
         self.assertEqual(by_type["moss-onvif"]["config"], "CONFIG_BOARD_TYPE_MOSS_ONVIF")
@@ -46,6 +46,7 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(by_type["moss-pcb-v1"]["config"], "CONFIG_BOARD_TYPE_MOSS_PCB_V1")
         self.assertEqual(by_type["moss-camera-td"]["config"], "CONFIG_BOARD_TYPE_MOSS_CAMERA_TD")
         self.assertEqual(by_type["moss-pcb-board"]["config"], "CONFIG_BOARD_TYPE_MOSS_PCB_BOARD")
+        self.assertEqual(by_type["moss-bread-compact"]["config"], "CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT")
         self.assertEqual(
             by_type["moss-onvif"]["display_name"],
             "MOSS ONVIF (外接 ONVIF 摄像机)",
@@ -65,6 +66,10 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(
             by_type["moss-pcb-board"]["display_name"],
             "MOSS PCB Board (SSD1306，无面板灯/底灯/眼电机)",
+        )
+        self.assertEqual(
+            by_type["moss-bread-compact"]["display_name"],
+            "MOSS Bread Compact (SSD1306，INMP441 半双工，无实时打断)",
         )
 
         for config_path in (ROOT / "main/boards").rglob("config.json"):
@@ -293,6 +298,7 @@ class BoardSelectionTests(unittest.TestCase):
         self.assertTrue(build._board_type_exists("moss/moss-pcb-v1"))
         self.assertTrue(build._board_type_exists("moss/moss-camera-td"))
         self.assertTrue(build._board_type_exists("moss/moss-pcb-board"))
+        self.assertTrue(build._board_type_exists("moss/moss-bread-compact"))
         self.assertEqual(
             build._resolve_board_config("moss/moss-onvif", "esp32s3", []),
             "CONFIG_BOARD_TYPE_MOSS_ONVIF",
@@ -314,6 +320,10 @@ class BoardSelectionTests(unittest.TestCase):
             "CONFIG_BOARD_TYPE_MOSS_PCB_BOARD",
         )
         self.assertEqual(
+            build._resolve_board_config("moss/moss-bread-compact", "esp32s3", []),
+            "CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT",
+        )
+        self.assertEqual(
             build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_ONVIF"),
             "MOSS ONVIF (外接 ONVIF 摄像机)",
         )
@@ -332,6 +342,10 @@ class BoardSelectionTests(unittest.TestCase):
         self.assertEqual(
             build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_PCB_BOARD"),
             "MOSS PCB Board (SSD1306，无面板灯/底灯/眼电机)",
+        )
+        self.assertEqual(
+            build._get_board_display_name("CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT"),
+            "MOSS Bread Compact (SSD1306，INMP441 半双工，无实时打断)",
         )
 
 
@@ -543,13 +557,14 @@ class BoardMenuTests(unittest.TestCase):
         choice = kconfig.split("choice BOARD_TYPE\n", 1)[1].split(
             "endchoice\n", 1
         )[0]
-        # This fork ships moss-onvif, moss-ov2640, moss-pcb-v1, moss-camera-td, and moss-pcb-board.
+        # This fork ships moss-onvif, moss-ov2640, moss-pcb-v1, moss-camera-td, moss-pcb-board, and moss-bread-compact.
         self.assertIn("default BOARD_TYPE_MOSS_ONVIF", choice)
         self.assertIn("config BOARD_TYPE_MOSS_ONVIF", choice)
         self.assertIn("config BOARD_TYPE_MOSS_OV2640", choice)
         self.assertIn("config BOARD_TYPE_MOSS_PCB_V1", choice)
         self.assertIn("config BOARD_TYPE_MOSS_CAMERA_TD", choice)
         self.assertIn("config BOARD_TYPE_MOSS_PCB_BOARD", choice)
+        self.assertIn("config BOARD_TYPE_MOSS_BREAD_COMPACT", choice)
         self.assertNotIn("config BOARD_TYPE_MOSS_DESKTOP", choice)
         kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
         self.assertIn("config BOARD_FAMILY_MOSS", kconfig)

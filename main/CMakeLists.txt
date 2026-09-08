@@ -99,6 +99,8 @@ elseif(CONFIG_BOARD_TYPE_MOSS_CAMERA_TD)
     set(BOARD_DIR "moss/moss-camera-td")
 elseif(CONFIG_BOARD_TYPE_MOSS_PCB_BOARD)
     set(BOARD_DIR "moss/moss-pcb-board")
+elseif(CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT)
+    set(BOARD_DIR "moss/moss-bread-compact")
 endif()
 if(CONFIG_BOARD_FAMILY_MOSS AND NOT CONFIG_BOARD_MOSS_OLED)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
@@ -347,7 +349,11 @@ if(CONFIG_BOARD_FAMILY_MOSS)
             "device/eye_motor.cc"
         )
     endif()
-    if(CONFIG_BOARD_MOSS_OLED)
+    if(CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT)
+        list(APPEND SOURCES
+            "device/lamp_eye.cc"
+        )
+    elseif(CONFIG_BOARD_MOSS_OLED)
         list(APPEND SOURCES
             "device/lamp_bar.cc"
             "device/lamp_eye.cc"
@@ -435,6 +441,13 @@ if(CONFIG_BOARD_FAMILY_MOSS AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     if(CONFIG_BOARD_TYPE_MOSS_PCB_BOARD AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
         message(FATAL_ERROR
             "moss-pcb-board requires partitions/moss-desktop-16m.csv "
+            "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
+            "Update sdkconfig and flash partition-table + app together, not OTA."
+        )
+    endif()
+    if(CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT AND NOT CONFIG_PARTITION_TABLE_CUSTOM_FILENAME STREQUAL "partitions/moss-desktop-16m.csv")
+        message(FATAL_ERROR
+            "moss-bread-compact requires partitions/moss-desktop-16m.csv "
             "(current: ${CONFIG_PARTITION_TABLE_CUSTOM_FILENAME}). "
             "Update sdkconfig and flash partition-table + app together, not OTA."
         )

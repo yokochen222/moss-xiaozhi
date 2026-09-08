@@ -47,6 +47,50 @@ public:
     static LampBarDevice& GetInstance();
 };
 
+#elif CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT
+
+#include <driver/gpio.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "config.h"
+
+class LampBarDevice {
+private:
+    static constexpr int LED_COUNT = 5;
+
+    bool power_;
+    bool flowing_;
+    bool ready_;
+    TaskHandle_t flow_task_;
+
+    static gpio_num_t Pin(int index);
+    bool EnsureReady();
+    void InitializeGpio();
+    void ApplyPattern(uint8_t mask5);
+    void ClearAll();
+    void WaitFlowTaskExit(int max_ms = 2000);
+    static void FlowTask(void* arg);
+
+public:
+    LampBarDevice();
+    ~LampBarDevice();
+
+    LampBarDevice(const LampBarDevice&) = delete;
+    LampBarDevice& operator=(const LampBarDevice&) = delete;
+
+    void Initialize();
+    bool StartFlow();
+    bool StopFlow();
+    bool IsFlowing() const { return flowing_; }
+    bool IsPowered() const { return power_; }
+
+    bool ResetDriver();
+    bool ForceRestart();
+
+    static LampBarDevice& GetInstance();
+};
+
 #else
 
 #include <driver/gpio.h>

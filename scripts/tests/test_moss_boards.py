@@ -12,7 +12,7 @@ class MossBoardIdentityTests(unittest.TestCase):
         return json.loads(path.read_text(encoding="utf-8"))
 
     def test_config_type_matches_directory_and_build_name(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"):
             config = self._config(f"moss/{leaf}")
             self.assertEqual(config["type"], leaf)
             names = [item["name"] for item in config["builds"]]
@@ -24,15 +24,15 @@ class MossBoardIdentityTests(unittest.TestCase):
             config = json.loads(path.read_text(encoding="utf-8"))
             types.append(config["type"])
         self.assertEqual(len(types), len(set(types)))
-        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"})
+        self.assertEqual(set(types), {"moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"})
 
     def test_both_boards_use_usb_serial_jtag_console(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y", append)
 
     def test_both_boards_enable_custom_wake_word(self):
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_CUSTOM_WAKE_WORD=y", append)
 
@@ -40,6 +40,9 @@ class MossBoardIdentityTests(unittest.TestCase):
         for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
             append = "\n".join(self._config(f"moss/{leaf}")["builds"][0]["sdkconfig_append"])
             self.assertIn("CONFIG_USE_DEVICE_AEC=y", append)
+        bread = "\n".join(self._config("moss/moss-bread-compact")["builds"][0]["sdkconfig_append"])
+        self.assertIn("CONFIG_USE_DEVICE_AEC=n", bread)
+        self.assertNotIn("CONFIG_USE_DEVICE_AEC=y", bread)
 
     def test_partition_tables_differ(self):
         onvif = ROOT / "partitions/moss-desktop-16m.csv"
@@ -59,6 +62,9 @@ class MossBoardIdentityTests(unittest.TestCase):
         pcb_board_cfg = "\n".join(self._config("moss/moss-pcb-board")["builds"][0]["sdkconfig_append"])
         self.assertIn("partitions/moss-desktop-16m.csv", pcb_board_cfg)
         self.assertNotIn("CONFIG_ESPTOOLPY_FLASHSIZE_8MB", pcb_board_cfg)
+        bread_cfg = "\n".join(self._config("moss/moss-bread-compact")["builds"][0]["sdkconfig_append"])
+        self.assertIn("partitions/moss-desktop-16m.csv", bread_cfg)
+        self.assertIn("CONFIG_USE_DEVICE_AEC=n", bread_cfg)
 
     def test_wake_and_mic_defaults_are_shared(self):
         shared = (ROOT / "main/boards/moss/moss_shared_audio.h").read_text(encoding="utf-8")
@@ -726,7 +732,7 @@ class MossBargeInTests(unittest.TestCase):
             "AEC_NLP_LEVEL_VERYAGGR",
             "vad_delay_ms",
         )
-        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board"):
+        for leaf in ("moss-onvif", "moss-ov2640", "moss-pcb-v1", "moss-camera-td", "moss-pcb-board", "moss-bread-compact"):
             board_dir = ROOT / "main/boards/moss" / leaf
             for path in board_dir.rglob("*.cc"):
                 text = path.read_text(encoding="utf-8")
@@ -937,6 +943,61 @@ class MossPcbV1BoardTests(unittest.TestCase):
         self.assertIn("LEDC_TIMER_0", eye)
         self.assertIn("LEDC_CHANNEL_0", eye)
         self.assertIn("CONFIG_BOARD_MOSS_OLED", eye)
+
+    def test_bread_compact_is_simplex_no_aec_gpio_lamps(self):
+        header = (ROOT / "main/boards/moss/moss-bread-compact/config.h").read_text(encoding="utf-8")
+        self.assertNotIn('#include "moss_shared_audio.h"', header)
+        self.assertIn("AUDIO_I2S_METHOD_SIMPLEX", header)
+        self.assertIn("AUDIO_INPUT_SAMPLE_RATE 16000", header)
+        self.assertIn("DISPLAY_SDA_PIN GPIO_NUM_1", header)
+        self.assertIn("DISPLAY_SCL_PIN GPIO_NUM_2", header)
+        self.assertIn("MOSS_LAMP_EYE_PIN GPIO_NUM_12", header)
+        self.assertIn("MOSS_LAMP_BAR_PIN0 GPIO_NUM_8", header)
+        self.assertIn("TOUCH_BUTTON_GPIO GPIO_NUM_47", header)
+        self.assertNotIn("AUDIO_CODEC_PA_PIN", header)
+        board = (ROOT / "main/boards/moss/moss-bread-compact/moss_bread_compact_board.cc").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("NoAudioCodecSimplex", board)
+        self.assertIn("MossBreadCompactBoard", board)
+        self.assertIn("SingleLed", board)
+        self.assertIn("TOUCH_BUTTON_GPIO", board)
+        self.assertNotIn("BoxAudioCodec", board)
+        self.assertNotIn("WifiStation", board)
+        self.assertNotIn("AUDIO_CODEC_INPUT_GAIN", board)
+        self.assertNotIn("EyeMotor", board)
+        self.assertNotIn("LampPanel", board)
+        self.assertNotIn("VolumeUp", board)
+        lamp = (ROOT / "main/boards/moss/moss-bread-compact/lamp_bar.cc").read_text(encoding="utf-8")
+        self.assertIn("MOSS_LAMP_BAR_PIN0", lamp)
+        self.assertNotIn("74hc595", lamp)
+        self.assertNotIn("ShiftRegister", lamp)
+        append = "\n".join(
+            json.loads(
+                (ROOT / "main/boards/moss/moss-bread-compact/config.json").read_text(
+                    encoding="utf-8"
+                )
+            )["builds"][0]["sdkconfig_append"]
+        )
+        self.assertIn("CONFIG_USE_DEVICE_AEC=n", append)
+        self.assertIn("CONFIG_ENABLE_VAD_INTERRUPT=n", append)
+        self.assertIn("CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=n", append)
+        self.assertIn("partitions/moss-desktop-16m.csv", append)
+        self.assertNotIn("USE_EMOTE_MESSAGE_STYLE", append)
+        self.assertNotIn("CONFIG_USE_DEVICE_AEC=y", append)
+        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn('set(BOARD_DIR "moss/moss-bread-compact")', cmake)
+        self.assertIn("moss-bread-compact requires partitions/moss-desktop-16m.csv", cmake)
+        self.assertIn("if(CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT)", cmake)
+        kconfig = (ROOT / "main/Kconfig.projbuild").read_text(encoding="utf-8")
+        self.assertIn("BOARD_TYPE_MOSS_BREAD_COMPACT", kconfig)
+        oled = kconfig[kconfig.find("config BOARD_MOSS_OLED") :]
+        self.assertIn("BOARD_TYPE_MOSS_BREAD_COMPACT", oled)
+        bar_h = (ROOT / "main/device/lamp_bar.h").read_text(encoding="utf-8")
+        self.assertIn("CONFIG_BOARD_TYPE_MOSS_BREAD_COMPACT", bar_h)
+        docs = (ROOT / "docs/moss-boards.md").read_text(encoding="utf-8")
+        self.assertIn("moss-bread-compact", docs)
+        self.assertIn("没有设备端 AEC、没有实时打断", docs)
 
     def test_hw_rejects_panel_bottom_motor_and_all_only_eye_bar(self):
         src = (ROOT / "main/config/moss_hw.cc").read_text(encoding="utf-8")
