@@ -6,7 +6,7 @@
 
 另外搞了一个交流群（1012964410），有需要的小伙伴以及有问题可以在群里问，看到了回复
 
-![image](image/README/image.ppg)
+![image](image/README/image-qrcode.ppg)
 
 ## 视频展示
 
