@@ -18,16 +18,32 @@ MqttProtocol::MqttProtocol() {
         .callback =
             [](void* arg) {
                 MqttProtocol* protocol = (MqttProtocol*)arg;
-                auto& app = Application::GetInstance();
-                if (app.GetDeviceState() == kDeviceStateIdle) {
-                    ESP_LOGI(TAG, "Reconnecting to MQTT server");
-                    auto alive = protocol->alive_;  // Capture alive flag
-                    app.Schedule([protocol, alive]() {
-                        if (*alive) {
-                            protocol->StartMqttClient(false);
-                        }
-                    });
-                }
+                auto alive = protocol->alive_;  // Capture alive flag
+                Application::GetInstance().Schedule([protocol, alive]() {
+                    if (!*alive) {
+                        return;
+                    }
+                    auto& app = Application::GetInstance();
+                    const auto state = app.GetDeviceState();
+                    // MQTT is already dead. If UI still shows an active voice
+                    // session, force idle + clear pending text, then reconnect.
+                    if (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
+                        state == kDeviceStateConnecting) {
+                        ESP_LOGW(TAG, "MQTT reconnect during voice session, recovering");
+                        app.RecoverVoiceSessionAfterLinkDrop();
+                        app.Schedule([protocol, alive]() {
+                            if (*alive) {
+                                ESP_LOGI(TAG, "Reconnecting to MQTT server");
+                                protocol->StartMqttClient(false);
+                            }
+                        });
+                        return;
+                    }
+                    if (state == kDeviceStateIdle) {
+                        ESP_LOGI(TAG, "Reconnecting to MQTT server");
+                        protocol->StartMqttClient(false);
+                    }
+                });
             },
         .arg = this,
     };
@@ -240,21 +256,20 @@ void MqttProtocol::CloseAudioChannel(bool send_goodbye) {
         std::lock_guard<std::mutex> lock(channel_mutex_);
         udp = std::move(udp_);
     }
-    if (!udp) {
-        return;
-    }
-    udp.reset();
 
-    ESP_LOGI(TAG, "Closing audio channel, send_goodbye: %d", send_goodbye);
-
-    // Only send goodbye when client initiates the close
-    // Don't send if server already sent goodbye (to avoid ping-pong)
-    if (send_goodbye) {
-        std::string message = "{";
-        message += "\"session_id\":\"" + session_id_ + "\",";
-        message += "\"type\":\"goodbye\"";
-        message += "}";
-        SendText(message);
+    // Always notify Application so connecting/listening/speaking can return to
+    // idle even when UDP was never established (MQTT drop mid-hello).
+    if (udp) {
+        ESP_LOGI(TAG, "Closing audio channel, send_goodbye: %d", send_goodbye);
+        if (send_goodbye) {
+            std::string message = "{";
+            message += "\"session_id\":\"" + session_id_ + "\",";
+            message += "\"type\":\"goodbye\"";
+            message += "}";
+            SendText(message);
+        }
+    } else {
+        ESP_LOGD(TAG, "CloseAudioChannel with no UDP (notify closed anyway)");
     }
 
     if (on_audio_channel_closed_ != nullptr) {

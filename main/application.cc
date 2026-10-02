@@ -695,9 +695,17 @@ void Application::InitializeProtocol() {
             if (generation != audio_session_generation_) {
                 return;
             }
+            // A reopen may have completed in the same generation (connect race).
+            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                return;
+            }
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
+            const auto state = GetDeviceState();
+            if (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
+                state == kDeviceStateConnecting) {
+                SetDeviceState(kDeviceStateIdle);
+            }
         });
     });
 
@@ -944,6 +952,7 @@ void Application::HandleToggleChatEvent() {
     if (state == kDeviceStateIdle) {
         ListeningMode mode = GetDefaultListeningMode();
         if (!protocol_->IsAudioChannelOpened()) {
+            audio_session_generation_++;
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
             Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
@@ -971,11 +980,17 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
         if (!protocol_->OpenAudioChannel()) {
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error)
+            pending_text_to_send_.clear();
+            last_external_detect_text_.clear();
             SetDeviceState(kDeviceStateIdle);
+            last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
+            xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
             return;
         }
     }
 
+    // Invalidate deferred close-idle callbacks from the connect/close race.
+    audio_session_generation_++;
     SetListeningMode(mode);
 }
 
@@ -998,6 +1013,7 @@ void Application::HandleStartListeningEvent() {
 
     if (state == kDeviceStateIdle) {
         if (!protocol_->IsAudioChannelOpened()) {
+            audio_session_generation_++;
             SetDeviceState(kDeviceStateConnecting);
             // Schedule to let the state change be processed first (UI update)
             Schedule([this]() { ContinueOpenAudioChannel(kListeningModeManualStop); });
@@ -1099,11 +1115,15 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word, bool enco
             // Return to idle so the device is not stuck in the connecting
             // state (not every failure path reports a network error), and
             // wake word detection is re-enabled by the idle state handler.
+            pending_text_to_send_.clear();
+            last_external_detect_text_.clear();
             SetDeviceState(kDeviceStateIdle);
             return;
         }
     }
 
+    // Invalidate deferred close-idle callbacks from the connect/close race.
+    audio_session_generation_++;
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
     if (!pending_text_to_send_.empty()) {
         ESP_LOGI(TAG, "ContinueWakeWordInvoke: pending text waits for listen/start");
@@ -1144,6 +1164,7 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateUnknown:
         case kDeviceStateIdle: {
             std::lock_guard<std::mutex> lock(mutex_);
+            pending_text_to_send_.clear();
             last_external_detect_text_.clear();
             ResetYunxiangjiSessionLocked();
         }
@@ -1447,18 +1468,29 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
 }
 
 void Application::CloseVoiceSession(bool send_goodbye) {
-    audio_session_generation_++;
+    pending_text_to_send_.clear();
+    last_external_detect_text_.clear();
     const auto state = GetDeviceState();
     if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
     }
     if (protocol_) {
+        // CloseAudioChannel schedules a deferred SetIdle via OnAudioChannelClosed.
+        // Bump generation AFTER that capture so the deferred idle cannot clobber a
+        // newer session that starts before the scheduled callback runs.
         protocol_->CloseAudioChannel(send_goodbye);
     }
+    audio_session_generation_++;
     if (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
         state == kDeviceStateConnecting) {
         SetDeviceState(kDeviceStateIdle);
     }
+}
+
+void Application::RecoverVoiceSessionAfterLinkDrop() {
+    ESP_LOGW(TAG, "Recovering voice session after link drop (state=%s)",
+             DeviceStateMachine::GetStateName(GetDeviceState()));
+    CloseVoiceSession(false);
 }
 
 void Application::ProcessChatWake(const std::string& wake_word) {
@@ -1657,15 +1689,14 @@ void Application::HandleExternalTextMessage(const std::string& text, const std::
             listening_mode_ = GetDefaultListeningMode();
             Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
             if (!protocol_->IsAudioChannelOpened()) {
+                // Do not block the main loop here — OpenAudioChannel can wait
+                // up to ~10s and would starve Schedule work. Invalidate any
+                // deferred channel-closed idle from a prior session.
+                audio_session_generation_++;
                 SetDeviceState(kDeviceStateConnecting);
-                if (!protocol_->OpenAudioChannel()) {
-                    SetDeviceState(kDeviceStateIdle);
-                    pending_text_to_send_.clear();
-                    last_external_detect_text_.clear();
-                    last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
-                    xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-                    return;
-                }
+                const ListeningMode mode = listening_mode_;
+                Schedule([this, mode]() { ContinueOpenAudioChannel(mode); });
+                return;
             }
             SetListeningMode(GetDefaultListeningMode());
         } else if (state == kDeviceStateSpeaking) {

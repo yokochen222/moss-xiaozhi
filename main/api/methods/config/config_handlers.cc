@@ -10,10 +10,12 @@
 #include "device_state_machine.h"
 
 #include <cJSON.h>
+#include <esp_system.h>
 #include <wifi_manager.h>
 #include <chrono>
 #include <functional>
 #include <future>
+#include <memory>
 
 namespace api_methods {
 namespace config {
@@ -27,15 +29,30 @@ struct DeviceConfigResponse {
 };
 
 DeviceConfigResponse RunOnMainThread(std::function<DeviceConfigResponse()> task) {
-    std::promise<DeviceConfigResponse> promise;
-    auto future = promise.get_future();
-    Application::GetInstance().Schedule(
-        [task = std::move(task), &promise]() mutable { promise.set_value(task()); });
+    // shared_ptr so a late Schedule run after HTTP timeout cannot UAF the promise
+    // (main loop may be blocked in OpenAudioChannel for up to ~10s).
+    auto promise = std::make_shared<std::promise<DeviceConfigResponse>>();
+    auto future = promise->get_future();
+    Application::GetInstance().Schedule([task = std::move(task), promise]() mutable {
+        try {
+            promise->set_value(task());
+        } catch (...) {
+            try {
+                promise->set_exception(std::current_exception());
+            } catch (...) {
+            }
+        }
+    });
     if (future.wait_for(std::chrono::seconds(8)) != std::future_status::ready) {
         return {false, "device config timeout",
                 "{\"ok\":false,\"message\":\"device config timeout\"}"};
     }
-    return future.get();
+    try {
+        return future.get();
+    } catch (...) {
+        return {false, "device config failed",
+                "{\"ok\":false,\"message\":\"device config failed\"}"};
+    }
 }
 
 }  // namespace
@@ -60,6 +77,7 @@ esp_err_t HandleHealth(httpd_req_t* req) {
     cJSON_AddNumberToObject(obj, "chat_seq", MossChatLog::GetInstance().Seq());
     cJSON_AddNumberToObject(obj, "yunxiangji_outbox",
                             static_cast<double>(YunxiangjiOutbox::GetInstance().Size()));
+    cJSON_AddNumberToObject(obj, "free_heap", static_cast<double>(esp_get_free_heap_size()));
     char* printed = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
     std::string json = printed ? printed : "{}";

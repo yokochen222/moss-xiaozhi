@@ -136,6 +136,13 @@ public:
     void RelayChat(const std::string& event, const std::string& role, const std::string& text);
 
     /**
+     * Recover from a dead cloud voice link while device still thinks a session
+     * is active. Clears pending external text and returns to idle.
+     * Must be called on the main task (or via Schedule).
+     */
+    void RecoverVoiceSessionAfterLinkDrop();
+
+    /**
      * Reset protocol resources (thread-safe)
      * Can be called from any task to release resources allocated after network connected
      * This includes closing audio channel, resetting protocol and ota objects

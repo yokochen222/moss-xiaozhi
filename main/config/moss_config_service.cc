@@ -90,16 +90,20 @@ void MossConfigService::LeaveBindMode() {
 }
 
 void MossConfigService::StartMdns() {
+    // Re-announce on every Wi-Fi reconnect/IP change so yo-moss-ai can rediscover.
     if (mdns_started_) {
-        return;
+        mdns_hostname_set(hostname_.c_str());
+        mdns_instance_name_set(InstanceName().c_str());
+        mdns_service_remove("_moss-http", "_tcp");
+    } else {
+        esp_err_t err = mdns_init();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
+            return;
+        }
+        mdns_hostname_set(hostname_.c_str());
+        mdns_instance_name_set(InstanceName().c_str());
     }
-    esp_err_t err = mdns_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "mdns_init failed: %s", esp_err_to_name(err));
-        return;
-    }
-    mdns_hostname_set(hostname_.c_str());
-    mdns_instance_name_set(InstanceName().c_str());
     mdns_txt_item_t txt[] = {
         {"path", "/health"},
         {"product", MossProduct::kId},
