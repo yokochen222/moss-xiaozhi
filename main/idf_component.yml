@@ -51,8 +51,11 @@ dependencies:
     rules:
     - if: target in [esp32s3]
 
+  # 2.5.0 adds matches on ESP_VIDEO_USE_CUSTOMIZED_ESP_H264_VERSION before that
+  # Kconfig exists (esp_h264 is optional/skipped on esp32s3), which makes
+  # idf-component-manager exit 10 in a loop: "Missing required kconfig option".
   espressif/esp_video:
-    version: ^2.3.0
+    version: ==2.4.1
     rules:
     - if: target in [esp32p4, esp32s3, esp32s31]
 
